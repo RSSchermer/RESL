@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/compiler/reslc",
+    "crates/compiler/slir",
+    "crates/resl_cli",
+    "crates/slir-explorer",
+    "tests/examples/hello_world",
+    "tests/examples/simple_lib",
+    "tests/examples/variable_pointers",
+    "tests/examples/workgroup_binding",
+]
+default-members = [
+    "crates/compiler/reslc",
+    "crates/compiler/slir",
+    "crates/resl_cli",
+    "crates/slir-explorer",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+ar = "0.9"
+bincode = "2.0.0-rc.3"
+indexmap = "2.7"
+index_vec = "0.1"
+internment = "0.8"
+ordered-float = "4.6"
+rustc-hash = "2.1"
+serde = "1.0"
+slir = { path = "./crates/compiler/slir", version = "0.1.0" }
+slotmap = "1.0"
+smallvec = "1.13"
+thin-vec = "0.2"

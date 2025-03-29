@@ -1,0 +1,3 @@
+[package]
+name = "test-example-workgroup-binding"
+publish = false

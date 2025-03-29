@@ -1,0 +1,6 @@
+[package]
+name = "test-example-hello-world"
+publish = false
+
+[dependencies]
+simple-lib = { path = "../simple_lib" }

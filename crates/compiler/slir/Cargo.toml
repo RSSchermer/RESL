@@ -1,0 +1,17 @@
+[package]
+name = "slir"
+description = "Shading Language Intermediate Representation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+indexmap = { workspace = true, features = ["serde"] }
+index_vec = { workspace = true, features = ["serde"] }
+internment = { workspace = true, features = ["arena", "serde"] }
+ordered-float = { workspace = true, features = ["serde"] }
+rustc-hash = { workspace = true }
+serde = { workspace = true }
+slotmap = { workspace = true, features = ["serde"] }
+smallvec = { workspace = true, features = ["serde"] }
+thin-vec = { workspace = true, features = ["serde"] }

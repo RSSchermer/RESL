@@ -1,0 +1,106 @@
+$border-color: #333333;
+$shadow-color: #aaaaaa;
+$cfg-value-color: #915d09;
+$card-bg-color: #e6e8ed;
+
+body {
+	font-family: sans-serif;
+	font-size: 11pt;
+	margin: 0;
+}
+
+.app-container {
+	height: 100vh;
+	display: flex;
+	flex-direction: column;
+}
+
+.nav-main {
+	flex-grow: 0;
+	text-align: center;
+	padding: 5px;
+	border-bottom: 1px solid $border-color;
+	box-shadow: 0 2px 2px $shadow-color;
+}
+
+main {
+	flex-grow: 1;
+	overflow: hidden;
+}
+
+.info-page-container {
+	padding: 8px;
+}
+
+.module-explorer-container {
+	height: 100%;
+	display: flex;
+	flex-direction: row;
+}
+
+.module-items-container {
+	height: 100%;
+	width: 20em;
+	overflow: scroll;
+	resize: horizontal;
+	border-right: 1px solid $border-color;
+}
+
+.module-item-list {
+	list-style: none;
+	padding-left: 10px;
+	margin: 0;
+}
+
+.item-explorer-container {
+	height: 100%;
+	flex: 1;
+}
+
+.function-explorer-container {
+	height: 100%;
+	display: flex;
+	flex-direction: column;
+}
+
+.function-sig {
+	padding: 8px;
+	font-size: 1.4em;
+	margin-bottom: 8px;
+}
+
+.function-body {
+	flex: 1 0;
+	overflow-y: scroll;
+	padding: 8px;
+}
+
+.basic-block {
+	background-color: $card-bg-color;
+	border-radius: 5px;
+	margin-bottom: 8px;
+	padding: 8px;
+}
+
+.basic-block-body a, .basic-block-body a:visited {
+	color: #093d91;
+}
+
+.basic-block-header {
+	font-weight: bold;
+	font-size: 1.2em;
+	border-bottom: 1px solid $border-color;
+}
+
+.basic-block-header, .basic-block-body, .basic-block-terminator {
+	font-family: monospace;
+}
+
+.cfg-value {
+	cursor: pointer;
+	color: $cfg-value-color;
+}
+
+.cfg-value.highlighted {
+	font-weight: bold;
+}
