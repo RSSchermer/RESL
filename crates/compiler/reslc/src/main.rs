@@ -1,4 +1,11 @@
-#![feature(if_let_guard, impl_trait_in_assoc_type, let_chains, rustc_private)]
+#![feature(
+    assert_matches,
+    if_let_guard,
+    impl_trait_in_assoc_type,
+    let_chains,
+    rustc_private,
+    trait_alias
+)]
 #![allow(unused_variables)]
 
 extern crate rustc_abi;
@@ -30,6 +37,7 @@ mod hir_ext;
 mod hir_ext_build;
 mod monomorphize;
 mod slir_build;
+mod slir_build_2;
 
 use std::process::ExitCode;
 use std::{env, process};

@@ -6,7 +6,7 @@ use rustc_interface::interface;
 use rustc_metadata::fs::encode_and_write_metadata;
 use rustc_metadata::METADATA_FILENAME;
 use rustc_middle::ty::TyCtxt;
-use rustc_session::config::CrateType;
+use rustc_session::config::{CrateType, DebugInfo};
 use rustc_session::output::out_filename;
 use rustc_span::def_id::LOCAL_CRATE;
 
@@ -30,6 +30,12 @@ impl Callbacks for ReslCompiler {
         let crate_attr = &mut config.opts.unstable_opts.crate_attr;
         crate_attr.push("feature(register_tool)".to_string());
         crate_attr.push("register_tool(resl)".to_string());
+
+        // With `DebugInfo::Full`, codegen generates a bunch of extra alloca statements for locals
+        // into which the function argument values get copied; it does this as a work-around to be
+        // able to attach debug-info. For our purposes, this just adds noise, so set the debug-info
+        // level to `DebugInfo::Limited`.
+        config.opts.debuginfo = DebugInfo::Limited;
 
         // We never want to generate overflow panics code for the GPU, not even in debug mode, so
         // when compiling RESL we always disable these checks.

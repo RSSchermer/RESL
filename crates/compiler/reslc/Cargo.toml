@@ -14,12 +14,18 @@ rustc_private = true
 
 [dependencies]
 ar = { workspace = true }
-bincode = { workspace = true, features = ["serde"]}
+arrayvec = { workspace = true }
+bincode = { workspace = true }
+bit-set = { workspace = true }
+bit-vec = { workspace = true }
+either = { workspace = true }
 indexmap = { workspace = true }
+index_vec = { workspace = true }
 internment = { workspace = true }
+itertools = { workspace = true }
 rustc-hash = { workspace = true }
 slir = { workspace = true }
-smallvec = { workspace = true, features = ["serde"] }
+smallvec = { workspace = true }
 thin-vec = "0.2"
 tracing = "0.1.37"
 

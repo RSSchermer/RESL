@@ -18,7 +18,7 @@ use crate::cfg_to_rvsdg::control_tree::{
 use crate::cfg_to_rvsdg::item_dependencies::{item_dependencies, Item, ItemDependencies};
 use crate::rvsdg::{Node, Region, Rvsdg, StateOrigin, ValueInput, ValueOrigin, ValueOutput};
 use crate::ty::{TY_BOOL, TY_F32, TY_I32, TY_PTR, TY_U32};
-use crate::{Module};
+use crate::Module;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum InputState {
