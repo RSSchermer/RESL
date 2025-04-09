@@ -127,7 +127,7 @@ pub fn Instruction(
                 " = "
             })}}
 
-            <a href=format_function_url(module.read_value().0.name, function)>{function.name.to_string()}</a>
+            <a href=format_function_url(module.read_value().0.name, op.function)>{op.function.name.to_string()}</a>
             "("
             {move || {
                 let mut arg_views = Vec::new();
