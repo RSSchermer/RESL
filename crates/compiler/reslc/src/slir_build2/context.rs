@@ -632,19 +632,17 @@ impl<'a, 'tcx> LayoutTypeCodegenMethods for CodegenContext<'a, 'tcx> {
 
 impl<'a, 'tcx> MiscCodegenMethods for CodegenContext<'a, 'tcx> {
     fn get_fn(&self, instance: &Instance) -> Self::Function {
-        let instance = internal(self.rcx.tcx(), instance);
-        let def_id = instance.def_id();
+        let krate = instance.def.krate();
 
-        let module_name = if def_id.krate == LOCAL_CRATE {
+        let module_name = if krate.is_local {
             self.module_name
         } else {
-            let crate_name = self.rcx.tcx().crate_name(def_id.krate);
-
-            slir::Symbol::from_ref(crate_name.as_str())
+            slir::Symbol::from_ref(krate.name.as_str())
         };
 
-        let instance_name = self.rcx.tcx().symbol_name(instance).name;
-        let name = slir::Symbol::from_ref(instance_name);
+        let name = slir::Symbol::from_ref(instance.mangled_name().as_str());
+
+        dbg!(name);
 
         slir::Function {
             module: module_name,

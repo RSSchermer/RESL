@@ -21,10 +21,9 @@ pub fn build_shader_module<'tcx>(
     let codegen_cx = CodegenContext::new(rcx, name);
 
     for item in items {
-        let symbol_name = item.symbol_name(rcx.tcx()).name;
         let item = stable(item);
 
-        item.predefine::<Builder>(&codegen_cx, symbol_name);
+        item.predefine::<Builder>(&codegen_cx);
     }
 
     for item in items {
