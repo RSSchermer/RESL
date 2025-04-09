@@ -11,12 +11,11 @@ pub trait TyAndLayoutExt {
 
 impl TyAndLayoutExt for TyAndLayout {
     fn expect_from_ty(ty: Ty) -> Self {
-        let layout = ty.layout().expect("type should have valid layout during codegen");
+        let layout = ty
+            .layout()
+            .expect("type should have valid layout during stable_cg");
 
-        TyAndLayout {
-            ty,
-            layout,
-        }
+        TyAndLayout { ty, layout }
     }
 
     fn field(self, i: usize) -> TyAndLayout {
@@ -90,7 +89,7 @@ impl TyAndLayoutExt for TyAndLayout {
                 RigidTy::Adt(def, args) => {
                     match this.layout.shape().variants {
                         VariantsShape::Single { index } => {
-                            let field = def.variant(index).unwrap().fields()[i];
+                            let field = &def.variant(index).unwrap().fields()[i];
 
                             TyMaybeWithLayout::Ty(field.ty_with_args(&args))
                         }
@@ -115,8 +114,8 @@ impl TyAndLayoutExt for TyAndLayout {
             TyMaybeWithLayout::Ty(field_ty) => {
                 let Ok(layout) = field_ty.layout() else {
                     bug!(
-                        "failed to get layout for `{field_ty}`: {e:?},\n\
-                         despite it being a field (#{i}) of an existing layout: {this:#?}",
+                        "failed to get layout for `{field_ty}`,\n\
+                         despite it being a field (#{i}) of an existing layout: {self:#?}",
                     )
                 };
 
@@ -131,7 +130,7 @@ impl TyAndLayoutExt for TyAndLayout {
 }
 
 pub trait ScalarExt {
-    fn primitive(&self) -> Primitive;
+    fn primitive(&self) -> &Primitive;
 
     fn size(&self, target: &MachineInfo) -> MachineSize;
 }

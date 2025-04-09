@@ -7,7 +7,7 @@ use stable_mir::target::{MachineInfo, MachineSize};
 use stable_mir::ty::{Allocation, Prov, Size};
 use stable_mir::{abi, Error};
 
-use crate::slir_build_2::layout::ScalarExt;
+use crate::stable_cg::layout::ScalarExt;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Scalar {

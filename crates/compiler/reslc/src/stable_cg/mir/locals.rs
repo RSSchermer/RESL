@@ -3,15 +3,16 @@
 //! `FunctionCx::overwrite_local` which handles it automatically.
 
 use std::ops::{Index, IndexMut};
+
 use index_vec::IndexVec;
 use stable_mir::mir;
 use tracing::{debug, warn};
 
-use crate::slir_build_2::mir::{FunctionCx, LocalRef};
-use crate::slir_build_2::traits::BuilderMethods;
+use crate::stable_cg::mir::{FunctionCx, LocalRef};
+use crate::stable_cg::traits::BuilderMethods;
 
 pub(super) struct Locals<V> {
-    values: IndexVec<mir::Local, LocalRef<V>>,
+    values: Vec<LocalRef<V>>,
 }
 
 impl<V> Index<mir::Local> for Locals<V> {
@@ -25,13 +26,11 @@ impl<V> Index<mir::Local> for Locals<V> {
 
 impl<V> Locals<V> {
     pub(super) fn empty() -> Locals<V> {
-        Locals {
-            values: IndexVec::default(),
-        }
+        Locals { values: vec![] }
     }
 
     pub(super) fn indices(&self) -> impl DoubleEndedIterator<Item = mir::Local> + Clone + '_ {
-        self.values.indices()
+        0..self.values.len()
     }
 }
 
@@ -39,14 +38,10 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
     pub(super) fn initialize_locals(&mut self, values: Vec<LocalRef<Bx::Value>>) {
         assert!(self.locals.values.is_empty());
 
-        self.locals.values = IndexVec::from_vec(values);
+        self.locals.values = values;
     }
 
-    pub(super) fn overwrite_local(
-        &mut self,
-        local: mir::Local,
-        mut value: LocalRef<Bx::Value>,
-    ) {
+    pub(super) fn overwrite_local(&mut self, local: mir::Local, mut value: LocalRef<Bx::Value>) {
         match value {
             LocalRef::Place(_) | LocalRef::UnsizedPlace(_) | LocalRef::PendingOperand => (),
             LocalRef::Operand(ref mut op) => {

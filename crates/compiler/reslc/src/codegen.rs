@@ -5,12 +5,14 @@ use ar::Archive;
 use rustc_hash::{FxHashMap, FxHashSet};
 use rustc_session::config::CrateType;
 use rustc_session::output::out_filename;
+use rustc_smir::rustc_internal::run;
 use rustc_span::def_id::{StableCrateId, LOCAL_CRATE};
 use rustc_span::Symbol;
 
 use crate::compiler::LIB_MODULE_FILENAME;
 use crate::context::{ReslContext as Cx, ReslContext};
 use crate::monomorphize::collect_shader_module_codegen_units;
+use crate::slir_build2;
 use crate::slir_build::build_shader_module;
 
 fn gather_and_import_dependencies(
@@ -111,25 +113,28 @@ pub fn codegen_shader_modules(cx: &Cx) -> (slir::Module, slir::cfg::Cfg) {
     let (free_items, shader_modules) = collect_shader_module_codegen_units(cx);
     let crate_name = cx.tcx().crate_name(LOCAL_CRATE);
 
-    // We create a separate SLIR artifact for every shader module in the current crate (every
-    // `mod` item with a `#[resl::shader_module]` attribute). These artifacts are the basis for the
-    // final compilation step (e.g. to WGSL, SPIRV, HLSL, etc.), which is typically done by a macro
-    // in the second compilation phase (when the actual non-RESL Rust code gets compiled).
-    for shader_module in shader_modules {
-        let name = format!("{}-{}", crate_name, shader_module.name);
-        let name = slir::Symbol::new(name);
-        let (mut module, mut cfg) = build_shader_module(cx, name, &shader_module.items);
+    run(cx.tcx(), || {
+        // We create a separate SLIR artifact for every shader module in the current crate (every
+        // `mod` item with a `#[resl::shader_module]` attribute). These artifacts are the basis for the
+        // final compilation step (e.g. to WGSL, SPIRV, HLSL, etc.), which is typically done by a macro
+        // in the second compilation phase (when the actual non-RESL Rust code gets compiled).
+        for shader_module in shader_modules {
+            let name = format!("{}-{}", crate_name, shader_module.name);
+            let name = slir::Symbol::new(name);
+            let (mut module, mut cfg) = slir_build2::build_shader_module(cx, name, &shader_module.items);
 
-        gather_and_import_dependencies(cx, &mut module, &mut cfg);
+            gather_and_import_dependencies(cx, &mut module, &mut cfg);
 
-        create_slir_artifact(cx, &module, &cfg);
-    }
+            create_slir_artifact(cx, &module, &cfg);
+        }
 
-    // We also create one additional module for the whole crate for the SLIR of all "free functions"
-    // (functions that are not part of a `mod` item with a `#[resl::shader_module]` attribute). This
-    // will get stored as part of the crates `rlib`; it is used by `reslc` when compiling dependent
-    // crates to import dependencies.
-    let lib_name = slir::Symbol::from_ref(crate_name.as_str());
 
-    build_shader_module(cx, lib_name, &free_items)
+        // We also create one additional module for the whole crate for the SLIR of all "free functions"
+        // (functions that are not part of a `mod` item with a `#[resl::shader_module]` attribute). This
+        // will get stored as part of the crates `rlib`; it is used by `reslc` when compiling dependent
+        // crates to import dependencies.
+        let lib_name = slir::Symbol::from_ref(crate_name.as_str());
+
+        build_shader_module(cx, lib_name, &free_items)
+    }).unwrap()
 }

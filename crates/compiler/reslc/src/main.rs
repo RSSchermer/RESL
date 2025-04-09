@@ -37,7 +37,8 @@ mod hir_ext;
 mod hir_ext_build;
 mod monomorphize;
 mod slir_build;
-mod slir_build_2;
+mod stable_cg;
+mod slir_build2;
 
 use std::process::ExitCode;
 use std::{env, process};

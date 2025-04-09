@@ -12,9 +12,9 @@ use tracing::debug;
 
 use super::place::{PlaceRef, PlaceValue};
 use super::{FunctionCx, LocalRef};
-use crate::slir_build_2::layout::{ScalarExt, TyAndLayoutExt};
-use crate::slir_build_2::scalar::Scalar;
-use crate::slir_build_2::traits::*;
+use crate::stable_cg::layout::{ScalarExt, TyAndLayoutExt};
+use crate::stable_cg::scalar::Scalar;
+use crate::stable_cg::traits::*;
 
 /// The representation of a Rust value. The enum variant is in fact
 /// uniquely determined by the value's type, but is kept as a
@@ -166,8 +166,10 @@ impl<'a, V: CodegenObject> OperandRef<V> {
         bx: &mut Bx,
         val: &MirConst,
     ) -> Self {
-        let ConstantKind::Allocated(alloc) = val.kind() else {
-            bug!("cannot construct const operand without a data allocation")
+        let alloc = match val.kind() {
+            ConstantKind::Allocated(alloc) => alloc,
+            ConstantKind::ZeroSized => return Self::zero_sized(TyAndLayout::expect_from_ty(val.ty())),
+            _ => bug!("cannot construct const operand without a data allocation")
         };
 
         let ty = val.ty();
@@ -197,7 +199,7 @@ impl<'a, V: CodegenObject> OperandRef<V> {
                 };
             }
             ValueAbi::ScalarPair(a, b) => {
-                let b_offset = a.size(&machine_info);
+                let b_offset = a.size(&machine_info).bytes();
 
                 let a_val = Scalar::read_from_alloc(alloc, 0, a);
                 let b_val = Scalar::read_from_alloc(alloc, b_offset, b);
@@ -210,7 +212,7 @@ impl<'a, V: CodegenObject> OperandRef<V> {
                     layout: TyAndLayout { ty, layout },
                 };
             }
-            _ if shape.is_1zst() => return OperandRef::zero_sized(layout),
+            _ if shape.is_1zst() => return OperandRef::zero_sized(TyAndLayout { ty, layout }),
             _ => {}
         }
 
@@ -218,11 +220,9 @@ impl<'a, V: CodegenObject> OperandRef<V> {
         // FIXME: should we cache `const_data_from_alloc` to avoid repeating this for the
         // same `ConstAllocation`?
         let init = bx.const_data_from_alloc(alloc);
-        let base_addr = bx.static_addr_of(init, alloc_align, None);
+        let addr = bx.static_addr_of(init, alloc_align, None);
 
-        let llval = bx.const_ptr_byte_offset(base_addr, 0);
-
-        bx.load_operand(PlaceRef::new_sized(llval, TyAndLayout { ty, layout }))
+        bx.load_operand(PlaceRef::new_sized(addr, TyAndLayout { ty, layout }))
     }
 
     /// Asserts that this operand refers to a scalar and returns
@@ -243,7 +243,7 @@ impl<'a, V: CodegenObject> OperandRef<V> {
     ///
     /// If you don't need the type, see [`OperandValue::pointer_parts`]
     /// or [`OperandValue::deref`].
-    pub fn deref<'tcx, Cx: CodegenMethods<'tcx>>(self, cx: &Cx) -> PlaceRef<V> {
+    pub fn deref<Cx: CodegenMethods>(self, cx: &Cx) -> PlaceRef<V> {
         if self.layout.ty.kind().is_box() {
             // Derefer should have removed all Box derefs
             bug!("dereferencing {:?} in codegen", self.layout.ty);
@@ -327,7 +327,7 @@ impl<'a, V: CodegenObject> OperandRef<V> {
 
         let is_first_field = shape.fields.fields_by_offset_order()[0] == i;
 
-        let mut val = match (self.val, shape.abi) {
+        let mut val = match (self.val, &shape.abi) {
             // If the field is ZST, it has no data.
             _ if field_shape.is_1zst() => OperandValue::ZeroSized,
 
@@ -339,7 +339,7 @@ impl<'a, V: CodegenObject> OperandRef<V> {
             }
 
             // Extract a scalar component from a pair.
-            (OperandValue::Pair(a_llval, b_llval), ValueAbi::ScalarPair(a, b)) => {
+            (OperandValue::Pair(a_llval, b_llval), ValueAbi::ScalarPair(..)) => {
                 if is_first_field {
                     OperandValue::Immediate(a_llval)
                 } else {
@@ -371,7 +371,7 @@ impl<'a, V: CodegenObject> OperandRef<V> {
             }
             // Newtype vector of array, e.g. #[repr(simd)] struct S([i32; 4]);
             (OperandValue::Immediate(llval), ValueAbi::Aggregate { sized: true }) => {
-                assert_matches!(shape.abi, ValueAbi::Vector { .. });
+                assert_matches!(&shape.abi, ValueAbi::Vector { .. });
 
                 let llfield_ty = bx.cx().backend_type(field);
 
@@ -461,17 +461,16 @@ impl<'a, 'tcx, V: CodegenObject> OperandValue<V> {
                         dest.layout
                     );
                 };
-                let align = dest.val.align;
 
                 let a_val = bx.from_immediate(a);
                 let a_ptr = dest.project_field(bx, 0);
 
-                bx.store(a_val, a_ptr, align);
+                bx.store(a_val, a_ptr.val.llval, a_ptr.val.align);
 
                 let b_val = bx.from_immediate(b);
                 let b_ptr = dest.project_field(bx, 1);
 
-                bx.store(b_val, b_ptr, align);
+                bx.store(b_val, b_ptr.val.llval, b_ptr.val.align);
             }
         }
     }
@@ -561,8 +560,6 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
         bx: &mut Bx,
         place_ref: mir::visit::PlaceRef,
     ) -> Option<OperandRef<Bx::Value>> {
-        debug!("maybe_codegen_consume_direct(place_ref={:?})", place_ref);
-
         match self.locals[place_ref.local] {
             LocalRef::Operand(mut o) => {
                 // Moves out of scalar and scalar pair fields are trivial.
@@ -589,7 +586,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                 Some(o)
             }
             LocalRef::PendingOperand => {
-                bug!("use of {:?} before def", place_ref);
+                bug!("use of place before def");
             }
             LocalRef::Place(..) | LocalRef::UnsizedPlace(..) => {
                 // watch out for locals that do not have an
@@ -604,8 +601,6 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
         bx: &mut Bx,
         place_ref: mir::visit::PlaceRef,
     ) -> OperandRef<Bx::Value> {
-        debug!("codegen_consume(place_ref={:?})", place_ref);
-
         let ty = place_ref.ty(self.mir.locals()).unwrap();
         let layout = ty.layout().unwrap();
 

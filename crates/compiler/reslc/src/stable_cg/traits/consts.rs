@@ -1,8 +1,9 @@
 use stable_mir::abi;
+use stable_mir::target::MachineSize;
 use stable_mir::ty::Allocation;
 
 use super::BackendTypes;
-use crate::slir_build_2::scalar::Scalar;
+use crate::stable_cg::scalar::Scalar;
 
 pub trait ConstCodegenMethods: BackendTypes {
     // Constant constructors
@@ -39,9 +40,7 @@ pub trait ConstCodegenMethods: BackendTypes {
     fn const_to_opt_uint(&self, v: Self::Value) -> Option<u64>;
     fn const_to_opt_u128(&self, v: Self::Value, sign_ext: bool) -> Option<u128>;
 
-    fn const_data_from_alloc(&self, alloc: Allocation) -> Self::Value;
+    fn const_data_from_alloc(&self, alloc: &Allocation) -> Self::Value;
 
     fn scalar_to_backend(&self, cv: Scalar) -> Self::Value;
-
-    fn const_ptr_byte_offset(&self, val: Self::Value, offset: abi::Size) -> Self::Value;
 }

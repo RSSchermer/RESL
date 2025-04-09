@@ -3,7 +3,7 @@ use stable_mir::mir::mono::Instance;
 use stable_mir::ty::Span;
 
 use super::BackendTypes;
-use crate::slir_build_2::mir::operand::OperandRef;
+use crate::stable_cg::mir::operand::OperandRef;
 
 pub trait IntrinsicCallBuilderMethods: BackendTypes {
     /// Remember to add all intrinsics here, in `compiler/rustc_hir_analysis/src/check/mod.rs`,

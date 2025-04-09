@@ -5,15 +5,18 @@ use stable_mir::abi::{FnAbi, Scalar, TyAndLayout, ValueAbi};
 use stable_mir::mir::mono::Instance;
 use stable_mir::target::MachineSize;
 use stable_mir::ty::{Align, Size, Span, Ty};
-use crate::slir_build_2::common::{AtomicOrdering, IntPredicate, RealPredicate, TypeKind};
+
 use super::abi::AbiBuilderMethods;
 use super::consts::ConstCodegenMethods;
 use super::intrinsic::IntrinsicCallBuilderMethods;
 use super::misc::MiscCodegenMethods;
 use super::type_::{ArgAbiBuilderMethods, BaseTypeCodegenMethods, LayoutTypeCodegenMethods};
 use super::{CodegenMethods, StaticBuilderMethods};
-use crate::slir_build_2::mir::operand::{OperandRef, OperandValue};
-use crate::slir_build_2::mir::place::{PlaceRef, PlaceValue};
+use crate::stable_cg::common::{
+    AtomicOrdering, AtomicRmwBinOp, IntPredicate, RealPredicate, SynchronizationScope, TypeKind,
+};
+use crate::stable_cg::mir::operand::{OperandRef, OperandValue};
+use crate::stable_cg::mir::place::{PlaceRef, PlaceValue};
 
 #[derive(Copy, Clone, Debug)]
 pub enum OverflowOp {
@@ -68,7 +71,7 @@ pub trait BuilderMethods<'a>:
         &mut self,
         v: Self::Value,
         else_llbb: Self::BasicBlock,
-        cases: impl ExactSizeIterator<Item = (u128, Self::BasicBlock)>,
+        cases: impl IntoIterator<Item = (u128, Self::BasicBlock)>,
     );
 
     fn unreachable(&mut self);
@@ -157,50 +160,10 @@ pub trait BuilderMethods<'a>:
         dest: PlaceRef<Self::Value>,
     );
 
-    /// Emits an `assume` that the integer value `imm` of type `ty` is contained in `range`.
-    ///
-    /// This *always* emits the assumption, so you probably want to check the
-    /// optimization level and `Scalar::is_always_valid` before calling it.
-    fn assume_integer_range(&mut self, imm: Self::Value, ty: Self::Type, range: WrappingRange) {
-        let WrappingRange { start, end } = range;
-
-        // Perhaps one day we'll be able to use assume operand bundles for this,
-        // but for now this encoding with a single icmp+assume is best per
-        // <https://github.com/llvm/llvm-project/issues/123278#issuecomment-2597440158>
-        let shifted = if start == 0 {
-            imm
-        } else {
-            let low = self.const_uint_big(ty, start);
-            self.sub(imm, low)
-        };
-        let width = self.const_uint_big(ty, u128::wrapping_sub(end, start));
-        let cmp = self.icmp(IntPredicate::IntULE, shifted, width);
-        self.assume(cmp);
-    }
-
-    fn range_metadata(&mut self, load: Self::Value, range: WrappingRange);
-    fn nonnull_metadata(&mut self, load: Self::Value);
-
     fn store(&mut self, val: Self::Value, ptr: Self::Value, align: Align) -> Self::Value;
     fn store_to_place(&mut self, val: Self::Value, place: PlaceValue<Self::Value>) -> Self::Value {
         assert_eq!(place.llextra, None);
         self.store(val, place.llval, place.align)
-    }
-    fn store_with_flags(
-        &mut self,
-        val: Self::Value,
-        ptr: Self::Value,
-        align: Align,
-        flags: MemFlags,
-    ) -> Self::Value;
-    fn store_to_place_with_flags(
-        &mut self,
-        val: Self::Value,
-        place: PlaceValue<Self::Value>,
-        flags: MemFlags,
-    ) -> Self::Value {
-        assert_eq!(place.llextra, None);
-        self.store_with_flags(val, place.llval, place.align, flags)
     }
     fn atomic_store(
         &mut self,
@@ -217,28 +180,17 @@ pub trait BuilderMethods<'a>:
         ptr: Self::Value,
         indices: &[Self::Value],
     ) -> Self::Value;
-    fn ptradd(&mut self, ptr: Self::Value, offset: Self::Value) -> Self::Value {
-        self.gep(self.cx().type_i8(), ptr, &[offset])
-    }
-    fn inbounds_ptradd(&mut self, ptr: Self::Value, offset: Self::Value) -> Self::Value {
-        self.inbounds_gep(self.cx().type_i8(), ptr, &[offset])
-    }
 
     fn trunc(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value;
     fn sext(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value;
-    fn fptoui_sat(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value;
-    fn fptosi_sat(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value;
     fn fptoui(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value;
     fn fptosi(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value;
     fn uitofp(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value;
     fn sitofp(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value;
     fn fptrunc(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value;
     fn fpext(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value;
-    fn ptrtoint(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value;
-    fn inttoptr(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value;
     fn bitcast(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value;
     fn intcast(&mut self, val: Self::Value, dest_ty: Self::Type, is_signed: bool) -> Self::Value;
-    fn pointercast(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value;
 
     fn cast_float_to_int(
         &mut self,
@@ -265,72 +217,22 @@ pub trait BuilderMethods<'a>:
         );
         assert_eq!(self.cx().type_kind(int_ty), TypeKind::Integer);
 
-        if let Some(false) = self.cx().sess().opts.unstable_opts.saturating_float_casts {
-            return if signed {
-                self.fptosi(x, dest_ty)
-            } else {
-                self.fptoui(x, dest_ty)
-            };
-        }
-
         if signed {
-            self.fptosi_sat(x, dest_ty)
+            self.fptosi(x, dest_ty)
         } else {
-            self.fptoui_sat(x, dest_ty)
+            self.fptoui(x, dest_ty)
         }
     }
 
     fn icmp(&mut self, op: IntPredicate, lhs: Self::Value, rhs: Self::Value) -> Self::Value;
     fn fcmp(&mut self, op: RealPredicate, lhs: Self::Value, rhs: Self::Value) -> Self::Value;
 
-    fn memcpy(
-        &mut self,
-        dst: Self::Value,
-        dst_align: Align,
-        src: Self::Value,
-        src_align: Align,
-        size: Self::Value,
-        flags: MemFlags,
-    );
-    fn memmove(
-        &mut self,
-        dst: Self::Value,
-        dst_align: Align,
-        src: Self::Value,
-        src_align: Align,
-        size: Self::Value,
-        flags: MemFlags,
-    );
-    fn memset(
-        &mut self,
-        ptr: Self::Value,
-        fill_byte: Self::Value,
-        size: Self::Value,
-        align: Align,
-        flags: MemFlags,
-    );
-
     /// *Typed* copy for non-overlapping places.
-    ///
-    /// Has a default implementation in terms of `memcpy`, but specific backends
-    /// can override to do something smarter if possible.
-    ///
-    /// (For example, typed load-stores with alias metadata.)
     fn typed_place_copy(
         &mut self,
         dst: PlaceValue<Self::Value>,
         src: PlaceValue<Self::Value>,
         layout: TyAndLayout,
-    ) {
-        self.typed_place_copy_with_flags(dst, src, layout, MemFlags::empty());
-    }
-
-    fn typed_place_copy_with_flags(
-        &mut self,
-        dst: PlaceValue<Self::Value>,
-        src: PlaceValue<Self::Value>,
-        layout: TyAndLayout,
-        flags: MemFlags,
     ) {
         let layout_shape = layout.layout.shape();
 
@@ -346,21 +248,10 @@ pub trait BuilderMethods<'a>:
             dst.llextra.is_none(),
             "cannot directly copy into unsized values"
         );
-        if flags.contains(MemFlags::NONTEMPORAL) {
-            // HACK(nox): This is inefficient but there is no nontemporal memcpy.
-            let ty = self.backend_type(layout);
-            let val = self.load_from_place(ty, src);
-            self.store_to_place_with_flags(val, dst, flags);
-        } else if self.sess().opts.optimize == OptLevel::No && self.is_backend_immediate(layout) {
-            // If we're not optimizing, the aliasing information from `memcpy`
-            // isn't useful, so just load-store the value for smaller code.
-            let temp = self.load_operand(src.with_type(layout));
-            temp.val
-                .store_with_flags(self, dst.with_type(layout), flags);
-        } else if !layout_shape.is_1zst() {
-            let bytes = self.const_usize(layout_shape.size.bytes());
-            self.memcpy(dst.llval, dst.align, src.llval, src.align, bytes, flags);
-        }
+
+        let temp = self.load_operand(src.with_type(layout));
+
+        temp.val.store(self, dst.with_type(layout));
     }
 
     /// *Typed* swap for non-overlapping places.
@@ -394,18 +285,10 @@ pub trait BuilderMethods<'a>:
         else_val: Self::Value,
     ) -> Self::Value;
 
-    fn va_arg(&mut self, list: Self::Value, ty: Self::Type) -> Self::Value;
     fn extract_element(&mut self, vec: Self::Value, idx: Self::Value) -> Self::Value;
     fn vector_splat(&mut self, num_elts: usize, elt: Self::Value) -> Self::Value;
     fn extract_value(&mut self, agg_val: Self::Value, idx: u64) -> Self::Value;
     fn insert_value(&mut self, agg_val: Self::Value, elt: Self::Value, idx: u64) -> Self::Value;
-
-    fn set_personality_fn(&mut self, personality: Self::Value);
-
-    // These are used by everyone except msvc
-    fn cleanup_landing_pad(&mut self, pers_fn: Self::Value) -> (Self::Value, Self::Value);
-    fn filter_landing_pad(&mut self, pers_fn: Self::Value) -> (Self::Value, Self::Value);
-    fn resume(&mut self, exn0: Self::Value, exn1: Self::Value);
 
     fn atomic_cmpxchg(
         &mut self,
@@ -438,7 +321,7 @@ pub trait BuilderMethods<'a>:
         fn_abi: Option<&FnAbi>,
         llfn: Self::Value,
         args: &[Self::Value],
-        instance: Option<Instance>,
+        instance: Option<&Instance>,
     ) -> Self::Value;
     fn zext(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value;
 }

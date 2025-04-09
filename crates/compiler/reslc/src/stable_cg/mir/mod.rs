@@ -8,16 +8,17 @@ use smallvec::SmallVec;
 use stable_mir::abi::{FnAbi, PassMode, TyAndLayout};
 use stable_mir::mir;
 use stable_mir::mir::mono::Instance;
-use stable_mir::mir::{BasicBlockIdx, Body, Local};
-use stable_mir::ty::RigidTy;
+use stable_mir::mir::{BasicBlockIdx, Body, Local, LocalDecl};
+use stable_mir::ty::{RigidTy, TyKind};
 use tracing::{debug, instrument};
 
-use crate::slir_build_2::mir::traversal::reachable_reverse_postorder;
-use crate::slir_build_2::traits::*;
+use crate::stable_cg::layout::TyAndLayoutExt;
+use crate::stable_cg::mir::traversal::reachable_reverse_postorder;
+use crate::stable_cg::traits::*;
 
 // mod analyze;
 mod block;
-mod intrinsic;
+// mod intrinsic;
 mod locals;
 pub mod operand;
 pub mod place;
@@ -28,11 +29,7 @@ mod traversal;
 use self::operand::{OperandRef, OperandValue};
 use self::place::PlaceRef;
 
-index_vec::define_index_type! {
-    struct BasicBlock = usize;
-}
-
-const START_BLOCK: BasicBlock = BasicBlock::from_usize(0);
+const START_BLOCK: usize = 0;
 const RETURN_PLACE: usize = 0;
 
 // Used for tracking the state of generated basic blocks.
@@ -63,10 +60,10 @@ pub struct FunctionCx<'a, Bx: BuilderMethods<'a>> {
     /// as-needed (e.g. RPO reaching it or another block branching to it).
     // FIXME(eddyb) rename `llbbs` and other `ll`-prefixed things to use a
     // more backend-agnostic prefix such as `cg` (i.e. this would be `cgbbs`).
-    cached_llbbs: IndexVec<BasicBlock, CachedLlbb<Bx::BasicBlock>>,
+    cached_llbbs: Vec<CachedLlbb<Bx::BasicBlock>>,
 
     /// Cached basic-block predecessors
-    bb_predecessors: Option<IndexVec<BasicBlockIdx, SmallVec<[BasicBlockIdx; 2]>>>,
+    bb_predecessors: Option<Vec<SmallVec<[BasicBlockIdx; 2]>>>,
 
     /// Cached unreachable block
     unreachable_block: Option<Bx::BasicBlock>,
@@ -117,12 +114,8 @@ impl<'tcx, V: CodegenObject> LocalRef<V> {
 
 ///////////////////////////////////////////////////////////////////////////
 
-#[instrument(level = "debug", skip(cx))]
-pub fn codegen_mir<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
-    cx: &'a Bx::CodegenCx,
-    instance: Instance,
-) {
-    let llfn = cx.get_fn(instance);
+pub fn codegen_mir<'a, Bx: BuilderMethods<'a>>(cx: &'a Bx::CodegenCx, instance: Instance) {
+    let llfn = cx.get_fn(&instance);
 
     let mir = if let Some(body) = instance.body() {
         body
@@ -139,15 +132,17 @@ pub fn codegen_mir<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
     let start_llbb = Bx::append_block(cx, llfn, "start");
     let mut start_bx = Bx::build(cx, start_llbb);
 
-    let cached_llbbs: IndexVec<BasicBlock, CachedLlbb<Bx::BasicBlock>> = (0..mir.blocks.len())
+    let cached_llbbs: Vec<CachedLlbb<Bx::BasicBlock>> = (0..mir.blocks.len())
         .map(|i| {
-            if BasicBlock::from_usize(i) == START_BLOCK {
+            if i == START_BLOCK {
                 CachedLlbb::Some(start_llbb)
             } else {
                 CachedLlbb::None
             }
         })
         .collect();
+
+    let traversal_order = reachable_reverse_postorder(&mir);
 
     let mut fx = FunctionCx {
         instance,
@@ -166,25 +161,23 @@ pub fn codegen_mir<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
     // monomorphization, and if there is an error during collection then codegen never starts -- so
     // we don't have to do it again.
 
-    let traversal_order = reachable_reverse_postorder(&mir);
-
     // Allocate variable and temp allocas
     let local_values = {
+        let args = arg_local_refs(&mut start_bx, &mut fx);
+
         let mut allocate_local = |local_index| {
-            let decl = &mir.locals()[local_index];
-            let layout = decl.ty.layout().unwrap();
+            let decl: &LocalDecl = &fx.mir.locals()[local_index];
 
             debug!("alloc: {:?} -> operand", local_index);
 
-            LocalRef::new_operand(layout)
+            LocalRef::new_operand(TyAndLayout::expect_from_ty(decl.ty))
         };
 
         let retptr = allocate_local(RETURN_PLACE);
-        let args = arg_local_refs(&mut start_bx, &mut fx);
 
         iter::once(retptr)
             .chain(args.into_iter())
-            .chain(inner_local_indices(&mir).map(allocate_local))
+            .chain(inner_local_indices(&fx.mir).map(allocate_local))
             .collect()
     };
 
@@ -194,7 +187,7 @@ pub fn codegen_mir<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
     // So drop the builder of `start_llbb` to avoid having two at the same time.
     drop(start_bx);
 
-    let mut unreached_blocks = BitSet::from_bit_vec(BitVec::from_elem(mir.blocks.len(), true));
+    let mut unreached_blocks = BitSet::from_bit_vec(BitVec::from_elem(fx.mir.blocks.len(), true));
 
     // Codegen the body of each reachable block using our reverse postorder list.
     for bb in traversal_order {
@@ -214,16 +207,16 @@ pub fn codegen_mir<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
 
 /// Returns an iterator over the indices that identify the "inner locals" (not the return local and
 /// not the argument locals) of a MIR body.
-fn inner_local_indices(body: &Body) -> impl DoubleEndedIterator<Item = BasicBlockIdx> {
+fn inner_local_indices(body: &Body) -> impl DoubleEndedIterator<Item = Local> {
     (body.arg_locals().len() + 1)..body.locals().len()
 }
 
 /// Produces, for each argument, a `Value` pointing at the
 /// argument's value. As arguments are places, these are always
 /// indirect.
-fn arg_local_refs<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
+fn arg_local_refs<'a, Bx: BuilderMethods<'a>>(
     bx: &mut Bx,
-    fx: &mut FunctionCx<'a, 'tcx, Bx>,
+    fx: &mut FunctionCx<'a, Bx>,
 ) -> Vec<LocalRef<Bx::Value>> {
     let mir = &fx.mir;
 
@@ -243,7 +236,7 @@ fn arg_local_refs<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
                 // is a tuple that was spread at the ABI level and now we have
                 // to reconstruct it into a tuple local variable, from multiple
                 // individual LLVM function arguments.
-                let Some(RigidTy::Tuple(tupled_arg_tys)) = arg_ty.kind().rigid() else {
+                let TyKind::RigidTy(RigidTy::Tuple(tupled_arg_tys)) = arg_ty.kind() else {
                     bug!("spread argument isn't a tuple?!");
                 };
 
@@ -260,10 +253,6 @@ fn arg_local_refs<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
                     let arg = &fx.fn_abi.args[idx];
 
                     idx += 1;
-
-                    if let PassMode::Cast { pad_i32: true, .. } = arg.mode {
-                        llarg_idx += 1;
-                    }
 
                     let pr_field = place.project_field(bx, i);
 

@@ -280,7 +280,7 @@ fn collect_items_rec<'tcx>(
                 }
             }
 
-            // mentioned_items stays empty since there's no codegen for statics. statics don't get
+            // mentioned_items stays empty since there's no stable_cg for statics. statics don't get
             // optimized, and if they did then the const-eval interpreter would have to worry about
             // mentioned_items.
         }
@@ -522,9 +522,9 @@ fn visit_instance_use<'tcx>(
         let name = tcx.item_name(def_id);
         if let Some(_requirement) = ValidityRequirement::from_intrinsic(name) {
             // The intrinsics assert_inhabited, assert_zero_valid, and assert_mem_uninitialized_valid will
-            // be lowered in codegen to nothing or a call to panic_nounwind. So if we encounter any
+            // be lowered in stable_cg to nothing or a call to panic_nounwind. So if we encounter any
             // of those intrinsics, we need to include a mono item for panic_nounwind, else we may try to
-            // codegen a call to that function without generating code for the function itself.
+            // stable_cg a call to that function without generating code for the function itself.
             let def_id = tcx.require_lang_item(LangItem::PanicNounwind, None);
             let panic_instance = Instance::mono(tcx, def_id);
             if tcx.should_codegen_locally(panic_instance) {
@@ -893,7 +893,7 @@ fn collect_free_roots<'tcx>(
         }
     }
 
-    // We can only codegen items that are instantiable - items all of
+    // We can only stable_cg items that are instantiable - items all of
     // whose predicates hold. Luckily, items that aren't instantiable
     // can't actually be used, so we can just skip codegenning them.
     roots
@@ -930,7 +930,7 @@ fn collect_shader_module_roots<'tcx>(
         collector.process_impl_item(id);
     }
 
-    // We can only codegen items that are instantiable - items all of
+    // We can only stable_cg items that are instantiable - items all of
     // whose predicates hold. Luckily, items that aren't instantiable
     // can't actually be used, so we can just skip codegenning them.
     roots

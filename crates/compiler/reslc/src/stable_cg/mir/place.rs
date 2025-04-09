@@ -9,8 +9,8 @@ use tracing::{debug, instrument};
 
 use super::operand::OperandValue;
 use super::{FunctionCx, LocalRef};
-use crate::slir_build_2::layout::TyAndLayoutExt;
-use crate::slir_build_2::traits::*;
+use crate::stable_cg::layout::TyAndLayoutExt;
+use crate::stable_cg::traits::*;
 
 /// The location and extra runtime properties of the place.
 ///
@@ -46,7 +46,7 @@ impl<V: CodegenObject> PlaceValue<V> {
     /// of the specified size and alignment.
     ///
     /// The allocation itself is untyped.
-    pub fn alloca<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx, Value = V>>(
+    pub fn alloca<'a, Bx: BuilderMethods<'a, Value = V>>(
         bx: &mut Bx,
         size: MachineSize,
         align: Align,
@@ -165,7 +165,7 @@ impl<'a, V: CodegenObject> PlaceRef<V> {
         let ptr = bx.gep(
             bx.backend_type(field),
             self.val.llval,
-            bx.const_u32(ix as u32),
+            &[bx.const_u32(ix as u32)],
         );
         let val = PlaceValue {
             llval: ptr,
@@ -173,7 +173,7 @@ impl<'a, V: CodegenObject> PlaceRef<V> {
             align: field.layout.shape().abi_align,
         };
 
-        val.with_type(field);
+        val.with_type(field)
     }
 
     pub fn project_index<Bx: BuilderMethods<'a, Value = V>>(
@@ -424,14 +424,12 @@ impl<'a, V: CodegenObject> PlaceRef<V> {
 }
 
 impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
-    #[instrument(level = "trace", skip(self, bx))]
     pub fn codegen_place(
         &mut self,
         bx: &mut Bx,
         place_ref: mir::visit::PlaceRef,
     ) -> PlaceRef<Bx::Value> {
         let cx = self.cx;
-        let tcx = self.cx.tcx();
 
         let mut base = 0;
 
@@ -455,11 +453,11 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
 
                     cg_base.deref(cx)
                 } else {
-                    bug!("using operand local {:?} as place", place_ref);
+                    bug!("using operand local as place");
                 }
             }
             LocalRef::PendingOperand => {
-                bug!("using still-pending operand local {:?} as place", place_ref);
+                bug!("using still-pending operand local as place");
             }
         };
 
@@ -503,14 +501,14 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                 mir::ProjectionElem::Subslice { from, to, from_end } => {
                     let mut subslice = cg_base.project_index(bx, bx.const_usize(from));
 
-                    let TyKind::RigidTy(ty) = cg_base.layout.ty else {
+                    let TyKind::RigidTy(ty) = cg_base.layout.ty.kind() else {
                         bug!("type should be rigid")
                     };
 
                     let projected_ty = match ty {
                         RigidTy::Slice(..) => cg_base.layout.ty,
                         RigidTy::Array(inner, _) if !from_end => {
-                            Ty::try_new_array(*inner, to - from)
+                            Ty::try_new_array(inner, to - from).unwrap()
                         }
                         RigidTy::Array(inner, size) if from_end => {
                             let size = size
@@ -518,16 +516,12 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                                 .expect("expected subslice projection on fixed-size array");
                             let len = size - from - to;
 
-                            Ty::try_new_array(*inner, len)
+                            Ty::try_new_array(inner, len).unwrap()
                         }
                         _ => bug!("cannot subslice non-array type: `{:?}`", cg_base.layout.ty),
                     };
 
-                    let Ok(layout) = projected_ty.layout() else {
-                        bug!("type should have layout during codegen")
-                    };
-
-                    subslice.layout = layout;
+                    subslice.layout = TyAndLayout::expect_from_ty(projected_ty);
 
                     if subslice.layout.layout.shape().is_unsized() {
                         assert!(from_end, "slice subslices should be `from_end`");
@@ -544,8 +538,6 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                 }
             };
         }
-
-        debug!("codegen_place(place={:?}) => {:?}", place_ref, cg_base);
 
         cg_base
     }

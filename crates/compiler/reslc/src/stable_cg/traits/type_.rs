@@ -1,7 +1,9 @@
+use rustc_abi::{Float, Integer};
 use stable_mir::abi::{ArgAbi, FnAbi, TyAndLayout};
 
-use super::BackendTypes;
-use crate::slir_build_2::mir::place::PlaceRef;
+use super::{BackendTypes, MiscCodegenMethods};
+use crate::stable_cg::common::TypeKind;
+use crate::stable_cg::mir::place::PlaceRef;
 
 pub trait BaseTypeCodegenMethods: BackendTypes {
     fn type_i8(&self) -> Self::Type;
@@ -33,13 +35,14 @@ pub trait BaseTypeCodegenMethods: BackendTypes {
     fn val_ty(&self, v: Self::Value) -> Self::Type;
 }
 
-pub trait DerivedTypeCodegenMethods: BaseTypeCodegenMethods {
+pub trait DerivedTypeCodegenMethods: BaseTypeCodegenMethods + MiscCodegenMethods {
     fn type_int(&self) -> Self::Type {
         self.type_i32()
     }
 
     fn type_from_integer(&self, i: Integer) -> Self::Type {
         use Integer::*;
+
         match i {
             I8 => self.type_i8(),
             I16 => self.type_i16(),
@@ -51,6 +54,7 @@ pub trait DerivedTypeCodegenMethods: BaseTypeCodegenMethods {
 
     fn type_from_float(&self, f: Float) -> Self::Type {
         use Float::*;
+
         match f {
             F16 => self.type_f16(),
             F32 => self.type_f32(),
@@ -60,7 +64,7 @@ pub trait DerivedTypeCodegenMethods: BaseTypeCodegenMethods {
     }
 }
 
-impl<T> DerivedTypeCodegenMethods for T where Self: BaseTypeCodegenMethods {}
+impl<T> DerivedTypeCodegenMethods for T where Self: BaseTypeCodegenMethods + MiscCodegenMethods {}
 
 pub trait LayoutTypeCodegenMethods: BackendTypes {
     /// The backend type used for a rust type when it's in memory,

@@ -1,10 +1,10 @@
-use rustc_middle::span_bug;
+use rustc_middle::{bug, span_bug};
 use stable_mir::mir;
 use stable_mir::mir::NonDivergingIntrinsic;
 use tracing::instrument;
 
 use super::{FunctionCx, LocalRef};
-use crate::slir_build_2::traits::*;
+use crate::stable_cg::traits::*;
 
 impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
     #[instrument(level = "debug", skip(self, bx))]
@@ -14,16 +14,14 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                 if place.projection.is_empty() {
                     match self.locals[place.local] {
                         LocalRef::Place(cg_dest) => self.codegen_rvalue(bx, cg_dest, rvalue),
-                        LocalRef::UnsizedPlace(cg_indirect_dest) => {
-                            self.codegen_rvalue_unsized(bx, cg_indirect_dest, rvalue)
-                        }
+                        LocalRef::UnsizedPlace(cg_indirect_dest) => bug!("not supported by RESL"),
                         LocalRef::PendingOperand => {
                             let operand = self.codegen_rvalue_operand(bx, rvalue);
                             self.overwrite_local(place.local, LocalRef::Operand(operand));
                         }
                         LocalRef::Operand(op) => {
                             if !op.layout.layout.shape().is_1zst() {
-                                span_bug!(statement.span, "operand {:?} already assigned", rvalue);
+                                bug!("operand {:?} already assigned", rvalue);
                             }
 
                             // If the type is zero-sized, it's already been set here,
@@ -57,16 +55,16 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                 // perf here
             }
             mir::StatementKind::StorageLive(local) => {
-                if let LocalRef::Place(cg_place) = self.locals[local] {
+                if let LocalRef::Place(cg_place) = self.locals[*local] {
                     cg_place.storage_live(bx);
-                } else if let LocalRef::UnsizedPlace(cg_indirect_place) = self.locals[local] {
+                } else if let LocalRef::UnsizedPlace(cg_indirect_place) = self.locals[*local] {
                     cg_indirect_place.storage_live(bx);
                 }
             }
             mir::StatementKind::StorageDead(local) => {
-                if let LocalRef::Place(cg_place) = self.locals[local] {
+                if let LocalRef::Place(cg_place) = self.locals[*local] {
                     cg_place.storage_dead(bx);
-                } else if let LocalRef::UnsizedPlace(cg_indirect_place) = self.locals[local] {
+                } else if let LocalRef::UnsizedPlace(cg_indirect_place) = self.locals[*local] {
                     cg_indirect_place.storage_dead(bx);
                 }
             }
@@ -96,7 +94,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
             mir::StatementKind::Coverage { .. }
             | mir::StatementKind::FakeRead(..)
             | mir::StatementKind::Retag { .. }
-            | mir::StatementKind::AscribeUserType(..)
+            | mir::StatementKind::AscribeUserType { .. }
             | mir::StatementKind::ConstEvalCounter
             | mir::StatementKind::PlaceMention(..)
             | mir::StatementKind::Nop => {}

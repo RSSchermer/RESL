@@ -1,11 +1,11 @@
-//! Interface of a Rust codegen backend
+//! Interface of a Rust stable_cg backend
 //!
-//! This crate defines all the traits that have to be implemented by a codegen backend in order to
-//! use the backend-agnostic codegen code in `rustc_codegen_ssa`.
+//! This crate defines all the traits that have to be implemented by a stable_cg backend in order to
+//! use the backend-agnostic stable_cg code in `rustc_codegen_ssa`.
 //!
-//! The interface is designed around two backend-specific data structures, the codegen context and
-//! the builder. The codegen context is supposed to be read-only after its creation and during the
-//! actual codegen, while the builder stores the information about the function during codegen and
+//! The interface is designed around two backend-specific data structures, the stable_cg context and
+//! the builder. The stable_cg context is supposed to be read-only after its creation and during the
+//! actual stable_cg, while the builder stores the information about the function during stable_cg and
 //! is used to produce the instructions of the backend IR.
 //!
 //! The traits contain associated types that are backend-specific, such as the backend's value or

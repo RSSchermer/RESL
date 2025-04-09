@@ -1,4 +1,5 @@
 use std::cmp;
+
 use index_vec::{index_vec, IndexVec};
 use rustc_middle::bug;
 use smallvec::SmallVec;
@@ -8,13 +9,14 @@ use stable_mir::mir::mono::{Instance, InstanceKind};
 use stable_mir::mir::{BasicBlockIdx, SwitchTargets, TerminatorKind};
 use stable_mir::ty::{Abi, IntrinsicDef, RigidTy, Ty, TyKind};
 use tracing::{debug, info};
-use crate::slir_build_2::common::IntPredicate;
-use crate::slir_build_2::layout::TyAndLayoutExt;
+
 use super::operand::OperandRef;
 use super::operand::OperandValue::{Immediate, Pair, Ref, ZeroSized};
 use super::place::{PlaceRef, PlaceValue};
 use super::{CachedLlbb, FunctionCx, LocalRef};
-use crate::slir_build_2::traits::*;
+use crate::stable_cg::common::IntPredicate;
+use crate::stable_cg::layout::TyAndLayoutExt;
+use crate::stable_cg::traits::*;
 
 const RETURN_PLACE_REF: mir::visit::PlaceRef = mir::visit::PlaceRef {
     local: 0,
@@ -37,8 +39,8 @@ struct TerminatorCodegenHelper<'a> {
     terminator: &'a mir::Terminator,
 }
 
-fn funclet_br<Bx: BuilderMethods>(
-    fx: &mut FunctionCx<Bx>,
+fn funclet_br<'a, Bx: BuilderMethods<'a>>(
+    fx: &mut FunctionCx<'a, Bx>,
     bx: &mut Bx,
     target: mir::BasicBlockIdx,
     mergeable_succ: bool,
@@ -57,15 +59,15 @@ fn funclet_br<Bx: BuilderMethods>(
 
 /// Call `fn_ptr` of `fn_abi` with the arguments `llargs`, the optional
 /// return destination `destination` and the unwind action `unwind`.
-fn do_call<Bx: BuilderMethods>(
-    fx: &mut FunctionCx<Bx>,
+fn do_call<'a, Bx: BuilderMethods<'a>>(
+    fx: &mut FunctionCx<'a, Bx>,
     bx: &mut Bx,
     fn_abi: &FnAbi,
     fn_ptr: Bx::Value,
     llargs: &[Bx::Value],
     destination: Option<(ReturnDest<Bx::Value>, mir::BasicBlockIdx)>,
     copied_constant_arguments: &[PlaceRef<<Bx as BackendTypes>::Value>],
-    instance: Option<Instance>,
+    instance: Option<&Instance>,
     mergeable_succ: bool,
 ) -> MergingSucc {
     // If there is a cleanup block and the function we're calling can unwind, then
@@ -144,7 +146,9 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
             bx.switch(
                 discr_value,
                 self.llbb(targets.otherwise()),
-                targets.branches().map(|(value, target)| (value, self.llbb(target))),
+                targets
+                    .branches()
+                    .map(|(value, target)| (value, self.llbb(target))),
             );
         }
     }
@@ -173,7 +177,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                 }
             }
 
-            PassMode::Cast {..} => bug!("not supported by RESL"),
+            PassMode::Cast { .. } => bug!("not supported by RESL"),
         };
 
         bx.ret(llval);
@@ -182,7 +186,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
     fn codegen_drop_terminator(
         &mut self,
         bx: &mut Bx,
-        location: mir::Place,
+        location: &mir::Place,
         target: mir::BasicBlockIdx,
         mergeable_succ: bool,
     ) -> MergingSucc {
@@ -200,10 +204,13 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
         }
 
         let fn_abi = drop_fn.fn_abi().unwrap();
-        let place = self.codegen_place(bx, mir::visit::PlaceRef {
-            local: location.local,
-            projection: &location.projection,
-        });
+        let place = self.codegen_place(
+            bx,
+            mir::visit::PlaceRef {
+                local: location.local,
+                projection: &location.projection,
+            },
+        );
         let (args1, args2);
 
         let args = if let Some(llextra) = place.val.llextra {
@@ -218,11 +225,11 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
             self,
             bx,
             &fn_abi,
-            bx.get_fn_addr(drop_fn),
+            bx.get_fn_addr(&drop_fn),
             args,
             Some((ReturnDest::Nothing, target)),
             &[],
-            Some(drop_fn),
+            Some(&drop_fn),
             mergeable_succ,
         )
     }
@@ -233,7 +240,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
         terminator: &mir::Terminator,
         func: &mir::Operand,
         args: &[mir::Operand],
-        destination: mir::Place,
+        destination: &mir::Place,
         target: Option<mir::BasicBlockIdx>,
         mergeable_succ: bool,
     ) -> MergingSucc {
@@ -247,11 +254,9 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
         };
 
         let instance = match ty_kind {
-            RigidTy::FnDef(def_id, args) =>
-                Instance::resolve(
-                    def_id,
-                    &args,
-                ).expect("instance should resolve during codegen"),
+            RigidTy::FnDef(def_id, args) => {
+                Instance::resolve(def_id, &args).expect("instance should resolve during codegen")
+            }
             RigidTy::FnPtr(..) => bug!("function pointers are not supported by RESL"),
             _ => bug!("{} is not callable", callee.layout.ty),
         };
@@ -264,7 +269,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
         }
 
         let fn_abi = instance.fn_abi().unwrap();
-        let is_indirect_ret = matches!(fn_abi.ret.mode, PassMode::Indirect);
+        let is_indirect_ret = matches!(fn_abi.ret.mode, PassMode::Indirect { .. });
 
         // The arguments we'll be passing. Plus one to account for outptr, if used.
         let arg_count = fn_abi.args.len() + is_indirect_ret as usize;
@@ -290,7 +295,14 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
             )
         });
 
-        let abi = callee.layout.ty.kind().fn_sig().expect("callee should be a function type").skip_binder().abi;
+        let abi = callee
+            .layout
+            .ty
+            .kind()
+            .fn_sig()
+            .expect("callee should be a function type")
+            .skip_binder()
+            .abi;
         let is_rust_call = abi == Abi::RustCall;
 
         // Split the rust-call tupled arguments off.
@@ -309,7 +321,10 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
             // The callee needs to own the argument memory if we pass it
             // by-ref, so make a local copy of non-immediate constants.
             match (arg, op.val) {
-                (&mir::Operand::Copy(_) | &mir::Operand::Constant(_), Ref(PlaceValue { llextra: None, .. })) => {
+                (
+                    &mir::Operand::Copy(_) | &mir::Operand::Constant(_),
+                    Ref(PlaceValue { llextra: None, .. }),
+                ) => {
                     let tmp = PlaceRef::alloca(bx, op.layout);
 
                     bx.lifetime_start(tmp.val.llval, tmp.layout.layout.shape().size);
@@ -324,25 +339,18 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
         }
 
         if let Some(tup) = untuple {
-            self.codegen_arguments_untupled(
-                bx,
-                tup,
-                &mut llargs,
-                &fn_abi.args[first_args.len()..],
-            );
+            self.codegen_arguments_untupled(bx, tup, &mut llargs, &fn_abi.args[first_args.len()..]);
         }
-
-        let fn_ptr = bx.get_fn_addr(instance);
 
         do_call(
             self,
             bx,
-            fn_abi,
-            fn_ptr,
+            &fn_abi,
+            bx.get_fn_addr(&instance),
             &llargs,
             destination,
             &copied_constant_arguments,
-            instance,
+            Some(&instance),
             mergeable_succ,
         )
     }
@@ -353,23 +361,24 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
             None => return,
         };
         let bx = &mut Bx::build(self.cx, llbb);
-        let mir = &self.mir;
 
         // MIR basic blocks stop at any function call. This may not be the case
         // for the backend's basic blocks, in which case we might be able to
         // combine multiple MIR basic blocks into a single backend basic block.
         loop {
-            let data = &mir.blocks[bb];
+            // TODO: this is not a cheap clone, but eliminating it requires some fairly extensive
+            // restructuring of the FunctionCx
+            let data = self.mir.blocks[bb].clone();
 
-            debug!("codegen_block({:?}={:?})", bb, data);
+            debug!("codegen_block({:?})", bb);
 
             for statement in &data.statements {
                 self.codegen_statement(bx, statement);
             }
 
-            let merging_succ = self.codegen_terminator(bx, bb, data.terminator());
+            let merging_succ = self.codegen_terminator(bx, bb, &data.terminator);
 
-            if let MergingSucc::False = merging_succ {
+            if merging_succ == MergingSucc::False {
                 break;
             }
 
@@ -407,14 +416,14 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
     ) -> MergingSucc {
         debug!("codegen_terminator: {:?}", terminator);
 
-        let mergeable_succ = || {
+        let mut mergeable_succ = || {
             // Note: any call to `switch_to_block` will invalidate a `true` value
             // of `mergeable_succ`.
             let mut successors = terminator.successors();
 
             if let Some(succ) = successors.first()
                 && successors.len() == 1
-                && let &[succ_pred] = self.predecessors()[succ].as_slice()
+                && let &[succ_pred] = self.predecessors()[*succ].as_slice()
             {
                 // bb has a single successor, and bb is its only predecessor. This
                 // makes it a candidate for merging.
@@ -433,7 +442,9 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
             | TerminatorKind::Abort => bug!("not supported by RESL"),
 
             mir::TerminatorKind::Goto { target } => {
-                funclet_br(self, bx, target, mergeable_succ())
+                let mergeable_succ = mergeable_succ();
+
+                funclet_br(self, bx, *target, mergeable_succ)
             }
 
             mir::TerminatorKind::SwitchInt { discr, targets } => {
@@ -451,32 +462,31 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                 MergingSucc::False
             }
 
-            mir::TerminatorKind::Drop {
-                place,
-                target,
-                unwind,
-            } => self.codegen_drop_terminator(
-                bx,
-                place,
-                target,
-                mergeable_succ(),
-            ),
+            mir::TerminatorKind::Drop { place, target, .. } => {
+                let mergeable_succ = mergeable_succ();
+
+                self.codegen_drop_terminator(bx, place, *target, mergeable_succ)
+            }
 
             mir::TerminatorKind::Call {
                 func,
                 args,
                 destination,
                 target,
-                unwind,
-            } => self.codegen_call_terminator(
-                bx,
-                terminator,
-                func,
-                args,
-                destination,
-                target,
-                mergeable_succ(),
-            ),
+                ..
+            } => {
+                let mergeable_succ = mergeable_succ();
+
+                self.codegen_call_terminator(
+                    bx,
+                    terminator,
+                    func,
+                    args,
+                    destination,
+                    *target,
+                    mergeable_succ,
+                )
+            }
         }
     }
 
@@ -487,7 +497,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
         llargs: &mut Vec<Bx::Value>,
         arg: &ArgAbi,
     ) {
-        match arg.mode {
+        match &arg.mode {
             PassMode::Ignore => return,
             PassMode::Cast { .. } => bug!("not supported by RESL"),
             PassMode::Pair(..) => match op.val {
@@ -499,39 +509,54 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                 }
                 _ => bug!("codegen_argument: {:?} invalid for pair argument", op),
             },
-            PassMode::Indirect { attrs: _, meta_attrs: Some(_), on_stack: _ } => match op.val {
-                Ref(PlaceValue { llval: a, llextra: Some(b), .. }) => {
-                    llargs.push(a);
-                    llargs.push(b);
-
-                    return;
-                }
-                _ => bug!("codegen_argument: {:?} invalid for unsized indirect argument", op),
-            },
+            // PassMode::Indirect { attrs: _, meta_attrs: Some(_), on_stack: _ } => match op.val {
+            //     Ref(PlaceValue { llval: a, llextra: Some(b), .. }) => {
+            //         llargs.push(a);
+            //         llargs.push(b);
+            //
+            //         return;
+            //     }
+            //     _ => bug!("codegen_argument: {:?} invalid for unsized indirect argument", op),
+            // },
             _ => {}
         }
 
         let shape = arg.layout.shape();
 
         let (mut llval, align, by_ref) = match op.val {
-            Immediate(_) | Pair(..) => match arg.mode {
-                PassMode::Indirect { attrs, .. } => {
+            Immediate(_) | Pair(..) => match &arg.mode {
+                PassMode::Indirect { .. } => {
                     let scratch = PlaceValue::alloca(bx, shape.size, shape.abi_align);
 
-                    op.val.store(bx, scratch.with_type(TyAndLayout {
-                        ty: arg.ty,
-                        layout: arg.layout,
-                    }));
+                    op.val.store(
+                        bx,
+                        scratch.with_type(TyAndLayout {
+                            ty: arg.ty,
+                            layout: arg.layout,
+                        }),
+                    );
 
                     (scratch.llval, scratch.align, true)
                 }
                 _ => (op.immediate_or_packed_pair(bx), shape.abi_align, false),
             },
-            Ref(op_place_val) => (op_place_val.llval, op_place_val.align, true),
+            Ref(PlaceValue {
+                llval,
+                llextra,
+                align,
+            }) => match &arg.mode {
+                PassMode::Indirect { .. } if let Some(llextra) = llextra => {
+                    llargs.push(llval);
+                    llargs.push(llextra);
+
+                    return;
+                }
+                _ => (llval, align, true),
+            },
             ZeroSized => bug!("ZST {op:?} wasn't ignored, but was passed with abi {arg:?}"),
         };
 
-        if by_ref && !matches!(arg.mode, PassMode::Indirect {..}) {
+        if by_ref && !matches!(arg.mode, PassMode::Indirect { .. }) {
             // Have to load the argument
 
             // We can't use `PlaceRef::load` here because the argument
@@ -539,7 +564,14 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
             // used for this call is passing it by-value. In that case,
             // the load would just produce `OperandValue::Ref` instead
             // of the `OperandValue::Immediate` we need for the call.
-            llval = bx.load(bx.backend_type(arg.layout), llval, align);
+            llval = bx.load(
+                bx.backend_type(TyAndLayout {
+                    ty: arg.ty,
+                    layout: arg.layout,
+                }),
+                llval,
+                align,
+            );
 
             if let ValueAbi::Scalar(scalar) = shape.abi {
                 llval = bx.to_immediate_scalar(llval, scalar);
@@ -583,15 +615,13 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
         }
     }
 
-    fn predecessors(&mut self) -> &IndexVec<BasicBlockIdx, SmallVec<[BasicBlockIdx; 2]>> {
+    fn predecessors(&mut self) -> &Vec<SmallVec<[BasicBlockIdx; 2]>> {
         self.bb_predecessors.get_or_insert_with(|| {
-            let mut preds = index_vec![SmallVec::new(); self.mir.blocks.len()];
+            let mut preds = vec![SmallVec::new(); self.mir.blocks.len()];
 
             for (bb, data) in self.mir.blocks.iter().enumerate() {
-                if let Some(term) = &data.terminator {
-                    for succ in term.successors() {
-                        preds[succ].push(bb);
-                    }
+                for succ in data.terminator.successors() {
+                    preds[succ].push(bb);
                 }
             }
 
@@ -637,7 +667,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
     fn make_return_dest(
         &mut self,
         bx: &mut Bx,
-        dest: mir::Place,
+        dest: &mir::Place,
         fn_ret: &ArgAbi,
         llargs: &mut Vec<Bx::Value>,
         intrinsic: Option<IntrinsicDef>,
@@ -703,7 +733,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
             )
         };
 
-        if fn_ret.is_indirect() {
+        if matches!(fn_ret.mode, PassMode::Indirect { .. }) {
             if dest.val.align < dest.layout.layout.shape().abi_align {
                 // Currently, MIR code generation does not create calls
                 // that store directly to fields of packed structs (in

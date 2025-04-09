@@ -31,7 +31,7 @@ impl Callbacks for ReslCompiler {
         crate_attr.push("feature(register_tool)".to_string());
         crate_attr.push("register_tool(resl)".to_string());
 
-        // With `DebugInfo::Full`, codegen generates a bunch of extra alloca statements for locals
+        // With `DebugInfo::Full`, stable_cg generates a bunch of extra alloca statements for locals
         // into which the function argument values get copied; it does this as a work-around to be
         // able to attach debug-info. For our purposes, this just adds noise, so set the debug-info
         // level to `DebugInfo::Limited`.

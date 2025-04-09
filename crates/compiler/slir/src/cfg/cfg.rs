@@ -103,6 +103,12 @@ pub enum InlineConst {
     Ptr(Ptr),
 }
 
+impl From<f32> for InlineConst {
+    fn from(value: f32) -> Self {
+        InlineConst::F32(OrderedFloat(value))
+    }
+}
+
 impl InlineConst {
     pub fn ty(&self) -> Type {
         match self {

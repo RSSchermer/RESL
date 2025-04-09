@@ -25,7 +25,7 @@ use stable_mir::mir::{BasicBlock, BasicBlockIdx, Body};
 /// A Postorder traversal of this graph is `D B C A` or `D C B A`
 pub struct Postorder<'a> {
     basic_blocks: &'a [BasicBlock],
-    visited: BitSet<BasicBlockIdx>,
+    visited: BitSet<u32>,
     visit_stack: Vec<(BasicBlockIdx, Vec<BasicBlockIdx>)>,
     root_is_start_block: bool,
 }
@@ -104,11 +104,7 @@ impl<'a> Postorder<'a> {
         // When we yield `C` and call `traverse_successor`, we push `B` to the stack, but
         // since we've already visited `E`, that child isn't added to the stack. The last
         // two iterations yield `B` and finally `A` for a final traversal of [E, D, C, B, A]
-        while let Some(bb) = self
-            .visit_stack
-            .last_mut()
-            .and_then(|(_, iter)| iter.next_back())
-        {
+        while let Some(bb) = self.visit_stack.last_mut().and_then(|(_, iter)| iter.pop()) {
             self.visit(bb);
         }
     }
