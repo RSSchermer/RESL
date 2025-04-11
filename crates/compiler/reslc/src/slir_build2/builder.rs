@@ -6,11 +6,18 @@ use stable_mir::abi::{ArgAbi, FnAbi, ValueAbi};
 use stable_mir::mir::mono::{Instance, StaticDef};
 use stable_mir::target::MachineSize;
 use stable_mir::ty::{Align, Span};
+
 use crate::slir_build2::context::{ty_and_layout_resolve, CodegenContext as Cx};
 use crate::slir_build2::ty::Type;
 use crate::slir_build2::value::Value;
-use crate::stable_cg::{AtomicOrdering, AtomicRmwBinOp, IntPredicate, OperandRef, OperandValue, PlaceRef, RealPredicate, Scalar, SynchronizationScope};
-use crate::stable_cg::traits::{AbiBuilderMethods, ArgAbiBuilderMethods, BackendTypes, BuilderMethods, IntrinsicCallBuilderMethods, LayoutTypeCodegenMethods, StaticBuilderMethods};
+use crate::stable_cg::traits::{
+    AbiBuilderMethods, ArgAbiBuilderMethods, BackendTypes, BuilderMethods,
+    IntrinsicCallBuilderMethods, LayoutTypeCodegenMethods, StaticBuilderMethods,
+};
+use crate::stable_cg::{
+    AtomicOrdering, AtomicRmwBinOp, IntPredicate, OperandRef, OperandValue, PlaceRef, PlaceValue,
+    RealPredicate, Scalar, SynchronizationScope,
+};
 
 pub struct Builder<'a, 'tcx> {
     cx: &'a Cx<'a, 'tcx>,
@@ -28,6 +35,7 @@ impl<'a, 'tcx> Deref for Builder<'a, 'tcx> {
 
 impl<'a, 'tcx> BackendTypes for Builder<'a, 'tcx> {
     type Value = Value;
+    type Local = slir::cfg::LocalValue;
     type Function = slir::Function;
     type BasicBlock = (slir::Function, slir::cfg::BasicBlock);
     type Type = Type;
@@ -54,7 +62,14 @@ impl<'a, 'tcx> AbiBuilderMethods for Builder<'a, 'tcx> {
 }
 
 impl<'a, 'tcx> IntrinsicCallBuilderMethods for Builder<'a, 'tcx> {
-    fn codegen_intrinsic_call(&mut self, instance: Instance, fn_abi: &FnAbi, args: &[OperandRef<Self::Value>], llresult: Self::Value, span: Span) -> Result<(), Instance> {
+    fn codegen_intrinsic_call(
+        &mut self,
+        instance: Instance,
+        fn_abi: &FnAbi,
+        args: &[OperandRef<Self::Value>],
+        llresult: Self::Value,
+        span: Span,
+    ) -> Result<(), Instance> {
         todo!()
     }
 }
@@ -156,6 +171,41 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         let bb = cx.cfg.borrow_mut().function_body[function].append_block();
 
         (function, bb)
+    }
+
+    fn as_local(&mut self, val: Self::Value) -> Self::Local {
+        let val = val.expect_value();
+
+        // If the value already represents a local, return that local. Otherwise, initialize a new
+        // local with the value.
+        let ty = match val {
+            slir::cfg::Value::Local(local) => return local,
+            slir::cfg::Value::InlineConst(c) => c.ty(),
+            slir::cfg::Value::Const => todo!(),
+        };
+
+        let mut cfg = self.cfg.borrow_mut();
+        let mut body = &mut cfg.function_body[self.function];
+
+        let local = body
+            .local_values
+            .insert(slir::cfg::LocalValueData { ty: Some(ty) });
+
+        let mut bb = &mut body.basic_blocks[self.basic_block];
+
+        bb.statements.push(
+            slir::cfg::OpAssign {
+                value: val,
+                result: local,
+            }
+            .into(),
+        );
+
+        local
+    }
+
+    fn local_value(&mut self, local: Self::Local) -> Self::Value {
+        Value::Value(slir::cfg::Value::Local(local))
     }
 
     fn append_sibling_block(&mut self, _name: &str) -> Self::BasicBlock {
@@ -357,6 +407,20 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         todo!()
     }
 
+    fn assign(&mut self, local: Self::Local, value: Self::Value) {
+        let mut cfg = self.cfg.borrow_mut();
+        let mut body = &mut cfg.function_body[self.function];
+        let mut bb = &mut body.basic_blocks[self.basic_block];
+
+        bb.statements.push(
+            slir::cfg::OpAssign {
+                value: value.expect_value(),
+                result: local,
+            }
+            .into(),
+        );
+    }
+
     fn load(&mut self, ty: Self::Type, ptr: Self::Value, _align: Align) -> Self::Value {
         let ty = ty.expect_slir_type();
         let ptr = ptr.expect_value();
@@ -388,10 +452,7 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         todo!()
     }
 
-    fn load_operand(
-        &mut self,
-        place: PlaceRef<Self::Value>,
-    ) -> OperandRef<Self::Value> {
+    fn load_operand(&mut self, place: PlaceRef<Self::Value>) -> OperandRef<Self::Value> {
         let shape = place.layout.layout.shape();
 
         if shape.is_1zst() {
@@ -453,7 +514,7 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
     }
 
     fn gep(&mut self, ty: Self::Type, ptr: Self::Value, indices: &[Self::Value]) -> Self::Value {
-        todo!()
+        self.inbounds_gep(ty, ptr, indices)
     }
 
     fn inbounds_gep(
@@ -469,9 +530,9 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         let mut body = &mut cfg.function_body[self.function];
         let mut bb = &mut body.basic_blocks[self.basic_block];
 
-        let result = body
-            .local_values
-            .insert(slir::cfg::LocalValueData { ty: Some(ty) });
+        let result = body.local_values.insert(slir::cfg::LocalValueData {
+            ty: Some(slir::ty::TY_PTR),
+        });
 
         bb.statements.push(
             slir::cfg::OpPtrElementPtr {

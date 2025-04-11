@@ -1,4 +1,4 @@
-use rustc_middle::{bug};
+use rustc_middle::bug;
 use stable_mir::mir::mono::{Instance, MonoItem};
 use tracing::debug;
 

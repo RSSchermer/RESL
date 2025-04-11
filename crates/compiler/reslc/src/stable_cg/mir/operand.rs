@@ -168,8 +168,10 @@ impl<'a, V: CodegenObject> OperandRef<V> {
     ) -> Self {
         let alloc = match val.kind() {
             ConstantKind::Allocated(alloc) => alloc,
-            ConstantKind::ZeroSized => return Self::zero_sized(TyAndLayout::expect_from_ty(val.ty())),
-            _ => bug!("cannot construct const operand without a data allocation")
+            ConstantKind::ZeroSized => {
+                return Self::zero_sized(TyAndLayout::expect_from_ty(val.ty()))
+            }
+            _ => bug!("cannot construct const operand without a data allocation"),
         };
 
         let ty = val.ty();

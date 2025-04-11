@@ -5,6 +5,7 @@ use tracing::instrument;
 
 use super::{FunctionCx, LocalRef};
 use crate::stable_cg::traits::*;
+use crate::stable_cg::{OperandValue, PlaceRef};
 
 impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
     #[instrument(level = "debug", skip(self, bx))]
@@ -16,17 +17,58 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                         LocalRef::Place(cg_dest) => self.codegen_rvalue(bx, cg_dest, rvalue),
                         LocalRef::UnsizedPlace(cg_indirect_dest) => bug!("not supported by RESL"),
                         LocalRef::PendingOperand => {
-                            let operand = self.codegen_rvalue_operand(bx, rvalue);
-                            self.overwrite_local(place.local, LocalRef::Operand(operand));
-                        }
-                        LocalRef::Operand(op) => {
-                            if !op.layout.layout.shape().is_1zst() {
-                                bug!("operand {:?} already assigned", rvalue);
+                            let mut operand = self.codegen_rvalue_operand(bx, rvalue);
+
+                            match &mut operand.val {
+                                OperandValue::Immediate(val) => {
+                                    let local = bx.as_local(*val);
+
+                                    *val = bx.local_value(local);
+                                }
+                                OperandValue::Pair(a, b) => {
+                                    let a_local = bx.as_local(*a);
+                                    let b_local = bx.as_local(*b);
+
+                                    *a = bx.local_value(a_local);
+                                    *b = bx.local_value(b_local);
+                                }
+                                _ => {}
                             }
 
-                            // If the type is zero-sized, it's already been set here,
-                            // but we still need to make sure we codegen the operand
-                            self.codegen_rvalue_operand(bx, rvalue);
+                            self.overwrite_local(place.local, LocalRef::Operand(operand));
+                        }
+                        LocalRef::Operand(old) => {
+                            let mut new = self.codegen_rvalue_operand(bx, rvalue);
+
+                            match (old.val, &mut new.val) {
+                                (OperandValue::Ref(place), new_val) => {
+                                    new_val.store(bx, place.with_type(new.layout));
+                                }
+                                (OperandValue::Immediate(old), OperandValue::Immediate(new)) => {
+                                    let local = bx.as_local(old);
+
+                                    bx.assign(local, *new);
+
+                                    *new = bx.local_value(local);
+                                }
+                                (
+                                    OperandValue::Pair(a_old, b_old),
+                                    OperandValue::Pair(a_new, b_new),
+                                ) => {
+                                    let a_local = bx.as_local(a_old);
+                                    let b_local = bx.as_local(b_old);
+
+                                    bx.assign(a_local, *a_new);
+                                    bx.assign(b_local, *b_new);
+
+                                    *a_new = bx.local_value(a_local);
+                                    *b_new = bx.local_value(b_local);
+                                }
+                                (OperandValue::ZeroSized, OperandValue::ZeroSized) => {}
+                                _ => bug!(),
+                            }
+
+                            self.overwrite_local(place.local, LocalRef::Operand(new));
                         }
                     }
                 } else {

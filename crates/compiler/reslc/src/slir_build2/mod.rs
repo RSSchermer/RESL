@@ -1,8 +1,9 @@
 use std::io::Read;
 
 use indexmap::IndexSet;
-use rustc_middle::mir::mono::{MonoItem};
+use rustc_middle::mir::mono::MonoItem;
 use rustc_smir::rustc_internal::stable;
+
 use crate::context::ReslContext;
 use crate::slir_build2::builder::Builder;
 use crate::slir_build2::context::CodegenContext;

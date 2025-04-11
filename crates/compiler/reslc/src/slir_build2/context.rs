@@ -1,15 +1,19 @@
 use std::cell::RefCell;
+
 use rustc_hash::FxHashMap;
 use rustc_middle::bug;
 use rustc_smir::rustc_internal::internal;
 use rustc_span::def_id::LOCAL_CRATE;
-use stable_mir::{abi, CrateDef};
-use stable_mir::abi::{ArgAbi, FieldsShape, FloatLength, FnAbi, IntegerLength, PassMode, Primitive, TyAndLayout, ValueAbi, VariantsShape, WrappingRange};
+use slir::Module;
+use stable_mir::abi::{
+    ArgAbi, FieldsShape, FloatLength, FnAbi, IntegerLength, PassMode, Primitive, TyAndLayout,
+    ValueAbi, VariantsShape, WrappingRange,
+};
 use stable_mir::mir::alloc::GlobalAlloc;
 use stable_mir::mir::mono::{Instance, StaticDef};
 use stable_mir::target::MachineInfo;
 use stable_mir::ty::{Align, Allocation};
-use slir::Module;
+use stable_mir::{abi, CrateDef};
 
 use crate::context::ReslContext;
 use crate::hir_ext::{
@@ -19,17 +23,23 @@ use crate::hir_ext::{
 use crate::slir_build2::builder::Builder;
 use crate::slir_build2::ty::Type;
 use crate::slir_build2::value::Value;
-use crate::stable_cg::traits::{BackendTypes, BaseTypeCodegenMethods, ConstCodegenMethods, LayoutTypeCodegenMethods, MiscCodegenMethods, PreDefineCodegenMethods, StaticCodegenMethods};
+use crate::stable_cg::traits::{
+    BackendTypes, BaseTypeCodegenMethods, ConstCodegenMethods, LayoutTypeCodegenMethods,
+    MiscCodegenMethods, PreDefineCodegenMethods, StaticCodegenMethods,
+};
 use crate::stable_cg::{Scalar, ScalarExt, TyAndLayoutExt, TypeKind};
 
 fn scalar_ty(scalar: abi::Scalar) -> slir::ty::Type {
     if matches!(
-            scalar,
-            abi::Scalar::Initialized {
-                value: Primitive::Int{ length: IntegerLength::I8, signed: false },
-                valid_range: WrappingRange { start: 0, end: 1 }
-            }
-        ) {
+        scalar,
+        abi::Scalar::Initialized {
+            value: Primitive::Int {
+                length: IntegerLength::I8,
+                signed: false
+            },
+            valid_range: WrappingRange { start: 0, end: 1 }
+        }
+    ) {
         return slir::ty::TY_BOOL;
     }
 
@@ -39,18 +49,23 @@ fn scalar_ty(scalar: abi::Scalar) -> slir::ty::Type {
     };
 
     match primitive {
-        Primitive::Int { length: IntegerLength::I32, signed: true } => slir::ty::TY_I32,
-        Primitive::Int { length: IntegerLength::I32, signed: false } => slir::ty::TY_U32,
-        Primitive::Float { length: FloatLength::F32 } => slir::ty::TY_F32,
+        Primitive::Int {
+            length: IntegerLength::I32,
+            signed: true,
+        } => slir::ty::TY_I32,
+        Primitive::Int {
+            length: IntegerLength::I32,
+            signed: false,
+        } => slir::ty::TY_U32,
+        Primitive::Float {
+            length: FloatLength::F32,
+        } => slir::ty::TY_F32,
         Primitive::Pointer(_) => slir::ty::TY_PTR,
-        _ => bug!("primitive type not supported by SLIR")
+        _ => bug!("primitive type not supported by SLIR"),
     }
 }
 
-pub fn ty_and_layout_resolve(
-    cx: &CodegenContext,
-    layout: TyAndLayout,
-) -> slir::ty::Type {
+pub fn ty_and_layout_resolve(cx: &CodegenContext, layout: TyAndLayout) -> slir::ty::Type {
     // Note: this cannot be inlined into the if-let expression, because then the borrow guard would
     // not drop in time, which would result in an "already borrowed" error.
     let ty = cx.ty_to_slir.borrow().get(&layout).copied();
@@ -66,10 +81,7 @@ pub fn ty_and_layout_resolve(
     }
 }
 
-fn ty_and_layout_register(
-    cx: &CodegenContext,
-    layout: TyAndLayout,
-) -> slir::ty::Type {
+fn ty_and_layout_register(cx: &CodegenContext, layout: TyAndLayout) -> slir::ty::Type {
     let shape = layout.layout.shape();
 
     match shape.abi {
@@ -290,9 +302,7 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
 }
 
 impl<'a, 'tcx> PreDefineCodegenMethods for CodegenContext<'a, 'tcx> {
-    fn predefine_static(
-        &self, def: StaticDef, symbol_name: &str
-    ) {
+    fn predefine_static(&self, def: StaticDef, symbol_name: &str) {
         let def_id = internal(self.rcx.tcx(), def.0);
         let item = self.rcx.tcx().hir().expect_item(def_id.expect_local());
         let (_, mutability, _, ext) = self
@@ -341,11 +351,7 @@ impl<'a, 'tcx> PreDefineCodegenMethods for CodegenContext<'a, 'tcx> {
         }
     }
 
-    fn predefine_fn(
-        &self,
-        instance: Instance,
-        symbol_name: &str,
-    ) {
+    fn predefine_fn(&self, instance: Instance, symbol_name: &str) {
         let function_name = slir::Symbol::from_ref(symbol_name);
         let function = slir::Function {
             name: function_name,
@@ -371,30 +377,48 @@ impl<'a, 'tcx> PreDefineCodegenMethods for CodegenContext<'a, 'tcx> {
             }
         }
 
-        let args = abi
-            .args
-            .iter()
-            .zip(arg_io_bindings)
-            .map(|(arg, binding)| {
-                let ty = ty_and_layout_resolve(self, TyAndLayout {
-                    ty: arg.ty,
-                    layout: arg.layout
-                });
+        let mut args = Vec::new();
 
-                slir::FnArg {
-                    ty,
-                    shader_io_binding: binding.map(shader_io_binding_to_slir),
-                }
+        if matches!(abi.ret.mode, PassMode::Indirect { .. }) {
+            args.push(slir::FnArg {
+                ty: slir::ty::TY_PTR,
+                shader_io_binding: None,
             })
-            .collect();
+        }
 
-        let ret_ty = if matches!(abi.ret.mode, PassMode::Ignore) {
+        for (arg, binding) in abi.args.iter().zip(arg_io_bindings) {
+            if arg.mode == PassMode::Ignore {
+                continue;
+            }
+
+            let ty = if matches!(arg.mode, PassMode::Indirect { .. }) {
+                slir::ty::TY_PTR
+            } else {
+                ty_and_layout_resolve(
+                    self,
+                    TyAndLayout {
+                        ty: arg.ty,
+                        layout: arg.layout,
+                    },
+                )
+            };
+
+            args.push(slir::FnArg {
+                ty,
+                shader_io_binding: binding.map(shader_io_binding_to_slir),
+            });
+        }
+
+        let ret_ty = if matches!(abi.ret.mode, PassMode::Ignore | PassMode::Indirect { .. }) {
             None
         } else {
-            Some(ty_and_layout_resolve(self, TyAndLayout {
-                ty: abi.ret.ty,
-                layout: abi.ret.layout
-            }))
+            Some(ty_and_layout_resolve(
+                self,
+                TyAndLayout {
+                    ty: abi.ret.ty,
+                    layout: abi.ret.layout,
+                },
+            ))
         };
 
         let function_ty = self
@@ -424,6 +448,7 @@ impl<'a, 'tcx> PreDefineCodegenMethods for CodegenContext<'a, 'tcx> {
 
 impl<'a, 'tcx> BackendTypes for CodegenContext<'a, 'tcx> {
     type Value = Value;
+    type Local = slir::cfg::LocalValue;
     type Function = slir::Function;
     type BasicBlock = (slir::Function, slir::cfg::BasicBlock);
     type Type = Type;
@@ -481,7 +506,7 @@ impl<'a, 'tcx> ConstCodegenMethods for CodegenContext<'a, 'tcx> {
     }
 
     fn const_u32(&self, i: u32) -> Self::Value {
-        todo!()
+        slir::cfg::Value::InlineConst(slir::cfg::InlineConst::U32(i as u32)).into()
     }
 
     fn const_u64(&self, i: u64) -> Self::Value {
@@ -538,10 +563,7 @@ impl<'a, 'tcx> ConstCodegenMethods for CodegenContext<'a, 'tcx> {
         todo!()
     }
 
-    fn scalar_to_backend(
-        &self,
-        scalar: Scalar,
-    ) -> Self::Value {
+    fn scalar_to_backend(&self, scalar: Scalar) -> Self::Value {
         let inline_const = match scalar {
             Scalar::U32(v) => slir::cfg::InlineConst::U32(v),
             Scalar::I32(v) => slir::cfg::InlineConst::I32(v),
@@ -555,7 +577,7 @@ impl<'a, 'tcx> ConstCodegenMethods for CodegenContext<'a, 'tcx> {
                             .static_to_slir
                             .borrow()
                             .get(&def)
-                            .expect("pointer to undefined static");
+                            .expect("static should have been pre-defined");
 
                         let base = match slir_static {
                             SlirStatic::Uniform(b) => slir::cfg::RootIdentifier::Uniform(b),
@@ -568,7 +590,7 @@ impl<'a, 'tcx> ConstCodegenMethods for CodegenContext<'a, 'tcx> {
 
                         (base, ty)
                     }
-                    GlobalAlloc::Memory(_) => todo!()
+                    GlobalAlloc::Memory(_) => todo!(),
                 };
 
                 slir::cfg::InlineConst::Ptr(slir::cfg::Ptr {
@@ -583,20 +605,25 @@ impl<'a, 'tcx> ConstCodegenMethods for CodegenContext<'a, 'tcx> {
     }
 }
 
-
 impl<'a, 'tcx> LayoutTypeCodegenMethods for CodegenContext<'a, 'tcx> {
     fn backend_type(&self, layout: TyAndLayout) -> Self::Type {
         ty_and_layout_resolve(self, layout).into()
     }
 
     fn fn_decl_backend_type(&self, fn_abi: &FnAbi) -> Self::Type {
-        let ret_ty = if fn_abi.ret.mode == PassMode::Ignore {
+        let ret_ty = if matches!(
+            fn_abi.ret.mode,
+            PassMode::Ignore | PassMode::Indirect { .. }
+        ) {
             None
         } else {
-            Some(ty_and_layout_resolve(self, TyAndLayout {
-                ty: fn_abi.ret.ty,
-                layout: fn_abi.ret.layout,
-            }))
+            Some(ty_and_layout_resolve(
+                self,
+                TyAndLayout {
+                    ty: fn_abi.ret.ty,
+                    layout: fn_abi.ret.layout,
+                },
+            ))
         };
 
         Type::FnDecl { ret_ty }
@@ -612,7 +639,7 @@ impl<'a, 'tcx> LayoutTypeCodegenMethods for CodegenContext<'a, 'tcx> {
         match shape.abi {
             ValueAbi::Scalar(_) | ValueAbi::Vector { .. } => true,
             ValueAbi::ScalarPair(..) => false,
-            ValueAbi::Uninhabited | ValueAbi::Aggregate {..} => shape.is_1zst(),
+            ValueAbi::Uninhabited | ValueAbi::Aggregate { .. } => shape.is_1zst(),
         }
     }
 
@@ -641,8 +668,6 @@ impl<'a, 'tcx> MiscCodegenMethods for CodegenContext<'a, 'tcx> {
         };
 
         let name = slir::Symbol::from_ref(instance.mangled_name().as_str());
-
-        dbg!(name);
 
         slir::Function {
             module: module_name,

@@ -130,15 +130,8 @@ impl<'a, V: CodegenObject> PlaceRef<V> {
         );
 
         let ptr_ty = Ty::new_ptr(layout.ty, Mutability::Mut);
-        let ptr_layout = ptr_ty.layout().expect("must have know layout");
 
-        Self::alloca(
-            bx,
-            TyAndLayout {
-                ty: ptr_ty,
-                layout: ptr_layout,
-            },
-        )
+        Self::alloca(bx, TyAndLayout::expect_from_ty(ptr_ty))
     }
 
     pub fn len<Cx: ConstCodegenMethods<Value = V>>(&self, cx: &Cx) -> V {

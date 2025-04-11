@@ -55,6 +55,9 @@ pub trait BuilderMethods<'a>:
 
     fn append_sibling_block(&mut self, name: &str) -> Self::BasicBlock;
 
+    fn as_local(&mut self, val: Self::Value) -> Self::Local;
+    fn local_value(&mut self, local: Self::Local) -> Self::Value;
+
     fn switch_to_block(&mut self, llbb: Self::BasicBlock);
 
     fn ret_void(&mut self);
@@ -136,6 +139,8 @@ pub trait BuilderMethods<'a>:
 
     fn alloca(&mut self, size: MachineSize, align: Align) -> Self::Value;
     fn dynamic_alloca(&mut self, size: Self::Value, align: Align) -> Self::Value;
+
+    fn assign(&mut self, local: Self::Local, value: Self::Value);
 
     fn load(&mut self, ty: Self::Type, ptr: Self::Value, align: Align) -> Self::Value;
     fn volatile_load(&mut self, ty: Self::Type, ptr: Self::Value) -> Self::Value;
@@ -249,9 +254,16 @@ pub trait BuilderMethods<'a>:
             "cannot directly copy into unsized values"
         );
 
-        let temp = self.load_operand(src.with_type(layout));
+        if self.is_backend_immediate(layout) {
+            let temp = self.load_operand(src.with_type(layout));
 
-        temp.val.store(self, dst.with_type(layout));
+            temp.val.store(self, dst.with_type(layout));
+        } else {
+            let ty = self.backend_type(layout);
+            let val = self.load_from_place(ty, src);
+
+            self.store_to_place(val, dst);
+        }
     }
 
     /// *Typed* swap for non-overlapping places.

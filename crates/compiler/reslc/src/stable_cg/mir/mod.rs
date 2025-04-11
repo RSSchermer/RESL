@@ -168,7 +168,18 @@ pub fn codegen_mir<'a, Bx: BuilderMethods<'a>>(cx: &'a Bx::CodegenCx, instance: 
         let mut allocate_local = |local_index| {
             let decl: &LocalDecl = &fx.mir.locals()[local_index];
 
-            debug!("alloc: {:?} -> operand", local_index);
+            if local_index == 0
+            /* return place */
+            {
+                if let PassMode::Indirect { .. } = fx.fn_abi.ret.mode {
+                    let llretptr = start_bx.get_param(0);
+
+                    return LocalRef::Place(PlaceRef::new_sized(
+                        llretptr,
+                        TyAndLayout::expect_from_ty(decl.ty),
+                    ));
+                }
+            }
 
             LocalRef::new_operand(TyAndLayout::expect_from_ty(decl.ty))
         };
@@ -276,9 +287,6 @@ fn arg_local_refs<'a, Bx: BuilderMethods<'a>>(
 
             idx += 1;
 
-            // We don't have to cast or keep the argument in the alloca.
-            // FIXME(eddyb): We should figure out how to use llvm.dbg.value instead
-            // of putting everything in allocas just so we can use llvm.dbg.declare.
             let local = |op| LocalRef::Operand(op);
 
             match arg.mode {
@@ -315,6 +323,46 @@ fn arg_local_refs<'a, Bx: BuilderMethods<'a>>(
                         },
                     });
                 }
+                // Unsized indirect qrguments
+                PassMode::Indirect { .. } if arg.layout.shape().is_unsized() => {
+                    // As the storage for the indirect argument lives during
+                    // the whole function call, we just copy the wide pointer.
+                    let llarg = bx.get_param(llarg_idx);
+
+                    llarg_idx += 1;
+
+                    let llextra = bx.get_param(llarg_idx);
+
+                    llarg_idx += 1;
+
+                    let indirect_operand = OperandValue::Pair(llarg, llextra);
+                    let tmp = PlaceRef::alloca_unsized_indirect(
+                        bx,
+                        TyAndLayout {
+                            ty: arg.ty,
+                            layout: arg.layout,
+                        },
+                    );
+
+                    indirect_operand.store(bx, tmp);
+
+                    LocalRef::UnsizedPlace(tmp)
+                }
+                // Sized indirect arguments
+                PassMode::Indirect { .. } => {
+                    let llarg = bx.get_param(llarg_idx);
+
+                    llarg_idx += 1;
+
+                    LocalRef::Place(PlaceRef::new_sized(
+                        llarg,
+                        TyAndLayout {
+                            ty: arg.ty,
+                            layout: arg.layout,
+                        },
+                    ))
+                }
+
                 _ => bug!("pass-mode not supported by RESL"),
             }
         })

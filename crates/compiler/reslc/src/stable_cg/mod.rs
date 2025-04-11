@@ -8,9 +8,9 @@ mod scalar;
 
 pub mod traits;
 
-pub use self::scalar::{Scalar, Pointer};
 pub use self::common::*;
 pub use self::layout::{ScalarExt, TyAndLayoutExt};
-pub use self::mir::place::{PlaceValue, PlaceRef};
-pub use self::mir::operand::{OperandValue, OperandRef};
+pub use self::mir::operand::{OperandRef, OperandValue};
+pub use self::mir::place::{PlaceRef, PlaceValue};
 pub use self::mono_item::MonoItemExt;
+pub use self::scalar::{Pointer, Scalar};

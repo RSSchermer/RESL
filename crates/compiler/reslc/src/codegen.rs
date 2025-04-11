@@ -12,8 +12,8 @@ use rustc_span::Symbol;
 use crate::compiler::LIB_MODULE_FILENAME;
 use crate::context::{ReslContext as Cx, ReslContext};
 use crate::monomorphize::collect_shader_module_codegen_units;
-use crate::slir_build2;
 use crate::slir_build::build_shader_module;
+use crate::slir_build2;
 
 fn gather_and_import_dependencies(
     rcx: &ReslContext,
@@ -121,13 +121,13 @@ pub fn codegen_shader_modules(cx: &Cx) -> (slir::Module, slir::cfg::Cfg) {
         for shader_module in shader_modules {
             let name = format!("{}-{}", crate_name, shader_module.name);
             let name = slir::Symbol::new(name);
-            let (mut module, mut cfg) = slir_build2::build_shader_module(cx, name, &shader_module.items);
+            let (mut module, mut cfg) =
+                slir_build2::build_shader_module(cx, name, &shader_module.items);
 
             gather_and_import_dependencies(cx, &mut module, &mut cfg);
 
             create_slir_artifact(cx, &module, &cfg);
         }
-
 
         // We also create one additional module for the whole crate for the SLIR of all "free functions"
         // (functions that are not part of a `mod` item with a `#[resl::shader_module]` attribute). This
@@ -136,5 +136,6 @@ pub fn codegen_shader_modules(cx: &Cx) -> (slir::Module, slir::cfg::Cfg) {
         let lib_name = slir::Symbol::from_ref(crate_name.as_str());
 
         build_shader_module(cx, lib_name, &free_items)
-    }).unwrap()
+    })
+    .unwrap()
 }
