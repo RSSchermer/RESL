@@ -33,14 +33,10 @@ impl Scalar {
         );
 
         match abi.primitive() {
-            Primitive::Int {
-                length: IntegerLength::I32,
-                signed: true,
-            } => Scalar::I32(i32::from_ne_bytes((data as u32).to_ne_bytes())),
-            Primitive::Int {
-                length: IntegerLength::I32,
-                signed: false,
-            } => Scalar::U32(data as u32),
+            Primitive::Int { signed: true, .. } => {
+                Scalar::I32(i32::from_ne_bytes((data as u32).to_ne_bytes()))
+            }
+            Primitive::Int { signed: false, .. } => Scalar::U32(data as u32),
             Primitive::Float {
                 length: FloatLength::F32,
             } => Scalar::F32(f32::from_ne_bytes((data as u32).to_ne_bytes())),

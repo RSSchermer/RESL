@@ -1,7 +1,7 @@
 use rustc_middle::bug;
 use stable_mir::abi::{Primitive, Scalar, TyAndLayout, VariantsShape};
 use stable_mir::target::{MachineInfo, MachineSize};
-use stable_mir::ty::{RigidTy, Ty, TyKind, UintTy};
+use stable_mir::ty::{Region, RegionKind, RigidTy, Ty, TyKind, UintTy};
 
 pub trait TyAndLayoutExt {
     fn expect_from_ty(ty: Ty) -> Self;
@@ -47,12 +47,44 @@ impl TyAndLayoutExt for TyAndLayout {
                 }
 
                 // Types that are not supported by RESL.
-                RigidTy::Ref(..)
-                | RigidTy::RawPtr(..)
-                | RigidTy::Dynamic(..)
-                | RigidTy::Coroutine(..)
-                | RigidTy::CoroutineClosure(..) => {
+                RigidTy::Dynamic(..) | RigidTy::Coroutine(..) | RigidTy::CoroutineClosure(..) => {
                     bug!("Type field projection not supported by RESL for {:?}", ty)
+                }
+
+                // Potentially-wide pointers.
+                RigidTy::Ref(_, pointee, mutability) | RigidTy::RawPtr(pointee, mutability) => {
+                    let shape = this.layout.shape();
+
+                    assert!(i < shape.fields.count());
+
+                    if i == 0 {
+                        let unit_ty = Ty::new_tuple(&[]);
+
+                        let unit_ptr_ty = if matches!(ty, RigidTy::RawPtr(..)) {
+                            Ty::new_ptr(unit_ty, mutability)
+                        } else {
+                            Ty::new_ref(
+                                Region {
+                                    kind: RegionKind::ReStatic,
+                                },
+                                unit_ty,
+                                mutability,
+                            )
+                        };
+
+                        TyMaybeWithLayout::TyAndLayout(TyAndLayout {
+                            ty: this.ty,
+                            layout: unit_ptr_ty.layout().unwrap(),
+                        })
+                    } else if i == 1 {
+                        // We assume the second field is the size slice, as other wide pointer types
+                        // are not supported by RESL, and should have triggered errors earlier.
+                        let ty = Ty::usize_ty();
+
+                        TyMaybeWithLayout::TyAndLayout(TyAndLayout::expect_from_ty(ty))
+                    } else {
+                        bug!()
+                    }
                 }
 
                 // Arrays and slices.

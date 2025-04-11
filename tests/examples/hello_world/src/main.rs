@@ -40,6 +40,10 @@ pub mod shader {
 
         data
     }
+
+    fn slice_arg(slice: &mut [u32]) -> usize {
+        slice.len()
+    }
 }
 
 fn main() {}

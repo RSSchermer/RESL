@@ -49,14 +49,8 @@ fn scalar_ty(scalar: abi::Scalar) -> slir::ty::Type {
     };
 
     match primitive {
-        Primitive::Int {
-            length: IntegerLength::I32,
-            signed: true,
-        } => slir::ty::TY_I32,
-        Primitive::Int {
-            length: IntegerLength::I32,
-            signed: false,
-        } => slir::ty::TY_U32,
+        Primitive::Int { signed: true, .. } => slir::ty::TY_I32,
+        Primitive::Int { signed: false, .. } => slir::ty::TY_U32,
         Primitive::Float {
             length: FloatLength::F32,
         } => slir::ty::TY_F32,
@@ -387,26 +381,47 @@ impl<'a, 'tcx> PreDefineCodegenMethods for CodegenContext<'a, 'tcx> {
         }
 
         for (arg, binding) in abi.args.iter().zip(arg_io_bindings) {
-            if arg.mode == PassMode::Ignore {
-                continue;
+            match arg.mode {
+                PassMode::Ignore => {}
+                PassMode::Direct(_) => {
+                    let ty = ty_and_layout_resolve(
+                        self,
+                        TyAndLayout {
+                            ty: arg.ty,
+                            layout: arg.layout,
+                        },
+                    );
+
+                    args.push(slir::FnArg {
+                        ty,
+                        shader_io_binding: binding.map(shader_io_binding_to_slir),
+                    });
+                }
+                PassMode::Pair(..) => {
+                    let ValueAbi::ScalarPair(a, b) = arg.layout.shape().abi else {
+                        bug!("value ABI does not match pass-mode")
+                    };
+
+                    let a_ty = scalar_ty(a);
+                    let b_ty = scalar_ty(b);
+
+                    args.push(slir::FnArg {
+                        ty: a_ty,
+                        shader_io_binding: binding.map(shader_io_binding_to_slir),
+                    });
+                    args.push(slir::FnArg {
+                        ty: b_ty,
+                        shader_io_binding: None,
+                    });
+                }
+                PassMode::Indirect { .. } => {
+                    args.push(slir::FnArg {
+                        ty: slir::ty::TY_PTR,
+                        shader_io_binding: binding.map(shader_io_binding_to_slir),
+                    });
+                }
+                PassMode::Cast { .. } => bug!("not supported by RESL"),
             }
-
-            let ty = if matches!(arg.mode, PassMode::Indirect { .. }) {
-                slir::ty::TY_PTR
-            } else {
-                ty_and_layout_resolve(
-                    self,
-                    TyAndLayout {
-                        ty: arg.ty,
-                        layout: arg.layout,
-                    },
-                )
-            };
-
-            args.push(slir::FnArg {
-                ty,
-                shader_io_binding: binding.map(shader_io_binding_to_slir),
-            });
         }
 
         let ret_ty = if matches!(abi.ret.mode, PassMode::Ignore | PassMode::Indirect { .. }) {

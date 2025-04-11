@@ -669,7 +669,16 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                         (OperandValue::Immediate(llval), operand.layout)
                     }
                     mir::UnOp::PtrMetadata => {
-                        bug!("not supported by RESL")
+                        let (_, meta) = operand.val.pointer_parts();
+
+                        if let Some(meta) = meta {
+                            (OperandValue::Immediate(meta), operand.layout.field(1))
+                        } else {
+                            (
+                                OperandValue::ZeroSized,
+                                TyAndLayout::expect_from_ty(Ty::new_tuple(&[])),
+                            )
+                        }
                     }
                 };
                 assert!(
