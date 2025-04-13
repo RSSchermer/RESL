@@ -64,6 +64,13 @@ impl<'a, 'tcx> ArgAbiBuilderMethods for Builder<'a, 'tcx> {
             PassMode::Pair(..) => {
                 OperandValue::Pair(next(self, idx), next(self, idx)).store(self, dst);
             }
+            // TODO: from some cursory analysis of the codegen code, it does not seem that
+            // store_fn_arg (or store_arg) ever gets called with in indirect pass-mode (which makes
+            // sense, we only alloca and call store_fn_arg when we need to interact with the value
+            // via a pointer, and in the case of an indirect argument we clearly already have a
+            // pointer). Trying to store an unsized value like a slice (as we do here), will also
+            // always cause an ICE (can't directly store an unsized value). Should we just assert
+            // that the pass-mode cannot be "indirect" here?
             PassMode::Indirect { .. } if arg_abi.ty.kind().is_slice() => {
                 let place_val = PlaceValue {
                     llval: next(self, idx),
