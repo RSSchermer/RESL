@@ -102,7 +102,7 @@ pub fn Instruction(
             "store "<Value module function value=op.value highlight/>" into "<Value module function value=op.ptr highlight/>
         }.into_any(),
         slir::cfg::Statement::OpPtrElementPtr(op) => view! {
-            <Value module function value=op.result.into() highlight/> " = (&*"<Value module function value=op.ptr highlight/>")"
+            <Value module function value=op.result.into() highlight/> " = &"<Value module function value=op.ptr highlight/>
             {move || {
                 op.indices.iter().map(|i| view! {
                     "."<Value module function value=*i highlight/>

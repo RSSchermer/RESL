@@ -44,6 +44,18 @@ pub mod shader {
     fn slice_arg(slice: &mut [u32]) -> usize {
         slice.len()
     }
+
+    fn unsize_array() -> usize {
+        let mut arr = [0u32; 4];
+
+        slice_arg(&mut arr)
+    }
+
+    fn closure(a: u32, b: u32, c: u32) -> u32 {
+        let closure = |v| v + a + b;
+
+        closure(c)
+    }
 }
 
 fn main() {}

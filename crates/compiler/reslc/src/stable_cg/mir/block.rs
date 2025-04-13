@@ -308,6 +308,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
         // Split the rust-call tupled arguments off.
         let (first_args, untuple) = if is_rust_call && !args.is_empty() {
             let (tup, args) = args.split_last().unwrap();
+
             (args, Some(tup))
         } else {
             (args, None)
@@ -509,15 +510,18 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                 }
                 _ => bug!("codegen_argument: {:?} invalid for pair argument", op),
             },
-            // PassMode::Indirect { attrs: _, meta_attrs: Some(_), on_stack: _ } => match op.val {
-            //     Ref(PlaceValue { llval: a, llextra: Some(b), .. }) => {
-            //         llargs.push(a);
-            //         llargs.push(b);
-            //
-            //         return;
-            //     }
-            //     _ => bug!("codegen_argument: {:?} invalid for unsized indirect argument", op),
-            // },
+            PassMode::Indirect { .. }
+                if let Ref(PlaceValue {
+                    llval: a,
+                    llextra: Some(b),
+                    ..
+                }) = op.val =>
+            {
+                llargs.push(a);
+                llargs.push(b);
+
+                return;
+            }
             _ => {}
         }
 

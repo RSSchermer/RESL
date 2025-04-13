@@ -659,7 +659,9 @@ impl<'a, 'tcx> LayoutTypeCodegenMethods for CodegenContext<'a, 'tcx> {
     }
 
     fn is_backend_scalar_pair(&self, layout: TyAndLayout) -> bool {
-        false
+        let shape = layout.layout.shape();
+
+        matches!(shape.abi, ValueAbi::ScalarPair(..))
     }
 
     fn scalar_pair_element_backend_type(

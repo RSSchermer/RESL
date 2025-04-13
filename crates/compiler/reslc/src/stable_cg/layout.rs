@@ -1,12 +1,14 @@
 use rustc_middle::bug;
 use stable_mir::abi::{Primitive, Scalar, TyAndLayout, VariantsShape};
 use stable_mir::target::{MachineInfo, MachineSize};
-use stable_mir::ty::{Region, RegionKind, RigidTy, Ty, TyKind, UintTy};
+use stable_mir::ty::{Region, RegionKind, RigidTy, Ty, TyKind, UintTy, VariantIdx};
 
 pub trait TyAndLayoutExt {
     fn expect_from_ty(ty: Ty) -> Self;
 
     fn field(self, i: usize) -> TyAndLayout;
+
+    fn for_variant(self, variant_idx: VariantIdx) -> Self;
 }
 
 impl TyAndLayoutExt for TyAndLayout {
@@ -157,6 +159,13 @@ impl TyAndLayoutExt for TyAndLayout {
                 }
             }
             TyMaybeWithLayout::TyAndLayout(field_layout) => field_layout,
+        }
+    }
+
+    fn for_variant(self, variant_idx: VariantIdx) -> Self {
+        match self.layout.shape().variants {
+            VariantsShape::Single { index } if index == variant_idx => self,
+            _ => todo!(),
         }
     }
 }

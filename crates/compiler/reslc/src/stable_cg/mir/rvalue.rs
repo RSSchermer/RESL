@@ -384,7 +384,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                 bug!("r-value {:?} not supported by RESL", rvalue)
             }
 
-            mir::Rvalue::Repeat(ref elem, count) => {
+            mir::Rvalue::Repeat(elem, count) => {
                 let cg_elem = self.codegen_operand(bx, elem);
 
                 // Do not generate the loop for zero-sized elements or empty arrays.
@@ -406,39 +406,39 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
             mir::Rvalue::Aggregate(kind, operands)
                 if !matches!(kind, mir::AggregateKind::RawPtr(..)) =>
             {
-                todo!()
-                // let (variant_index, variant_dest, active_field_index) = match kind {
-                //     mir::AggregateKind::Adt(_, variant_index, _, _, active_field_index) => {
-                //         let variant_dest = dest.project_downcast(bx, variant_index);
-                //
-                //         (*variant_index, variant_dest, *active_field_index)
-                //     }
-                //     _ => (0, dest, None),
-                // };
-                //
-                // if active_field_index.is_some() {
-                //     assert_eq!(operands.len(), 1);
-                // }
-                //
-                // for (i, operand) in operands.iter_enumerated() {
-                //     let op = self.codegen_operand(bx, operand);
-                //     // Do not generate stores and GEPis for zero-sized fields.
-                //     if !op.layout.layout.shape().is_1zst() {
-                //         let field_index = active_field_index.unwrap_or(i);
-                //
-                //         let field = if let mir::AggregateKind::Array(_) = **kind {
-                //             let llindex = bx.const_usize(field_index.as_u32().into());
-                //
-                //             variant_dest.project_index(bx, llindex)
-                //         } else {
-                //             variant_dest.project_field(bx, field_index)
-                //         };
-                //
-                //         op.val.store(bx, field);
-                //     }
-                // }
-                //
-                // dest.codegen_set_discr(bx, variant_index);
+                let (variant_index, variant_dest, active_field_index) = match kind {
+                    mir::AggregateKind::Adt(_, variant_index, _, _, active_field_index) => {
+                        let variant_dest = dest.project_downcast(bx, *variant_index);
+
+                        (*variant_index, variant_dest, *active_field_index)
+                    }
+                    _ => (VariantIdx::to_val(0), dest, None),
+                };
+
+                if active_field_index.is_some() {
+                    assert_eq!(operands.len(), 1);
+                }
+
+                for (i, operand) in operands.iter().enumerate() {
+                    let op = self.codegen_operand(bx, operand);
+
+                    // Do not generate stores and GEPis for zero-sized fields.
+                    if !op.layout.layout.shape().is_1zst() {
+                        let field_index = active_field_index.unwrap_or(i);
+
+                        let field = if matches!(kind, mir::AggregateKind::Array(_)) {
+                            let llindex = bx.const_usize(field_index as u64);
+
+                            variant_dest.project_index(bx, llindex)
+                        } else {
+                            variant_dest.project_field(bx, field_index)
+                        };
+
+                        op.val.store(bx, field);
+                    }
+                }
+
+                dest.codegen_set_discr(bx, variant_index);
             }
 
             _ => {

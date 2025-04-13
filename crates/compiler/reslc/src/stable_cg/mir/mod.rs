@@ -1,3 +1,5 @@
+use core::fmt;
+use std::fmt::Formatter;
 use std::iter;
 
 use bit_set::BitSet;
@@ -112,6 +114,17 @@ impl<'tcx, V: CodegenObject> LocalRef<V> {
     }
 }
 
+impl<V: CodegenObject> fmt::Debug for LocalRef<V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LocalRef::Place(p) => write!(f, "Place({:?})", p),
+            LocalRef::UnsizedPlace(p) => write!(f, "UnsizedPlace({:?})", p),
+            LocalRef::Operand(o) => write!(f, "Operand({:?})", o),
+            LocalRef::PendingOperand => write!(f, "PendingOperand"),
+        }
+    }
+}
+
 ///////////////////////////////////////////////////////////////////////////
 
 pub fn codegen_mir<'a, Bx: BuilderMethods<'a>>(cx: &'a Bx::CodegenCx, instance: Instance) {
@@ -156,6 +169,8 @@ pub fn codegen_mir<'a, Bx: BuilderMethods<'a>>(cx: &'a Bx::CodegenCx, instance: 
         locals: locals::Locals::empty(),
     };
 
+    let needs_alloca = locals::needs_alloca(&fx, &traversal_order);
+
     // It may seem like we should iterate over `required_consts` to ensure they all successfully
     // evaluate; however, the `MirUsedCollector` already did that during the collection phase of
     // monomorphization, and if there is an error during collection then codegen never starts -- so
@@ -163,7 +178,7 @@ pub fn codegen_mir<'a, Bx: BuilderMethods<'a>>(cx: &'a Bx::CodegenCx, instance: 
 
     // Allocate variable and temp allocas
     let local_values = {
-        let args = arg_local_refs(&mut start_bx, &mut fx);
+        let args = arg_local_refs(&mut start_bx, &mut fx, &needs_alloca);
 
         let mut allocate_local = |local_index| {
             let decl: &LocalDecl = &fx.mir.locals()[local_index];
@@ -181,7 +196,19 @@ pub fn codegen_mir<'a, Bx: BuilderMethods<'a>>(cx: &'a Bx::CodegenCx, instance: 
                 }
             }
 
-            LocalRef::new_operand(TyAndLayout::expect_from_ty(decl.ty))
+            let layout = TyAndLayout::expect_from_ty(decl.ty);
+
+            if needs_alloca.contains(local_index) {
+                let shape = layout.layout.shape();
+
+                if shape.is_unsized() {
+                    LocalRef::UnsizedPlace(PlaceRef::alloca_unsized_indirect(&mut start_bx, layout))
+                } else {
+                    LocalRef::Place(PlaceRef::alloca(&mut start_bx, layout))
+                }
+            } else {
+                LocalRef::new_operand(layout)
+            }
         };
 
         let retptr = allocate_local(RETURN_PLACE);
@@ -222,12 +249,11 @@ fn inner_local_indices(body: &Body) -> impl DoubleEndedIterator<Item = Local> {
     (body.arg_locals().len() + 1)..body.locals().len()
 }
 
-/// Produces, for each argument, a `Value` pointing at the
-/// argument's value. As arguments are places, these are always
-/// indirect.
+/// Produces, for each argument, a `Value` pointing at the argument's value.
 fn arg_local_refs<'a, Bx: BuilderMethods<'a>>(
     bx: &mut Bx,
     fx: &mut FunctionCx<'a, Bx>,
+    needs_alloca: &BitSet<usize>,
 ) -> Vec<LocalRef<Bx::Value>> {
     let mir = &fx.mir;
 
@@ -239,7 +265,10 @@ fn arg_local_refs<'a, Bx: BuilderMethods<'a>>(
         .arg_locals()
         .iter()
         .enumerate()
-        .map(|(local, arg_decl)| {
+        .map(|(i, arg_decl)| {
+            // Arg locals come after the return local
+            let local = i + 1;
+
             let arg_ty = arg_decl.ty;
 
             if Some(local) == mir.spread_arg() {
@@ -248,7 +277,7 @@ fn arg_local_refs<'a, Bx: BuilderMethods<'a>>(
                 // to reconstruct it into a tuple local variable, from multiple
                 // individual LLVM function arguments.
                 let TyKind::RigidTy(RigidTy::Tuple(tupled_arg_tys)) = arg_ty.kind() else {
-                    bug!("spread argument isn't a tuple?!");
+                    bug!("spread argument should be a tuple");
                 };
 
                 let layout = arg_ty.layout().expect("must have layout during codegen");
@@ -287,42 +316,48 @@ fn arg_local_refs<'a, Bx: BuilderMethods<'a>>(
 
             idx += 1;
 
-            let local = |op| LocalRef::Operand(op);
+            if !needs_alloca.contains(local) {
+                let local = |op| LocalRef::Operand(op);
+
+                match arg.mode {
+                    PassMode::Ignore => {
+                        return local(OperandRef::zero_sized(TyAndLayout {
+                            ty: arg_ty,
+                            layout: arg.layout,
+                        }));
+                    }
+                    PassMode::Direct(_) => {
+                        let llarg = bx.get_param(llarg_idx);
+
+                        llarg_idx += 1;
+
+                        return local(OperandRef::from_immediate_or_packed_pair(
+                            bx,
+                            llarg,
+                            TyAndLayout {
+                                ty: arg_ty,
+                                layout: arg.layout,
+                            },
+                        ));
+                    }
+                    PassMode::Pair(..) => {
+                        let (a, b) = (bx.get_param(llarg_idx), bx.get_param(llarg_idx + 1));
+
+                        llarg_idx += 2;
+
+                        return local(OperandRef {
+                            val: OperandValue::Pair(a, b),
+                            layout: TyAndLayout {
+                                ty: arg_ty,
+                                layout: arg.layout,
+                            },
+                        });
+                    }
+                    _ => {}
+                }
+            }
 
             match arg.mode {
-                PassMode::Ignore => {
-                    return local(OperandRef::zero_sized(TyAndLayout {
-                        ty: arg_ty,
-                        layout: arg.layout,
-                    }));
-                }
-                PassMode::Direct(_) => {
-                    let llarg = bx.get_param(llarg_idx);
-
-                    llarg_idx += 1;
-
-                    return local(OperandRef::from_immediate_or_packed_pair(
-                        bx,
-                        llarg,
-                        TyAndLayout {
-                            ty: arg_ty,
-                            layout: arg.layout,
-                        },
-                    ));
-                }
-                PassMode::Pair(..) => {
-                    let (a, b) = (bx.get_param(llarg_idx), bx.get_param(llarg_idx + 1));
-
-                    llarg_idx += 2;
-
-                    return local(OperandRef {
-                        val: OperandValue::Pair(a, b),
-                        layout: TyAndLayout {
-                            ty: arg_ty,
-                            layout: arg.layout,
-                        },
-                    });
-                }
                 // Unsized indirect qrguments
                 PassMode::Indirect { .. } if arg.layout.shape().is_unsized() => {
                     // As the storage for the indirect argument lives during
@@ -363,7 +398,19 @@ fn arg_local_refs<'a, Bx: BuilderMethods<'a>>(
                     ))
                 }
 
-                _ => bug!("pass-mode not supported by RESL"),
+                _ => {
+                    let tmp = PlaceRef::alloca(
+                        bx,
+                        TyAndLayout {
+                            ty: arg.ty,
+                            layout: arg.layout,
+                        },
+                    );
+
+                    bx.store_fn_arg(arg, &mut llarg_idx, tmp);
+
+                    LocalRef::Place(tmp)
+                }
             }
         })
         .collect::<Vec<_>>();

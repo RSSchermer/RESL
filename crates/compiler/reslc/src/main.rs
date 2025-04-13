@@ -19,6 +19,7 @@ extern crate rustc_hir;
 extern crate rustc_interface;
 #[macro_use]
 extern crate rustc_smir;
+extern crate core;
 extern crate rustc_macros;
 extern crate rustc_metadata;
 extern crate rustc_middle;

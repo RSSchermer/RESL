@@ -1,10 +1,12 @@
+use std::hash::Hash;
+
 use rustc_middle::mir::tcx::PlaceTy;
 use rustc_middle::{bug, ty};
-use stable_mir::abi::{FieldsShape, TyAndLayout};
+use stable_mir::abi::{FieldsShape, TyAndLayout, ValueAbi, VariantsShape};
 use stable_mir::mir;
 use stable_mir::mir::Mutability;
 use stable_mir::target::MachineSize;
-use stable_mir::ty::{Align, RigidTy, Size, Ty, TyKind};
+use stable_mir::ty::{Align, RigidTy, Size, Ty, TyKind, VariantIdx};
 use tracing::{debug, instrument};
 
 use super::operand::OperandValue;
@@ -313,90 +315,89 @@ impl<'a, V: CodegenObject> PlaceRef<V> {
     //     }
     // }
     //
-    // /// Sets the discriminant for a new value of the given case of the given
-    // /// representation.
-    // pub fn codegen_set_discr<Bx: BuilderMethods<'a, 'tcx, Value = V>>(
-    //     &self,
-    //     bx: &mut Bx,
-    //     variant_index: VariantIdx,
-    // ) {
-    //     if self
-    //         .layout
-    //         .for_variant(bx.cx(), variant_index)
-    //         .is_uninhabited()
-    //     {
-    //         // We play it safe by using a well-defined `abort`, but we could go for immediate UB
-    //         // if that turns out to be helpful.
-    //         bx.abort();
-    //         return;
-    //     }
-    //     match self.layout.variants {
-    //         Variants::Empty => unreachable!("we already handled uninhabited types"),
-    //         Variants::Single { index } => assert_eq!(index, variant_index),
-    //
-    //         Variants::Multiple {
-    //             tag_encoding: TagEncoding::Direct,
-    //             tag_field,
-    //             ..
-    //         } => {
-    //             let ptr = self.project_field(bx, tag_field);
-    //             let to = self
-    //                 .layout
-    //                 .ty
-    //                 .discriminant_for_variant(bx.tcx(), variant_index)
-    //                 .unwrap()
-    //                 .val;
-    //             bx.store_to_place(
-    //                 bx.cx().const_uint_big(bx.cx().backend_type(ptr.layout), to),
-    //                 ptr.val,
-    //             );
-    //         }
-    //         Variants::Multiple {
-    //             tag_encoding:
-    //                 TagEncoding::Niche {
-    //                     untagged_variant,
-    //                     ref niche_variants,
-    //                     niche_start,
-    //                 },
-    //             tag_field,
-    //             ..
-    //         } => {
-    //             if variant_index != untagged_variant {
-    //                 let niche = self.project_field(bx, tag_field);
-    //                 let niche_llty = bx.cx().immediate_backend_type(niche.layout);
-    //                 let BackendRepr::Scalar(scalar) = niche.layout.backend_repr else {
-    //                     bug!("expected a scalar placeref for the niche");
-    //                 };
-    //                 // We are supposed to compute `niche_value.wrapping_add(niche_start)` wrapping
-    //                 // around the `niche`'s type.
-    //                 // The easiest way to do that is to do wrapping arithmetic on `u128` and then
-    //                 // masking off any extra bits that occur because we did the arithmetic with too many bits.
-    //                 let niche_value = variant_index.as_u32() - niche_variants.start().as_u32();
-    //                 let niche_value = (niche_value as u128).wrapping_add(niche_start);
-    //                 let niche_value = niche_value & niche.layout.size.unsigned_int_max();
-    //
-    //                 let niche_llval = bx.cx().scalar_to_backend(
-    //                     Scalar::from_uint(niche_value, niche.layout.size),
-    //                     scalar,
-    //                     niche_llty,
-    //                 );
-    //                 OperandValue::Immediate(niche_llval).store(bx, niche);
-    //             }
-    //         }
-    //     }
-    // }
-    //
-    //
-    // pub fn project_downcast<Bx: BuilderMethods<'a, 'tcx, Value = V>>(
-    //     &self,
-    //     bx: &mut Bx,
-    //     variant_index: VariantIdx,
-    // ) -> Self {
-    //     let mut downcast = *self;
-    //     downcast.layout = self.layout.for_variant(bx.cx(), variant_index);
-    //     downcast
-    // }
-    //
+    /// Sets the discriminant for a new value of the given case of the given
+    /// representation.
+    pub fn codegen_set_discr<Bx: BuilderMethods<'a, Value = V>>(
+        &self,
+        bx: &mut Bx,
+        variant_index: VariantIdx,
+    ) {
+        let abi = self.layout.for_variant(variant_index).layout.shape().abi;
+
+        if matches!(abi, ValueAbi::Uninhabited) {
+            return;
+        }
+
+        match self.layout.layout.shape().variants {
+            VariantsShape::Empty => unreachable!("we already handled uninhabited types"),
+            VariantsShape::Single { index } => assert_eq!(index, variant_index),
+
+            VariantsShape::Multiple {
+                // tag_encoding: TagEncoding::Direct,
+                // tag_field,
+                ..
+            } => {
+                todo!()
+                // let ptr = self.project_field(bx, tag_field);
+                // let to = self
+                //     .layout
+                //     .ty
+                //     .discriminant_for_variant(bx.tcx(), variant_index)
+                //     .unwrap()
+                //     .val;
+                // bx.store_to_place(
+                //     bx.cx().const_uint_big(bx.cx().backend_type(ptr.layout), to),
+                //     ptr.val,
+                // );
+            }
+            VariantsShape::Multiple {
+                // tag_encoding:
+                //     TagEncoding::Niche {
+                //         untagged_variant,
+                //         ref niche_variants,
+                //         niche_start,
+                //     },
+                // tag_field,
+                ..
+            } => {
+                todo!()
+                // if variant_index != untagged_variant {
+                //     let niche = self.project_field(bx, tag_field);
+                //     let niche_llty = bx.cx().immediate_backend_type(niche.layout);
+                //     let BackendRepr::Scalar(scalar) = niche.layout.backend_repr else {
+                //         bug!("expected a scalar placeref for the niche");
+                //     };
+                //     // We are supposed to compute `niche_value.wrapping_add(niche_start)` wrapping
+                //     // around the `niche`'s type.
+                //     // The easiest way to do that is to do wrapping arithmetic on `u128` and then
+                //     // masking off any extra bits that occur because we did the arithmetic with too many bits.
+                //     let niche_value = variant_index.as_u32() - niche_variants.start().as_u32();
+                //     let niche_value = (niche_value as u128).wrapping_add(niche_start);
+                //     let niche_value = niche_value & niche.layout.size.unsigned_int_max();
+                //
+                //     let niche_llval = bx.cx().scalar_to_backend(
+                //         Scalar::from_uint(niche_value, niche.layout.size),
+                //         scalar,
+                //         niche_llty,
+                //     );
+                //     OperandValue::Immediate(niche_llval).store(bx, niche);
+                // }
+            }
+        }
+    }
+
+    pub fn project_downcast<Bx: BuilderMethods<'a, Value = V>>(
+        &self,
+        bx: &mut Bx,
+        variant_index: VariantIdx,
+    ) -> Self {
+        let mut downcast = *self;
+
+        downcast.layout = downcast.layout.for_variant(variant_index);
+
+        downcast
+    }
+
     // pub fn project_type<Bx: BuilderMethods<'a, 'tcx, Value = V>>(
     //     &self,
     //     bx: &mut Bx,

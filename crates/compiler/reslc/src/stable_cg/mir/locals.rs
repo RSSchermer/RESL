@@ -4,8 +4,12 @@
 
 use std::ops::{Index, IndexMut};
 
+use bit_set::BitSet;
+use bit_vec::BitVec;
 use index_vec::IndexVec;
 use stable_mir::mir;
+use stable_mir::mir::visit::Location;
+use stable_mir::mir::{BasicBlockIdx, MirVisitor, Rvalue, Statement, StatementKind};
 use tracing::{debug, warn};
 
 use crate::stable_cg::mir::{FunctionCx, LocalRef};
@@ -57,5 +61,67 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
         };
 
         self.locals.values[local] = value;
+    }
+}
+
+pub(super) fn needs_alloca<'a, Bx: BuilderMethods<'a>>(
+    fx: &FunctionCx<'a, Bx>,
+    traversal_order: &[BasicBlockIdx],
+) -> BitSet<usize> {
+    let local_count = fx.mir.locals().len();
+    let visited = BitSet::from_bit_vec(BitVec::from_elem(local_count, false));
+    let needs_init = BitSet::from_bit_vec(BitVec::from_elem(local_count, false));
+
+    let mut analyzer = NeedsInitAnalyzer {
+        fx,
+        visited: Default::default(),
+        needs_alloca: Default::default(),
+    };
+
+    for bb in traversal_order.iter().copied() {
+        let data = &fx.mir.blocks[bb];
+
+        analyzer.visit_basic_block(data);
+    }
+
+    analyzer.needs_alloca
+}
+
+struct NeedsInitAnalyzer<'a, 'b, Bx: BuilderMethods<'b>> {
+    fx: &'a FunctionCx<'b, Bx>,
+    visited: BitSet<usize>,
+    needs_alloca: BitSet<usize>,
+}
+
+impl<'a, 'b, Bx: BuilderMethods<'b>> MirVisitor for NeedsInitAnalyzer<'a, 'b, Bx> {
+    fn visit_statement(&mut self, stmt: &Statement, location: Location) {
+        if let StatementKind::Assign(place, rvalue) = &stmt.kind {
+            let is_local = place.projection.is_empty();
+
+            if is_local {
+                if self.visited.insert(place.local) {
+                    if !self.fx.rvalue_creates_operand(rvalue) {
+                        self.needs_alloca.insert(place.local);
+                    }
+                }
+            }
+
+            self.super_statement(stmt, location)
+        }
+    }
+
+    fn visit_rvalue(&mut self, rvalue: &Rvalue, location: Location) {
+        match rvalue {
+            Rvalue::Ref(_, _, place) => {
+                let is_local = place.projection.is_empty();
+
+                if is_local {
+                    self.needs_alloca.insert(place.local);
+                }
+            }
+            _ => {}
+        }
+
+        self.super_rvalue(rvalue, location)
     }
 }

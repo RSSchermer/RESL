@@ -1,17 +1,20 @@
 use std::ops::{Deref, Range};
 
+use rustc_middle::bug;
+use slir::cfg::LocalValueData;
 use smallvec::smallvec;
 use stable_mir::abi;
-use stable_mir::abi::{ArgAbi, FnAbi, ValueAbi};
+use stable_mir::abi::{ArgAbi, FnAbi, PassMode, TyAndLayout, ValueAbi};
 use stable_mir::mir::mono::{Instance, StaticDef};
 use stable_mir::target::MachineSize;
 use stable_mir::ty::{Align, Span};
+use thin_vec::thin_vec;
 
 use crate::slir_build2::context::{ty_and_layout_resolve, CodegenContext as Cx};
 use crate::slir_build2::ty::Type;
 use crate::slir_build2::value::Value;
 use crate::stable_cg::traits::{
-    AbiBuilderMethods, ArgAbiBuilderMethods, BackendTypes, BuilderMethods,
+    AbiBuilderMethods, ArgAbiBuilderMethods, BackendTypes, BuilderMethods, ConstCodegenMethods,
     IntrinsicCallBuilderMethods, LayoutTypeCodegenMethods, StaticBuilderMethods,
 };
 use crate::stable_cg::{
@@ -43,11 +46,64 @@ impl<'a, 'tcx> BackendTypes for Builder<'a, 'tcx> {
 
 impl<'a, 'tcx> ArgAbiBuilderMethods for Builder<'a, 'tcx> {
     fn store_fn_arg(&mut self, arg_abi: &ArgAbi, idx: &mut usize, dst: PlaceRef<Self::Value>) {
-        todo!()
+        fn next(bx: &mut Builder<'_, '_>, idx: &mut usize) -> Value {
+            let val = bx.get_param(*idx);
+
+            *idx += 1;
+
+            val
+        }
+
+        match arg_abi.mode {
+            PassMode::Ignore => {}
+            PassMode::Direct(_) => {
+                let next_arg = next(self, idx);
+
+                self.store_arg(arg_abi, next_arg, dst);
+            }
+            PassMode::Pair(..) => {
+                OperandValue::Pair(next(self, idx), next(self, idx)).store(self, dst);
+            }
+            PassMode::Indirect { .. } if arg_abi.ty.kind().is_slice() => {
+                let place_val = PlaceValue {
+                    llval: next(self, idx),
+                    llextra: Some(next(self, idx)),
+                    align: arg_abi.layout.shape().abi_align,
+                };
+
+                OperandValue::Ref(place_val).store(self, dst);
+            }
+            PassMode::Indirect { .. } => {
+                let next_arg = next(self, idx);
+
+                self.store_arg(arg_abi, next_arg, dst);
+            }
+            PassMode::Cast { .. } => bug!("not supported by RESL"),
+        }
     }
 
     fn store_arg(&mut self, arg_abi: &ArgAbi, val: Self::Value, dst: PlaceRef<Self::Value>) {
-        todo!()
+        match &arg_abi.mode {
+            PassMode::Ignore => {}
+            PassMode::Indirect { .. } => {
+                let align = arg_abi.layout.shape().abi_align;
+
+                OperandValue::Ref(PlaceValue::new_sized(val, align)).store(self, dst);
+            }
+            PassMode::Direct(_) | PassMode::Pair(..) => {
+                OperandRef::from_immediate_or_packed_pair(
+                    self,
+                    val,
+                    TyAndLayout {
+                        ty: arg_abi.ty,
+                        layout: arg_abi.layout,
+                    },
+                )
+                .val
+                .store(self, dst);
+            }
+            PassMode::Cast { .. } => bug!("not supported by RESL"),
+        }
     }
 
     fn arg_memory_ty(&self, arg_abi: &ArgAbi) -> Self::Type {
@@ -394,9 +450,9 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         let mut body = &mut cfg.function_body[self.function];
         let mut bb = &mut body.basic_blocks[self.basic_block];
 
-        let result = body
-            .local_values
-            .insert(slir::cfg::LocalValueData { ty: None });
+        let result = body.local_values.insert(slir::cfg::LocalValueData {
+            ty: Some(slir::ty::TY_PTR),
+        });
 
         bb.statements.push(slir::cfg::OpAlloca { result }.into());
 
@@ -487,7 +543,47 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         count: u64,
         dest: PlaceRef<Self::Value>,
     ) {
-        todo!()
+        let elem_ty = self.backend_type(elem.layout);
+        let elem = match elem.val {
+            OperandValue::Ref(v) => {
+                self.load(elem_ty, v.llval, elem.layout.layout.shape().abi_align)
+            }
+            OperandValue::Immediate(v) => v,
+            _ => bug!(),
+        };
+
+        let elem_ty = elem_ty.expect_slir_type();
+        let elem = elem.expect_value();
+        let dest = dest.val.llval.expect_value();
+
+        let mut cfg = self.cfg.borrow_mut();
+        let mut body = &mut cfg.function_body[self.function];
+        let mut bb = &mut body.basic_blocks[self.basic_block];
+
+        for i in 0..count {
+            let index = self.const_usize(i).expect_value();
+            let elem_ptr = body.local_values.insert(LocalValueData {
+                ty: Some(slir::ty::TY_PTR),
+            });
+
+            bb.statements.push(
+                slir::cfg::OpPtrElementPtr {
+                    ty: elem_ty,
+                    ptr: dest,
+                    indices: thin_vec![index],
+                    result: elem_ptr,
+                }
+                .into(),
+            );
+
+            bb.statements.push(
+                slir::cfg::OpStore {
+                    ptr: elem_ptr.into(),
+                    value: elem,
+                }
+                .into(),
+            );
+        }
     }
 
     fn store(&mut self, val: Self::Value, ptr: Self::Value, align: Align) -> Self::Value {
