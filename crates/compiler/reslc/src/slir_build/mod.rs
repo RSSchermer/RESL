@@ -1,12 +1,13 @@
 use std::io::Read;
 
 use indexmap::IndexSet;
-use rustc_codegen_ssa::mono_item::MonoItemExt;
-use rustc_middle::mir::mono::{Linkage, MonoItem, Visibility};
+use rustc_middle::mir::mono::MonoItem;
+use rustc_smir::rustc_internal::stable;
 
 use crate::context::ReslContext;
 use crate::slir_build::builder::Builder;
 use crate::slir_build::context::CodegenContext;
+use crate::stable_cg::MonoItemExt;
 
 pub mod builder;
 pub mod context;
@@ -21,10 +22,14 @@ pub fn build_shader_module<'tcx>(
     let codegen_cx = CodegenContext::new(rcx, name);
 
     for item in items {
-        item.predefine::<Builder>(&codegen_cx, Linkage::Private, Visibility::Hidden);
+        let item = stable(item);
+
+        item.predefine::<Builder>(&codegen_cx);
     }
 
     for item in items {
+        let item = stable(item);
+
         item.define::<Builder>(&codegen_cx);
     }
 

@@ -13,7 +13,6 @@ use crate::compiler::LIB_MODULE_FILENAME;
 use crate::context::{ReslContext as Cx, ReslContext};
 use crate::monomorphize::collect_shader_module_codegen_units;
 use crate::slir_build::build_shader_module;
-use crate::slir_build2;
 
 fn gather_and_import_dependencies(
     rcx: &ReslContext,
@@ -121,8 +120,7 @@ pub fn codegen_shader_modules(cx: &Cx) -> (slir::Module, slir::cfg::Cfg) {
         for shader_module in shader_modules {
             let name = format!("{}-{}", crate_name, shader_module.name);
             let name = slir::Symbol::new(name);
-            let (mut module, mut cfg) =
-                slir_build2::build_shader_module(cx, name, &shader_module.items);
+            let (mut module, mut cfg) = build_shader_module(cx, name, &shader_module.items);
 
             gather_and_import_dependencies(cx, &mut module, &mut cfg);
 

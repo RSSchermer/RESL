@@ -35,6 +35,12 @@ impl From<slir::cfg::LocalValue> for Value {
     }
 }
 
+impl From<slir::cfg::InlineConst> for Value {
+    fn from(value: slir::cfg::InlineConst) -> Self {
+        Value::Value(slir::cfg::Value::InlineConst(value))
+    }
+}
+
 impl From<slir::Function> for Value {
     fn from(value: slir::Function) -> Self {
         Value::FnAddr(value)
