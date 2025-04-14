@@ -1,20 +1,16 @@
-mod cfg_explorer;
-mod function_explorer;
-mod inner;
-mod struct_explorer;
-mod tpe;
+pub mod cfg_explorer;
+pub mod function_explorer;
+pub mod inner;
+pub mod struct_explorer;
+pub mod tpe;
 
 use std::fs;
-use std::fs::File;
 
 use leptos::prelude::*;
-use leptos_router::components::Route;
 use leptos_router::hooks::use_params;
 use leptos_router::params::Params;
-use leptos_router::path;
 use slir::Function;
 use urlencoding::encode as urlencode;
-
 use crate::app::MODULE_DIR;
 use crate::module_explorer::inner::ModuleExplorerInner;
 
