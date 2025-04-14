@@ -137,8 +137,7 @@ pub trait BuilderMethods<'a>:
     }
     fn to_immediate_scalar(&mut self, val: Self::Value, scalar: Scalar) -> Self::Value;
 
-    fn alloca(&mut self, size: MachineSize, align: Align) -> Self::Value;
-    fn dynamic_alloca(&mut self, size: Self::Value, align: Align) -> Self::Value;
+    fn alloca(&mut self, layout: TyAndLayout) -> Self::Value;
 
     fn assign(&mut self, local: Self::Local, value: Self::Value);
 

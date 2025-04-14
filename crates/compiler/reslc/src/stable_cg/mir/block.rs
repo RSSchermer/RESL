@@ -530,7 +530,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
         let (mut llval, align, by_ref) = match op.val {
             Immediate(_) | Pair(..) => match &arg.mode {
                 PassMode::Indirect { .. } => {
-                    let scratch = PlaceValue::alloca(bx, shape.size, shape.abi_align);
+                    let scratch = PlaceValue::alloca(bx, op.layout);
 
                     op.val.store(
                         bx,

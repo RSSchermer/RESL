@@ -206,6 +206,7 @@ impl From<bool> for Value {
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct OpAlloca {
+    pub ty: Type,
     pub result: LocalValue,
 }
 

@@ -50,12 +50,11 @@ impl<V: CodegenObject> PlaceValue<V> {
     /// The allocation itself is untyped.
     pub fn alloca<'a, Bx: BuilderMethods<'a, Value = V>>(
         bx: &mut Bx,
-        size: MachineSize,
-        align: Align,
+        layout: TyAndLayout,
     ) -> PlaceValue<V> {
-        let llval = bx.alloca(size, align);
+        let llval = bx.alloca(layout);
 
-        PlaceValue::new_sized(llval, align)
+        PlaceValue::new_sized(llval, layout.layout.shape().abi_align)
     }
 
     /// Creates a `PlaceRef` to this location with the given type.
@@ -103,20 +102,12 @@ impl<'a, V: CodegenObject> PlaceRef<V> {
     // FIXME(eddyb) pass something else for the name so no work is done
     // unless LLVM IR names are turned on (e.g. for `--emit=llvm-ir`).
     pub fn alloca<Bx: BuilderMethods<'a, Value = V>>(bx: &mut Bx, layout: TyAndLayout) -> Self {
-        Self::alloca_size(bx, layout.layout.shape().size, layout)
-    }
-
-    pub fn alloca_size<Bx: BuilderMethods<'a, Value = V>>(
-        bx: &mut Bx,
-        size: MachineSize,
-        layout: TyAndLayout,
-    ) -> Self {
         assert!(
             layout.layout.shape().is_sized(),
             "tried to statically allocate unsized place"
         );
 
-        PlaceValue::alloca(bx, size, layout.layout.shape().abi_align).with_type(layout)
+        PlaceValue::alloca(bx, layout).with_type(layout)
     }
 
     /// Returns a place for an indirect reference to an unsized place.

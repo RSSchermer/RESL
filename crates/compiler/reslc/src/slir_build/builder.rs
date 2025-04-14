@@ -452,7 +452,9 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         val
     }
 
-    fn alloca(&mut self, size: MachineSize, align: Align) -> Self::Value {
+    fn alloca(&mut self, layout: TyAndLayout) -> Self::Value {
+        let ty = ty_and_layout_resolve(self.cx, layout);
+
         let mut cfg = self.cfg.borrow_mut();
         let mut body = &mut cfg.function_body[self.function];
         let mut bb = &mut body.basic_blocks[self.basic_block];
@@ -461,13 +463,9 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
             ty: Some(slir::ty::TY_PTR),
         });
 
-        bb.statements.push(slir::cfg::OpAlloca { result }.into());
+        bb.statements.push(slir::cfg::OpAlloca { ty, result }.into());
 
         result.into()
-    }
-
-    fn dynamic_alloca(&mut self, size: Self::Value, align: Align) -> Self::Value {
-        todo!()
     }
 
     fn assign(&mut self, local: Self::Local, value: Self::Value) {
