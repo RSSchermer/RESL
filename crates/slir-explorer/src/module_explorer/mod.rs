@@ -1,6 +1,7 @@
 pub mod cfg_explorer;
 pub mod function_explorer;
 pub mod inner;
+mod rvsdg_explorer;
 pub mod struct_explorer;
 pub mod tpe;
 
@@ -11,6 +12,7 @@ use leptos_router::hooks::use_params;
 use leptos_router::params::Params;
 use slir::Function;
 use urlencoding::encode as urlencode;
+
 use crate::app::MODULE_DIR;
 use crate::module_explorer::inner::ModuleExplorerInner;
 
