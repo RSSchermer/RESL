@@ -1,6 +1,7 @@
 use std::ops::Index;
 use std::slice;
 
+use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
 
@@ -129,10 +130,30 @@ pub enum StateOrigin {
     Node(Node),
 }
 
+impl StateOrigin {
+    pub fn as_node(&self) -> Option<Node> {
+        if let StateOrigin::Node(node) = self {
+            Some(*node)
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub enum StateUser {
     Result,
     Node(Node),
+}
+
+impl StateUser {
+    pub fn as_node(&self) -> Option<Node> {
+        if let StateUser::Node(node) = self {
+            Some(*node)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
@@ -144,6 +165,7 @@ pub struct State {
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct RegionData {
     owner: Option<Node>,
+    nodes: FxHashSet<Node>,
     value_arguments: Vec<ValueOutput>,
     value_results: Vec<ValueInput>,
     state_argument: StateUser,
@@ -153,6 +175,10 @@ pub struct RegionData {
 impl RegionData {
     pub fn owner(&self) -> Node {
         self.owner.expect("region not correctly initialized")
+    }
+
+    pub fn nodes(&self) -> impl IntoIterator<Item = Node> + use<'_> {
+        self.nodes.iter().copied()
     }
 
     pub fn value_arguments(&self) -> &[ValueOutput] {
@@ -630,6 +656,10 @@ pub struct OpUnary {
 }
 
 impl OpUnary {
+    pub fn operator(&self) -> UnaryOperator {
+        self.operator
+    }
+
     pub fn input(&self) -> &ValueInput {
         &self.input
     }
@@ -669,6 +699,10 @@ pub struct OpBinary {
 }
 
 impl OpBinary {
+    pub fn operator(&self) -> BinaryOperator {
+        self.operator
+    }
+
     pub fn lhs_input(&self) -> &ValueInput {
         &self.inputs[0]
     }
@@ -876,6 +910,8 @@ macro_rules! add_const_methods {
                     region: Some(region),
                 });
 
+                self.regions[region].nodes.insert(node);
+
                 node
             }
         )*
@@ -972,6 +1008,7 @@ impl Rvsdg {
             .collect();
         let region = self.regions.insert(RegionData {
             owner: None,
+            nodes: Default::default(),
             value_arguments: region_arguments,
             value_results: region_results,
             state_argument: StateUser::Result,
@@ -1114,6 +1151,8 @@ impl Rvsdg {
             self.insert_state(region, node, state_origin);
         }
 
+        self.regions[region].nodes.insert(node);
+
         node
     }
 
@@ -1123,6 +1162,7 @@ impl Rvsdg {
 
         let region = self.regions.insert(RegionData {
             owner: Some(switch_node),
+            nodes: Default::default(),
             value_arguments: data
                 .value_inputs
                 .iter()
@@ -1185,6 +1225,7 @@ impl Rvsdg {
 
         let contained_region = self.regions.insert(RegionData {
             owner: None,
+            nodes: Default::default(),
             value_arguments: value_outputs.clone(),
             value_results: contained_region_results,
             state_argument: StateUser::Result,
@@ -1209,6 +1250,8 @@ impl Rvsdg {
         if let Some(state_origin) = state_origin {
             self.insert_state(region, node, state_origin);
         }
+
+        self.regions[region].nodes.insert(node);
 
         (node, contained_region)
     }
@@ -1240,6 +1283,8 @@ impl Rvsdg {
             region: Some(region),
         });
 
+        self.regions[region].nodes.insert(node);
+
         node
     }
 
@@ -1253,6 +1298,8 @@ impl Rvsdg {
             ),
             region: Some(region),
         });
+
+        self.regions[region].nodes.insert(node);
 
         node
     }
@@ -1282,6 +1329,7 @@ impl Rvsdg {
         });
 
         self.insert_state(region, node, state_origin);
+        self.regions[region].nodes.insert(node);
 
         node
     }
@@ -1311,6 +1359,7 @@ impl Rvsdg {
         });
 
         self.insert_state(region, node, state_origin);
+        self.regions[region].nodes.insert(node);
 
         node
     }
@@ -1325,7 +1374,7 @@ impl Rvsdg {
 
         inputs.extend(index_inputs);
 
-        self.nodes.insert(NodeData {
+        let node = self.nodes.insert(NodeData {
             kind: NodeKind::Simple(
                 OpPtrElementPtr {
                     inputs,
@@ -1334,7 +1383,11 @@ impl Rvsdg {
                 .into(),
             ),
             region: Some(region),
-        })
+        });
+
+        self.regions[region].nodes.insert(node);
+
+        node
     }
 
     pub fn add_op_apply(
@@ -1368,6 +1421,7 @@ impl Rvsdg {
         });
 
         self.insert_state(region, node, state_origin);
+        self.regions[region].nodes.insert(node);
 
         node
     }
@@ -1380,7 +1434,7 @@ impl Rvsdg {
     ) -> Node {
         self.validate_node_value_input(region, &input);
 
-        self.nodes.insert(NodeData {
+        let node = self.nodes.insert(NodeData {
             kind: NodeKind::Simple(
                 OpUnary {
                     operator,
@@ -1390,7 +1444,11 @@ impl Rvsdg {
                 .into(),
             ),
             region: Some(region),
-        })
+        });
+
+        self.regions[region].nodes.insert(node);
+
+        node
     }
 
     pub fn add_op_binary(
@@ -1405,7 +1463,7 @@ impl Rvsdg {
 
         assert_eq!(lhs_input.ty, rhs_input.ty);
 
-        self.nodes.insert(NodeData {
+        let node = self.nodes.insert(NodeData {
             kind: NodeKind::Simple(
                 OpBinary {
                     operator,
@@ -1415,7 +1473,11 @@ impl Rvsdg {
                 .into(),
             ),
             region: Some(region),
-        })
+        });
+
+        self.regions[region].nodes.insert(node);
+
+        node
     }
 
     pub fn reconnect_region_result(&mut self, region: Region, result: u32, input: ValueInput) {

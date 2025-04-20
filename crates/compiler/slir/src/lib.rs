@@ -1,11 +1,11 @@
 pub mod cfg;
+pub mod dependencies;
+pub mod import_cfg;
 pub mod rvsdg;
-mod util;
+pub mod ty;
 
 mod cfg_to_rvsdg;
 mod core;
-pub mod dependencies;
-pub mod import_cfg;
-pub mod ty;
+mod util;
 
 pub use self::core::*;
