@@ -463,7 +463,8 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
             ty: Some(slir::ty::TY_PTR),
         });
 
-        bb.statements.push(slir::cfg::OpAlloca { ty, result }.into());
+        bb.statements
+            .push(slir::cfg::OpAlloca { ty, result }.into());
 
         result.into()
     }
