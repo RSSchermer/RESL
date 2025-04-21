@@ -10,8 +10,8 @@ use crate::module_explorer::cfg_explorer::value::Value;
 use crate::module_explorer::ModuleData;
 
 type HighlightSignal = (
-    ReadSignal<Option<slir::cfg::Value>>,
-    WriteSignal<Option<slir::cfg::Value>>,
+    ReadSignal<Option<slir::cfg::LocalValue>>,
+    WriteSignal<Option<slir::cfg::LocalValue>>,
 );
 
 #[component]
