@@ -13,7 +13,7 @@ pub fn FunctionExplorer(
 ) -> impl IntoView {
     let mode = RwSignal::new("cfg".to_string());
 
-    if module.read_value().0.fn_sigs.contains(function) {
+    if module.read_value().module.fn_sigs.contains(function) {
         view! {
             <div class="function-explorer-container">
                 <div class="function-sig">
@@ -24,7 +24,7 @@ pub fn FunctionExplorer(
                             let mut arg_views = Vec::new();
                             let mut is_first = true;
 
-                            for arg in &module.read_value().0.fn_sigs[function].args {
+                            for arg in &module.read_value().module.fn_sigs[function].args {
                                 if !is_first {
                                     arg_views.push(view! {", "}.into_any());
                                 }

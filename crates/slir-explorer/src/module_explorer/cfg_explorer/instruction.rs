@@ -155,7 +155,7 @@ pub fn OpCall(
             " = "
         })}}
 
-        <a href=format_function_url(module.read_value().0.name, op.function)>
+        <a href=format_function_url(module.read_value().module.name, op.function)>
             {op.function.name.to_string()}
         </a>
 

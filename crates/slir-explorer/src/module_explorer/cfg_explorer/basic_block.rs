@@ -20,14 +20,14 @@ pub fn BasicBlock(
             </div>
             <div class="basic-block-body">
             {move || {
-                module.read_value().1.function_body[function].basic_blocks[bb].statements.iter().map(|instruction| {
+                module.read_value().cfg.function_body[function].basic_blocks[bb].statements.iter().map(|instruction| {
                     view! { <Instruction module function instruction=instruction.clone() highlight/> }
                 }).collect_view()
             }}
             </div>
             <div class="basic-block-terminator">
             {move || {
-                let terminator = module.read_value().1.function_body[function].basic_blocks[bb].terminator.clone();
+                let terminator = module.read_value().cfg.function_body[function].basic_blocks[bb].terminator.clone();
 
                 view! { <Terminator module function terminator highlight/> }
             }}

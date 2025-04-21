@@ -7,7 +7,7 @@ use crate::module_explorer::{ModuleData, STRUCT_ITEM_LABEL_START};
 
 #[component]
 pub fn Type(module: StoredValue<ModuleData>, ty: slir::ty::Type) -> impl IntoView {
-    match &module.read_value().0.ty[ty] {
+    match &module.read_value().module.ty[ty] {
         TypeKind::Scalar(scalar) => match scalar {
             ScalarKind::I32 => view! {"i32"}.into_any(),
             ScalarKind::U32 => view! {"u32"}.into_any(),
@@ -53,7 +53,7 @@ pub fn Type(module: StoredValue<ModuleData>, ty: slir::ty::Type) -> impl IntoVie
             let s = s.to_usize();
 
             view! {
-                <Link href=format!("/{}/{}{}", urlencode(module.read_value().0.name.as_str()), STRUCT_ITEM_LABEL_START, s)>
+                <Link href=format!("/{}/{}{}", urlencode(module.read_value().module.name.as_str()), STRUCT_ITEM_LABEL_START, s)>
                     {format!("S_{}", s)}
                 </Link>
             }.into_any()

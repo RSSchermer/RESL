@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::Read;
 
-use ar::Archive;
+use ar::{Archive, Builder, GnuBuilder, Header};
 use rustc_hash::{FxHashMap, FxHashSet};
 use rustc_session::config::CrateType;
 use rustc_session::output::out_filename;
@@ -91,7 +91,12 @@ fn load_dependency(
     panic!("failed to load module dependency: {}", dependency);
 }
 
-fn create_slir_artifact(cx: &Cx, module: &slir::Module, cfg: &slir::cfg::Cfg) {
+fn create_slir_artifact(
+    cx: &Cx,
+    module: &slir::Module,
+    cfg: &slir::cfg::Cfg,
+    rvsdg: Option<&slir::rvsdg::Rvsdg>,
+) {
     let mut filename = cx
         .tcx()
         .sess
@@ -102,10 +107,51 @@ fn create_slir_artifact(cx: &Cx, module: &slir::Module, cfg: &slir::cfg::Cfg) {
 
     filename.push(format!("{}.slir", module.name));
 
-    let mut file = File::create(filename).expect("failed to create slir artifact file");
+    let file = File::create(filename).expect("failed to create slir artifact file");
 
-    bincode::serde::encode_into_std_write((module, cfg), &mut file, bincode::config::standard())
-        .expect("failed to encode slir artifact");
+    let module_identifier = "module".as_bytes().to_vec();
+    let cfg_identifier = "cfg".as_bytes().to_vec();
+    let rvsdg_identifier = "rvsdg".as_bytes().to_vec();
+
+    let mut identifiers = vec![module_identifier.clone(), cfg_identifier.clone()];
+
+    if rvsdg.is_some() {
+        identifiers.push(rvsdg_identifier.clone());
+    }
+
+    let mut builder = GnuBuilder::new(file, identifiers);
+
+    let module_encoding = bincode::serde::encode_to_vec(module, bincode::config::standard())
+        .expect("failed to encode SLIR module");
+
+    builder
+        .append(
+            &Header::new(module_identifier, module_encoding.len() as u64),
+            module_encoding.as_slice(),
+        )
+        .expect("failed to append SLIR module to SLIR artifact archive");
+
+    let cfg_encoding = bincode::serde::encode_to_vec(cfg, bincode::config::standard())
+        .expect("failed to encode SLIR Control-Flow Graph");
+
+    builder
+        .append(
+            &Header::new(cfg_identifier, cfg_encoding.len() as u64),
+            cfg_encoding.as_slice(),
+        )
+        .expect("failed to append SLIR Control-Flow Graph to SLIR artifact archive");
+
+    if let Some(rvsdg) = rvsdg {
+        let rvsdg_encoding = bincode::serde::encode_to_vec(rvsdg, bincode::config::standard())
+            .expect("failed to encode SLIR RVSDG");
+
+        builder
+            .append(
+                &Header::new(rvsdg_identifier, rvsdg_encoding.len() as u64),
+                rvsdg_encoding.as_slice(),
+            )
+            .expect("failed to append SLIR RVSDG to SLIR artifact archive");
+    }
 }
 
 pub fn codegen_shader_modules(cx: &Cx) -> (slir::Module, slir::cfg::Cfg) {
@@ -124,7 +170,7 @@ pub fn codegen_shader_modules(cx: &Cx) -> (slir::Module, slir::cfg::Cfg) {
 
             gather_and_import_dependencies(cx, &mut module, &mut cfg);
 
-            create_slir_artifact(cx, &module, &cfg);
+            create_slir_artifact(cx, &module, &cfg, None);
         }
 
         // We also create one additional module for the whole crate for the SLIR of all "free functions"

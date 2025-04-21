@@ -7,6 +7,7 @@ pub mod tpe;
 
 use std::fs;
 
+use ar::Archive;
 use leptos::prelude::*;
 use leptos_router::hooks::use_params;
 use leptos_router::params::Params;
@@ -15,8 +16,6 @@ use urlencoding::encode as urlencode;
 
 use crate::app::MODULE_DIR;
 use crate::module_explorer::inner::ModuleExplorerInner;
-
-pub type ModuleData = (slir::Module, slir::cfg::Cfg);
 
 pub const FUNCTION_ITEM_LABEL_START: &'static str = "function-";
 pub const STRUCT_ITEM_LABEL_START: &'static str = "struct-";
@@ -38,6 +37,12 @@ fn format_function_url(module: slir::Symbol, function: Function) -> String {
 struct ModuleExplorerParams {
     module_name: String,
     item_label: Option<String>,
+}
+
+struct ModuleData {
+    pub module: slir::Module,
+    pub cfg: slir::cfg::Cfg,
+    pub rvsdg: Option<slir::rvsdg::Rvsdg>,
 }
 
 /// Renders the home page of your application.
@@ -75,12 +80,51 @@ pub fn ModuleExplorer() -> impl IntoView {
             bytes
                 .as_ref()
                 .map(|bytes| {
-                    bincode::serde::decode_from_slice::<(slir::Module, slir::cfg::Cfg), _>(
-                        bytes,
-                        bincode::config::standard(),
-                    )
-                    .unwrap()
-                    .0
+                    let mut archive = Archive::new(bytes.as_slice());
+
+                    let mut module = None;
+                    let mut cfg = None;
+                    let mut rvsdg = None;
+
+                    while let Some(entry_result) = archive.next_entry() {
+                        let mut entry = entry_result.unwrap();
+
+                        if entry.header().identifier() == "module".as_bytes() {
+                            let decoded: slir::Module = bincode::serde::decode_from_std_read(
+                                &mut entry,
+                                bincode::config::standard(),
+                            )
+                            .expect("module encoding was invalid");
+
+                            module = Some(decoded);
+                        }
+
+                        if entry.header().identifier() == "cfg".as_bytes() {
+                            let decoded: slir::cfg::Cfg = bincode::serde::decode_from_std_read(
+                                &mut entry,
+                                bincode::config::standard(),
+                            )
+                            .expect("CFG encoding was invalid");
+
+                            cfg = Some(decoded);
+                        }
+
+                        if entry.header().identifier() == "rvsdg".as_bytes() {
+                            let decoded: slir::rvsdg::Rvsdg = bincode::serde::decode_from_std_read(
+                                &mut entry,
+                                bincode::config::standard(),
+                            )
+                            .expect("RSVDG encoding was invalid");
+
+                            rvsdg = Some(decoded);
+                        }
+                    }
+
+                    let module =
+                        module.expect("SLIR arfifact should always contain a `module` entry");
+                    let cfg = cfg.expect("SLIR arfifact should always contain a `cfg` entry");
+
+                    ModuleData { module, cfg, rvsdg }
                 })
                 .map_err(|err| err.clone())
         })

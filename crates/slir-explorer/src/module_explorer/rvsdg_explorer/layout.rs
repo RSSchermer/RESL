@@ -627,26 +627,25 @@ impl<'a> RegionLayoutBuilder<'a> {
         let edge = &self.edges[edge_index];
 
         let connector = match edge.start {
-            EdgeStart::Argument(arg) => {
-                self.argument_connectors[arg as usize]
-            }
+            EdgeStart::Argument(arg) => self.argument_connectors[arg as usize],
             EdgeStart::Producer {
                 stratum,
                 node,
                 output,
             } => {
-                self.strata[stratum as usize].nodes[node as usize].output_connectors[output as usize]
+                self.strata[stratum as usize].nodes[node as usize].output_connectors
+                    [output as usize]
             }
         };
-        
+
         let Rect {
             origin: [x, y],
-            size: [width, height]
+            size: [width, height],
         } = connector.rect;
-        
+
         let x = x + 0.5 * width;
         let y = y + height;
-        
+
         [x, y]
     }
 
@@ -654,9 +653,7 @@ impl<'a> RegionLayoutBuilder<'a> {
         let edge = &self.edges[edge_index];
 
         let connector = match edge.end {
-            EdgeEnd::Result(result) => {
-                self.result_connectors[result as usize]
-            }
+            EdgeEnd::Result(result) => self.result_connectors[result as usize],
             EdgeEnd::Consumer {
                 stratum,
                 node,
@@ -668,7 +665,7 @@ impl<'a> RegionLayoutBuilder<'a> {
 
         let Rect {
             origin: [x, y],
-            size: [width, _]
+            size: [width, _],
         } = connector.rect;
 
         let x = x + 0.5 * width;
@@ -742,7 +739,7 @@ impl RegionLayout {
     fn height(&self) -> f32 {
         self.height
     }
-    
+
     pub fn translation(&self) -> [f32; 2] {
         self.translation
     }

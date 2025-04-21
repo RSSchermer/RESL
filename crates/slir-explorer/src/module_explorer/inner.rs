@@ -73,7 +73,12 @@ pub fn ModuleExplorerInner(module: ModuleData, item_label: Option<String>) -> im
     let module = StoredValue::new(module);
 
     let functions = move || {
-        let mut functions = module.read_value().0.fn_sigs.keys().collect::<Vec<_>>();
+        let mut functions = module
+            .read_value()
+            .module
+            .fn_sigs
+            .keys()
+            .collect::<Vec<_>>();
 
         functions.sort_by(|a, b| a.name.cmp(&b.name));
 
@@ -93,9 +98,9 @@ pub fn ModuleExplorerInner(module: ModuleData, item_label: Option<String>) -> im
                             "Structs"
                         </AccordionHeader>
                         <ul class="module-item-list">
-                            {module.read_value().0.structs.iter().map(|s| view! {
+                            {module.read_value().module.structs.iter().map(|s| view! {
                                 <li>
-                                    <Link href=format!("/{}/{}{}", urlencode(module.read_value().0.name.as_str()), STRUCT_ITEM_LABEL_START, s.to_usize())>
+                                    <Link href=format!("/{}/{}{}", urlencode(module.read_value().module.name.as_str()), STRUCT_ITEM_LABEL_START, s.to_usize())>
                                         {format!("S_{}", s.to_usize())}
                                     </Link>
                                 </li>
@@ -107,9 +112,9 @@ pub fn ModuleExplorerInner(module: ModuleData, item_label: Option<String>) -> im
                             "Uniform Bindings"
                         </AccordionHeader>
                         <ul class="module-item-list">
-                            {module.read_value().0.uniform_bindings.keys().map(|b| view! {
+                            {module.read_value().module.uniform_bindings.keys().map(|b| view! {
                                 <li>
-                                    <Link href=format!("/{}/{}{}", urlencode(module.read_value().0.name.as_str()), UNIFORM_ITEM_LABEL_START, b.data().as_ffi())>
+                                    <Link href=format!("/{}/{}{}", urlencode(module.read_value().module.name.as_str()), UNIFORM_ITEM_LABEL_START, b.data().as_ffi())>
                                         {format!("U{}", b.data().as_ffi())}
                                     </Link>
                                 </li>
@@ -121,9 +126,9 @@ pub fn ModuleExplorerInner(module: ModuleData, item_label: Option<String>) -> im
                             "Storage Bindings"
                         </AccordionHeader>
                         <ul class="module-item-list">
-                            {module.read_value().0.storage_bindings.keys().map(|b| view! {
+                            {module.read_value().module.storage_bindings.keys().map(|b| view! {
                                 <li>
-                                    <Link href=format!("/{}/{}{}", urlencode(module.read_value().0.name.as_str()), STORAGE_ITEM_LABEL_START, b.data().as_ffi())>
+                                    <Link href=format!("/{}/{}{}", urlencode(module.read_value().module.name.as_str()), STORAGE_ITEM_LABEL_START, b.data().as_ffi())>
                                         {format!("S{}", b.data().as_ffi())}
                                     </Link>
                                 </li>
@@ -135,9 +140,9 @@ pub fn ModuleExplorerInner(module: ModuleData, item_label: Option<String>) -> im
                             "Workgroup Bindings"
                         </AccordionHeader>
                         <ul class="module-item-list">
-                            {module.read_value().0.workgroup_bindings.keys().map(|b| view! {
+                            {module.read_value().module.workgroup_bindings.keys().map(|b| view! {
                                 <li>
-                                    <Link href=format!("/{}/{}{}", urlencode(module.read_value().0.name.as_str()), WORKGROUP_ITEM_LABEL_START, b.data().as_ffi())>
+                                    <Link href=format!("/{}/{}{}", urlencode(module.read_value().module.name.as_str()), WORKGROUP_ITEM_LABEL_START, b.data().as_ffi())>
                                         {format!("W{}", b.data().as_ffi())}
                                     </Link>
                                 </li>
@@ -151,7 +156,7 @@ pub fn ModuleExplorerInner(module: ModuleData, item_label: Option<String>) -> im
                         <ul class="module-item-list">
                             {move || functions().into_iter().map(|f| view! {
                                 <li>
-                                    <Link href=format_function_url(module.read_value().0.name, f)>
+                                    <Link href=format_function_url(module.read_value().module.name, f)>
                                         {f.name.to_string()}
                                     </Link>
                                 </li>

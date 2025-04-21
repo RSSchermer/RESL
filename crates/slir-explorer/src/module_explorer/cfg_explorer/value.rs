@@ -37,7 +37,7 @@ pub fn Value(
                     </span>
                 </PopoverTrigger>
                 {move || {
-                    if let Some(ty) = module.read_value().1.function_body[function].local_values[value].ty {
+                    if let Some(ty) = module.read_value().cfg.function_body[function].local_values[value].ty {
                         view! { <Type module ty/> }.into_any()
                     } else {
                         view! { "Untyped" }.into_any()
