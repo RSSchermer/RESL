@@ -2225,13 +2225,16 @@ mod tests {
             FnSig {
                 name: Default::default(),
                 ty: TY_DUMMY,
-                args: vec![FnArg {
-                    ty: TY_PTR,
-                    shader_io_binding: None,
-                }, FnArg {
-                    ty: TY_U32,
-                    shader_io_binding: None,
-                }],
+                args: vec![
+                    FnArg {
+                        ty: TY_PTR,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                ],
                 ret_ty: None,
             },
         );
@@ -2241,7 +2244,12 @@ mod tests {
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let node_0 = rvsdg.add_const_u32(region, 1);
-        let node_1 = rvsdg.add_op_load(region, ValueInput::argument(TY_PTR, 0), TY_U32, StateOrigin::Argument);
+        let node_1 = rvsdg.add_op_load(
+            region,
+            ValueInput::argument(TY_PTR, 0),
+            TY_U32,
+            StateOrigin::Argument,
+        );
         let node_2 = rvsdg.add_op_binary(
             region,
             BinaryOperator::Add,
@@ -2252,7 +2260,7 @@ mod tests {
             region,
             ValueInput::argument(TY_PTR, 0),
             ValueInput::output(TY_U32, node_2, 0),
-            StateOrigin::Node(node_1)
+            StateOrigin::Node(node_1),
         );
 
         // Check the region arguments
@@ -2260,20 +2268,20 @@ mod tests {
             rvsdg[region].value_arguments()[0],
             ValueOutput {
                 ty: Some(TY_PTR),
-                users: thin_set![ValueUser::Input {
-                    consumer: node_1,
-                    input: 0,
-                },ValueUser::Input {
-                    consumer: node_3,
-                    input: 0,
-                }],
+                users: thin_set![
+                    ValueUser::Input {
+                        consumer: node_1,
+                        input: 0,
+                    },
+                    ValueUser::Input {
+                        consumer: node_3,
+                        input: 0,
+                    }
+                ],
             }
         );
-        assert_eq!(
-            rvsdg[region].state_argument(),
-            &StateUser::Node(node_1)
-        );
-        
+        assert_eq!(rvsdg[region].state_argument(), &StateUser::Node(node_1));
+
         // Check node_0 inputs and outputs
         assert_eq!(
             rvsdg[node_0].value_outputs()[0],
@@ -2285,7 +2293,7 @@ mod tests {
                 }],
             }
         );
-        
+
         // Check node_1 inputs and outputs
         assert_eq!(
             rvsdg[node_1].value_inputs()[0],
@@ -2298,7 +2306,7 @@ mod tests {
                 user: StateUser::Node(node_3),
             })
         );
-        
+
         // Check node_2 inputs and outputs
         assert_eq!(
             rvsdg[node_2].value_inputs()[0],
@@ -2312,10 +2320,13 @@ mod tests {
             rvsdg[node_2].value_outputs()[0],
             ValueOutput {
                 ty: Some(TY_U32),
-                users: thin_set![ValueUser::Input {consumer: node_3, input: 1}],
+                users: thin_set![ValueUser::Input {
+                    consumer: node_3,
+                    input: 1
+                }],
             }
         );
-        
+
         // Check node_3 inputs and outputs
         assert_eq!(
             rvsdg[node_3].value_inputs()[0],
@@ -2332,12 +2343,9 @@ mod tests {
                 user: StateUser::Result,
             })
         );
-        
+
         // Check region results
         assert!(rvsdg[region].value_results().is_empty());
-        assert_eq!(
-            rvsdg[region].state_result(),
-            &StateOrigin::Node(node_3),
-        );
+        assert_eq!(rvsdg[region].state_result(), &StateOrigin::Node(node_3),);
     }
 }
