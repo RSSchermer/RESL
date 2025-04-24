@@ -63,3 +63,16 @@ impl<T> Default for ThinSet<T> {
         }
     }
 }
+
+#[macro_export]
+macro_rules! thin_set {
+    () => {$crate::util::thin_set::ThinSet::new()};
+    ($($x:expr),*) => ({
+        let mut set = $crate::util::thin_set::ThinSet::new();
+
+        $(set.insert($x);)*
+
+        set
+    });
+    ($($x:expr,)*) => (thin_vec![$($x),*]);
+}

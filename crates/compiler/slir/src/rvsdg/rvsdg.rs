@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::ops::Index;
 use std::slice;
 
@@ -83,6 +84,23 @@ impl ValueInput {
         ValueInput {
             ty,
             origin: ValueOrigin::placeholder(),
+        }
+    }
+
+    pub fn argument(ty: Type, arg: u32) -> Self {
+        ValueInput {
+            ty,
+            origin: ValueOrigin::Argument(arg),
+        }
+    }
+
+    pub fn output(ty: Type, node: Node, output: u32) -> Self {
+        ValueInput {
+            ty,
+            origin: ValueOrigin::Output {
+                producer: node,
+                output,
+            },
         }
     }
 }
@@ -922,6 +940,7 @@ macro_rules! add_const_methods {
 pub struct Rvsdg {
     regions: SlotMap<Region, RegionData>,
     nodes: SlotMap<Node, NodeData>,
+    function_regions: HashMap<Function, Region>,
 }
 
 impl Rvsdg {
@@ -1025,11 +1044,16 @@ impl Rvsdg {
         });
 
         self.regions[region].owner = Some(node);
+        self.function_regions.insert(function, region);
 
         (node, region)
     }
 
-    fn validate_node_value_input(&self, region: Region, value_input: &ValueInput) {
+    pub fn get_function_region(&self, function: Function) -> Option<Region> {
+        self.function_regions.get(&function).copied()
+    }
+
+    fn validate_node_value_input(&mut self, region: Region, value_input: &ValueInput) {
         match &value_input.origin {
             ValueOrigin::Argument(i) => {
                 let region = &self[region];
@@ -1062,6 +1086,44 @@ impl Rvsdg {
                         output,
                         producer.value_outputs().len()
                     );
+                }
+            }
+        }
+    }
+
+    /// Helper that adds all of a node's value inputs to the corresponding value outputs as users.
+    fn connect_node_value_inputs(&mut self, node: Node) {
+        let node_data = &mut self.nodes[node] as *mut NodeData;
+
+        // SAFETY: we assert that the producer nodes are not equal to the node itself, so we never
+        // alias the dereferenced raw pointer
+        unsafe {
+            let region = (*node_data)
+                .region
+                .expect("node region should be set before connecting inputs");
+
+            for (i, input) in (*node_data).value_inputs().iter().enumerate() {
+                let user = ValueUser::Input {
+                    consumer: node,
+                    input: i as u32,
+                };
+
+                match &input.origin {
+                    ValueOrigin::Argument(i) => {
+                        self.regions[region].value_arguments[*i as usize]
+                            .users
+                            .insert(user);
+                    }
+                    ValueOrigin::Output { producer, output } => {
+                        assert_ne!(
+                            *producer, node,
+                            "cannot connect a node input to one of its own outputs"
+                        );
+
+                        self.nodes[*producer].value_outputs_mut()[*output as usize]
+                            .users
+                            .insert(user);
+                    }
                 }
             }
         }
@@ -1152,6 +1214,7 @@ impl Rvsdg {
         }
 
         self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
 
         node
     }
@@ -1252,6 +1315,7 @@ impl Rvsdg {
         }
 
         self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
 
         (node, contained_region)
     }
@@ -1284,6 +1348,7 @@ impl Rvsdg {
         });
 
         self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
 
         node
     }
@@ -1300,6 +1365,7 @@ impl Rvsdg {
         });
 
         self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
 
         node
     }
@@ -1330,6 +1396,7 @@ impl Rvsdg {
 
         self.insert_state(region, node, state_origin);
         self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
 
         node
     }
@@ -1360,6 +1427,7 @@ impl Rvsdg {
 
         self.insert_state(region, node, state_origin);
         self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
 
         node
     }
@@ -1386,6 +1454,7 @@ impl Rvsdg {
         });
 
         self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
 
         node
     }
@@ -1422,6 +1491,7 @@ impl Rvsdg {
 
         self.insert_state(region, node, state_origin);
         self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
 
         node
     }
@@ -1447,6 +1517,7 @@ impl Rvsdg {
         });
 
         self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
 
         node
     }
@@ -1476,6 +1547,7 @@ impl Rvsdg {
         });
 
         self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
 
         node
     }
@@ -1497,7 +1569,7 @@ impl Rvsdg {
         }
 
         // Remove the result as a user from the old origin (if any)
-        if old_input.origin.is_placeholder() {
+        if !old_input.origin.is_placeholder() {
             match old_input.origin {
                 ValueOrigin::Argument(i) => self.regions[region].value_arguments[i as usize]
                     .users
@@ -1538,5 +1610,734 @@ impl Index<Node> for Rvsdg {
 
     fn index(&self, node: Node) -> &Self::Output {
         &self.nodes[node]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::iter;
+
+    use super::*;
+    use crate::ty::TY_DUMMY;
+    use crate::{thin_set, FnArg, FnSig, Symbol};
+
+    #[test]
+    fn test_rvsdg_single_simple_node() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let node = rvsdg.add_op_binary(
+            region,
+            BinaryOperator::Add,
+            ValueInput::argument(TY_U32, 0),
+            ValueInput::argument(TY_U32, 1),
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueInput {
+                ty: TY_U32,
+                origin: ValueOrigin::Output {
+                    producer: node,
+                    output: 0,
+                },
+            },
+        );
+
+        // Check the region arguments
+        assert_eq!(
+            rvsdg[region].value_arguments()[0],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Input {
+                    consumer: node,
+                    input: 0,
+                }],
+            }
+        );
+        assert_eq!(
+            rvsdg[region].value_arguments()[1],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Input {
+                    consumer: node,
+                    input: 1,
+                }],
+            }
+        );
+
+        // Check the node inputs and outputs
+        assert_eq!(
+            rvsdg[node].value_inputs()[0],
+            ValueInput::argument(TY_U32, 0),
+        );
+        assert_eq!(
+            rvsdg[node].value_inputs()[1],
+            ValueInput::argument(TY_U32, 1),
+        );
+        assert_eq!(
+            rvsdg[node].value_outputs()[0],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Result(0)],
+            }
+        );
+
+        // Check the region results
+        assert_eq!(
+            rvsdg[region].value_results()[0],
+            ValueInput {
+                ty: TY_U32,
+                origin: ValueOrigin::Output {
+                    producer: node,
+                    output: 0,
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn test_rvsdg_dependent_simple_nodes() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let node_0 = rvsdg.add_const_u32(region, 5);
+
+        let node_1 = rvsdg.add_op_binary(
+            region,
+            BinaryOperator::Add,
+            ValueInput::argument(TY_U32, 0),
+            ValueInput::output(TY_U32, node_0, 0),
+        );
+
+        let node_2 = rvsdg.add_op_binary(
+            region,
+            BinaryOperator::Add,
+            ValueInput::output(TY_U32, node_1, 0),
+            ValueInput::argument(TY_U32, 1),
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueInput {
+                ty: TY_U32,
+                origin: ValueOrigin::Output {
+                    producer: node_2,
+                    output: 0,
+                },
+            },
+        );
+
+        // Check the region arguments
+        assert_eq!(
+            rvsdg[region].value_arguments()[0],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Input {
+                    consumer: node_1,
+                    input: 0,
+                }],
+            }
+        );
+        assert_eq!(
+            rvsdg[region].value_arguments()[1],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Input {
+                    consumer: node_2,
+                    input: 1,
+                }],
+            }
+        );
+
+        // Check node_0 inputs and outputs
+        assert!(rvsdg[node_0].value_inputs().is_empty());
+        assert_eq!(
+            rvsdg[node_0].value_outputs()[0],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Input {
+                    consumer: node_1,
+                    input: 1,
+                }],
+            }
+        );
+
+        // Check node_1 inputs and outputs
+        assert_eq!(
+            rvsdg[node_1].value_inputs()[0],
+            ValueInput::argument(TY_U32, 0),
+        );
+        assert_eq!(
+            rvsdg[node_1].value_inputs()[1],
+            ValueInput::output(TY_U32, node_0, 0)
+        );
+        assert_eq!(
+            rvsdg[node_1].value_outputs()[0],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Input {
+                    consumer: node_2,
+                    input: 0,
+                }],
+            }
+        );
+
+        // Check node_1 inputs and outputs
+        assert_eq!(
+            rvsdg[node_2].value_inputs()[0],
+            ValueInput::output(TY_U32, node_1, 0),
+        );
+        assert_eq!(
+            rvsdg[node_2].value_inputs()[1],
+            ValueInput::argument(TY_U32, 1),
+        );
+        assert_eq!(
+            rvsdg[node_2].value_outputs()[0],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Result(0)],
+            }
+        );
+
+        // Check the region results
+        assert_eq!(
+            rvsdg[region].value_results()[0],
+            ValueInput::output(TY_U32, node_2, 0)
+        );
+    }
+
+    #[test]
+    fn test_rvsdg_switch_node() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let switch_node = rvsdg.add_switch(
+            region,
+            vec![
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::argument(TY_U32, 1),
+            ],
+            vec![ValueOutput::new(Some(TY_U32))],
+            None,
+        );
+
+        rvsdg.reconnect_region_result(region, 0, ValueInput::output(TY_U32, switch_node, 0));
+
+        let branch_0 = rvsdg.add_switch_branch(switch_node);
+
+        let branch_0_node_0 = rvsdg.add_const_u32(branch_0, 1);
+        let branch_0_node_1 = rvsdg.add_op_binary(
+            branch_0,
+            BinaryOperator::Add,
+            ValueInput::argument(TY_U32, 0),
+            ValueInput::output(TY_U32, branch_0_node_0, 0),
+        );
+
+        rvsdg.reconnect_region_result(branch_0, 0, ValueInput::output(TY_U32, branch_0_node_1, 0));
+
+        let branch_1 = rvsdg.add_switch_branch(switch_node);
+
+        let branch_1_node_0 = rvsdg.add_const_u32(branch_1, 0);
+
+        rvsdg.reconnect_region_result(branch_1, 0, ValueInput::output(TY_U32, branch_1_node_0, 0));
+
+        // Check the base region arguments
+        assert_eq!(
+            rvsdg[region].value_arguments()[0],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Input {
+                    consumer: switch_node,
+                    input: 0,
+                }],
+            }
+        );
+        assert_eq!(
+            rvsdg[region].value_arguments()[1],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Input {
+                    consumer: switch_node,
+                    input: 1,
+                }],
+            }
+        );
+
+        // Check the switch node inputs and outputs
+        assert_eq!(
+            rvsdg[switch_node].value_inputs()[0],
+            ValueInput::argument(TY_U32, 0),
+        );
+        assert_eq!(
+            rvsdg[switch_node].value_inputs()[1],
+            ValueInput::argument(TY_U32, 1),
+        );
+        assert_eq!(
+            rvsdg[switch_node].value_outputs()[0],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Result(0)],
+            }
+        );
+
+        // Check region branch_0 arguments
+        assert_eq!(rvsdg[branch_0].value_arguments().len(), 1);
+        assert_eq!(
+            rvsdg[branch_0].value_arguments()[0],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Input {
+                    consumer: branch_0_node_1,
+                    input: 0,
+                }],
+            }
+        );
+
+        // Check branch_0_node_0 inputs and outputs
+        assert_eq!(
+            rvsdg[branch_0_node_0].value_outputs()[0],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Input {
+                    consumer: branch_0_node_1,
+                    input: 1,
+                }],
+            }
+        );
+
+        // Check branch_0_node_1 inputs and outputs
+        assert_eq!(
+            rvsdg[branch_0_node_1].value_inputs()[0],
+            ValueInput::argument(TY_U32, 0),
+        );
+        assert_eq!(
+            rvsdg[branch_0_node_1].value_inputs()[1],
+            ValueInput::output(TY_U32, branch_0_node_0, 0),
+        );
+        assert_eq!(
+            rvsdg[branch_0_node_1].value_outputs()[0],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Result(0)],
+            }
+        );
+
+        // Check region branch_0 results
+        assert_eq!(rvsdg[branch_0].value_results().len(), 1);
+        assert_eq!(
+            rvsdg[branch_0].value_results()[0],
+            ValueInput::output(TY_U32, branch_0_node_1, 0),
+        );
+
+        // Check region branch_1 arguments
+        assert_eq!(rvsdg[branch_1].value_arguments().len(), 1);
+        assert_eq!(
+            rvsdg[branch_1].value_arguments()[0],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![],
+            }
+        );
+
+        // Check branch_1_node_0 inputs and outputs
+        assert_eq!(
+            rvsdg[branch_1_node_0].value_outputs()[0],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Result(0)],
+            }
+        );
+
+        // Check branch_1 region results
+        assert_eq!(rvsdg[branch_1].value_results().len(), 1);
+        assert_eq!(
+            rvsdg[branch_1].value_results()[0],
+            ValueInput::output(TY_U32, branch_1_node_0, 0),
+        );
+
+        // Check base region results
+        assert_eq!(rvsdg[region].value_results().len(), 1);
+        assert_eq!(
+            rvsdg[region].value_results()[0],
+            ValueInput::output(TY_U32, switch_node, 0),
+        );
+    }
+
+    #[test]
+    fn test_rvsdg_loop_node() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![FnArg {
+                    ty: TY_U32,
+                    shader_io_binding: None,
+                }],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let (loop_node, loop_region) =
+            rvsdg.add_loop(region, vec![ValueInput::argument(TY_U32, 0)], None);
+
+        rvsdg.reconnect_region_result(region, 0, ValueInput::output(TY_U32, loop_node, 0));
+
+        let loop_node_0 = rvsdg.add_const_u32(loop_region, 1);
+        let loop_node_1 = rvsdg.add_op_binary(
+            loop_region,
+            BinaryOperator::Add,
+            ValueInput::argument(TY_U32, 0),
+            ValueInput::output(TY_U32, loop_node_0, 0),
+        );
+        let loop_node_2 = rvsdg.add_const_u32(loop_region, 10);
+        let loop_node_3 = rvsdg.add_op_binary(
+            loop_region,
+            BinaryOperator::Gt,
+            ValueInput::output(TY_U32, loop_node_1, 0),
+            ValueInput::output(TY_U32, loop_node_2, 0),
+        );
+
+        rvsdg.reconnect_region_result(loop_region, 0, ValueInput::output(TY_U32, loop_node_3, 0));
+        rvsdg.reconnect_region_result(loop_region, 1, ValueInput::output(TY_U32, loop_node_1, 0));
+
+        // Check the base region arguments
+        assert_eq!(
+            rvsdg[region].value_arguments()[0],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Input {
+                    consumer: loop_node,
+                    input: 0,
+                }],
+            }
+        );
+
+        // Check loop node inputs and outputs
+        assert_eq!(
+            rvsdg[loop_node].value_inputs()[0],
+            ValueInput::argument(TY_U32, 0),
+        );
+        assert_eq!(
+            rvsdg[loop_node].value_outputs()[0],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Result(0)],
+            }
+        );
+
+        // Check loop region arguments
+        assert_eq!(
+            rvsdg[loop_region].value_arguments()[0],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Input {
+                    consumer: loop_node_1,
+                    input: 0,
+                }],
+            }
+        );
+
+        // Check loop_node_0 inputs and outputs
+        assert_eq!(
+            rvsdg[loop_node_0].value_outputs()[0],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Input {
+                    consumer: loop_node_1,
+                    input: 1,
+                }],
+            }
+        );
+
+        // Check loop_node_1 inputs and outputs
+        assert_eq!(
+            rvsdg[loop_node_1].value_inputs()[0],
+            ValueInput::argument(TY_U32, 0),
+        );
+        assert_eq!(
+            rvsdg[loop_node_1].value_inputs()[1],
+            ValueInput::output(TY_U32, loop_node_0, 0)
+        );
+        assert_eq!(
+            rvsdg[loop_node_1].value_outputs()[0],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![
+                    ValueUser::Input {
+                        consumer: loop_node_3,
+                        input: 0,
+                    },
+                    ValueUser::Result(1)
+                ],
+            }
+        );
+
+        // Check loop_node_2 inputs and outputs
+        assert_eq!(
+            rvsdg[loop_node_2].value_outputs()[0],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Input {
+                    consumer: loop_node_3,
+                    input: 1,
+                }],
+            }
+        );
+
+        // Check loop_node_3 inputs and outputs
+        assert_eq!(
+            rvsdg[loop_node_3].value_inputs()[0],
+            ValueInput::output(TY_U32, loop_node_1, 0),
+        );
+        assert_eq!(
+            rvsdg[loop_node_3].value_inputs()[1],
+            ValueInput::output(TY_U32, loop_node_2, 0)
+        );
+        assert_eq!(
+            rvsdg[loop_node_3].value_outputs()[0],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Result(0)],
+            }
+        );
+
+        // Check loop region results
+        assert_eq!(rvsdg[loop_region].value_results().len(), 2);
+        assert_eq!(
+            rvsdg[loop_region].value_results()[0],
+            ValueInput::output(TY_U32, loop_node_3, 0),
+        );
+        assert_eq!(
+            rvsdg[loop_region].value_results()[1],
+            ValueInput::output(TY_U32, loop_node_1, 0),
+        );
+
+        // Check base region results
+        assert_eq!(rvsdg[region].value_results().len(), 1);
+        assert_eq!(
+            rvsdg[region].value_results()[0],
+            ValueInput::output(TY_U32, loop_node, 0),
+        );
+    }
+
+    #[test]
+    fn test_rvsdg_stateful() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![FnArg {
+                    ty: TY_PTR,
+                    shader_io_binding: None,
+                }, FnArg {
+                    ty: TY_U32,
+                    shader_io_binding: None,
+                }],
+                ret_ty: None,
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let node_0 = rvsdg.add_const_u32(region, 1);
+        let node_1 = rvsdg.add_op_load(region, ValueInput::argument(TY_PTR, 0), TY_U32, StateOrigin::Argument);
+        let node_2 = rvsdg.add_op_binary(
+            region,
+            BinaryOperator::Add,
+            ValueInput::output(TY_U32, node_1, 0),
+            ValueInput::output(TY_U32, node_0, 0),
+        );
+        let node_3 = rvsdg.add_op_store(
+            region,
+            ValueInput::argument(TY_PTR, 0),
+            ValueInput::output(TY_U32, node_2, 0),
+            StateOrigin::Node(node_1)
+        );
+
+        // Check the region arguments
+        assert_eq!(
+            rvsdg[region].value_arguments()[0],
+            ValueOutput {
+                ty: Some(TY_PTR),
+                users: thin_set![ValueUser::Input {
+                    consumer: node_1,
+                    input: 0,
+                },ValueUser::Input {
+                    consumer: node_3,
+                    input: 0,
+                }],
+            }
+        );
+        assert_eq!(
+            rvsdg[region].state_argument(),
+            &StateUser::Node(node_1)
+        );
+        
+        // Check node_0 inputs and outputs
+        assert_eq!(
+            rvsdg[node_0].value_outputs()[0],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Input {
+                    consumer: node_2,
+                    input: 1,
+                }],
+            }
+        );
+        
+        // Check node_1 inputs and outputs
+        assert_eq!(
+            rvsdg[node_1].value_inputs()[0],
+            ValueInput::argument(TY_PTR, 0),
+        );
+        assert_eq!(
+            rvsdg[node_1].state(),
+            Some(&State {
+                origin: StateOrigin::Argument,
+                user: StateUser::Node(node_3),
+            })
+        );
+        
+        // Check node_2 inputs and outputs
+        assert_eq!(
+            rvsdg[node_2].value_inputs()[0],
+            ValueInput::output(TY_U32, node_1, 0),
+        );
+        assert_eq!(
+            rvsdg[node_2].value_inputs()[1],
+            ValueInput::output(TY_U32, node_0, 0),
+        );
+        assert_eq!(
+            rvsdg[node_2].value_outputs()[0],
+            ValueOutput {
+                ty: Some(TY_U32),
+                users: thin_set![ValueUser::Input {consumer: node_3, input: 1}],
+            }
+        );
+        
+        // Check node_3 inputs and outputs
+        assert_eq!(
+            rvsdg[node_3].value_inputs()[0],
+            ValueInput::argument(TY_PTR, 0),
+        );
+        assert_eq!(
+            rvsdg[node_3].value_inputs()[1],
+            ValueInput::output(TY_U32, node_2, 0),
+        );
+        assert_eq!(
+            rvsdg[node_3].state(),
+            Some(&State {
+                origin: StateOrigin::Node(node_1),
+                user: StateUser::Result,
+            })
+        );
+        
+        // Check region results
+        assert!(rvsdg[region].value_results().is_empty());
+        assert_eq!(
+            rvsdg[region].state_result(),
+            &StateOrigin::Node(node_3),
+        );
     }
 }
