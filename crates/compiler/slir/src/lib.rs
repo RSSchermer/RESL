@@ -1,10 +1,10 @@
 pub mod cfg;
+pub mod cfg_to_rvsdg;
 pub mod dependencies;
 pub mod import_cfg;
 pub mod rvsdg;
 pub mod ty;
 
-mod cfg_to_rvsdg;
 mod core;
 mod util;
 
