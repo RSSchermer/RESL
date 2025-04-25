@@ -266,7 +266,9 @@ mod tests {
     use smallvec::smallvec;
 
     use super::*;
-    use crate::cfg::{Body, Branch, LocalValueData, OpAssign, OpBinary, Terminator};
+    use crate::cfg::{
+        Body, Branch, InlineConst, LocalValueData, OpAssign, OpBinary, Statement, Terminator, Value,
+    };
     use crate::cfg_to_rvsdg::control_flow_restructuring::{
         restructure_branches, restructure_loops,
     };
@@ -274,7 +276,7 @@ mod tests {
     use crate::{BinaryOperator, FnArg, FnSig};
 
     #[test]
-    fn control_tree_generate_test() {
+    fn test_control_tree_generate() {
         let mut body = Body::init(&FnSig {
             name: Default::default(),
             ty: TY_DUMMY,
@@ -457,6 +459,86 @@ mod tests {
 
             let M = control_tree[K.children[1]].expect_basic_block();
             assert_eq!(M, bb3);
+        }
+    }
+
+    #[test]
+    fn test_control_tree_generate_single_node_loop() {
+        let mut body = Body::init(&FnSig {
+            name: Default::default(),
+            ty: TY_DUMMY,
+            args: vec![FnArg {
+                ty: TY_U32,
+                shader_io_binding: None,
+            }],
+            ret_ty: Some(TY_U32),
+        });
+
+        let bb0 = body.append_block();
+        let bb1 = body.append_block();
+
+        let a0 = body.params[0];
+        let l0 = body
+            .local_values
+            .insert(LocalValueData { ty: Some(TY_U32) });
+
+        body.basic_blocks[bb0]
+            .statements
+            .push(Statement::OpBinary(OpBinary {
+                operator: BinaryOperator::Add,
+                lhs: a0.into(),
+                rhs: Value::InlineConst(InlineConst::U32(1)),
+                result: a0,
+            }));
+        body.basic_blocks[bb0]
+            .statements
+            .push(Statement::OpBinary(OpBinary {
+                operator: BinaryOperator::Gt,
+                lhs: a0.into(),
+                rhs: Value::InlineConst(InlineConst::U32(10)),
+                result: l0,
+            }));
+        body.basic_blocks[bb0].terminator = Terminator::Branch(Branch {
+            selector: Some(l0),
+            branches: smallvec![bb1, bb0],
+        });
+
+        body.basic_blocks[bb1].terminator = Terminator::Return(Some(a0.into()));
+
+        let mut graph = Graph::init(body);
+        let reentry_edges = restructure_loops(&mut graph);
+        let branch_info = restructure_branches(&mut graph, &reentry_edges);
+
+        let control_tree = ControlTree::generate(&graph, &reentry_edges, &branch_info);
+
+        // Expected control-tree layout:
+        //
+        //           Linear (A)
+        //               |
+        //         -------------
+        //         |           |
+        //        Loop (B)   BB:bb1 (C)
+        //         |
+        //     Linear (D)
+        //         |
+        //     BB:bb0 (F)
+        //
+
+        #[allow(non_snake_case)]
+        {
+            let A = control_tree[control_tree.root()].expect_linear();
+            assert_eq!(A.children.len(), 2);
+
+            let B = control_tree[A.children[0]].expect_loop();
+
+            let C = control_tree[A.children[1]].expect_basic_block();
+            assert_eq!(C, bb1);
+
+            let D = control_tree[B.inner].expect_linear();
+            assert_eq!(D.children.len(), 1);
+
+            let E = control_tree[D.children[0]].expect_basic_block();
+            assert_eq!(E, bb0);
         }
     }
 }
