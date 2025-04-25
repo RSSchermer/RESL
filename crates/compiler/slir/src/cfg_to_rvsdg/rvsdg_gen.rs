@@ -950,4 +950,102 @@ mod tests {
 
         assert_eq!(actual, expected);
     }
+
+    #[test]
+    fn test_stateful() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_PTR,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: None,
+            },
+        );
+
+        let mut body = Body::init(&module.fn_sigs[function]);
+
+        let bb = body.append_block();
+
+        let a0 = body.params[0];
+        let a1 = body.params[1];
+        let l0 = body
+            .local_values
+            .insert(LocalValueData { ty: Some(TY_U32) });
+        let l1 = body
+            .local_values
+            .insert(LocalValueData { ty: Some(TY_U32) });
+
+        body.basic_blocks[bb]
+            .statements
+            .push(Statement::OpLoad(OpLoad {
+                ptr: a0.into(),
+                result: l0,
+            }));
+        body.basic_blocks[bb]
+            .statements
+            .push(Statement::OpBinary(OpBinary {
+                operator: BinaryOperator::Add,
+                lhs: l0.into(),
+                rhs: Value::InlineConst(InlineConst::U32(1)),
+                result: l1,
+            }));
+        body.basic_blocks[bb]
+            .statements
+            .push(Statement::OpStore(OpStore {
+                ptr: a0.into(),
+                value: l1.into(),
+            }));
+        body.basic_blocks[bb].terminator = Terminator::Return(None);
+
+        let mut cfg = Cfg::default();
+
+        cfg.function_body.insert(function, body);
+
+        let actual = cfg_to_rvsdg(&module, &cfg);
+
+        let mut expected = Rvsdg::new();
+
+        let (_, region) = expected.register_function(&module, function, iter::empty());
+
+        let node_0 = expected.add_op_load(
+            region,
+            ValueInput::argument(TY_PTR, 0),
+            TY_U32,
+            StateOrigin::Argument,
+        );
+        let node_1 = expected.add_const_u32(region, 1);
+        let node_2 = expected.add_op_binary(
+            region,
+            BinaryOperator::Add,
+            ValueInput::output(TY_U32, node_0, 0),
+            ValueInput::output(TY_U32, node_1, 0),
+        );
+        let node_3 = expected.add_op_store(
+            region,
+            ValueInput::argument(TY_PTR, 0),
+            ValueInput::output(TY_U32, node_2, 0),
+            StateOrigin::Node(node_0),
+        );
+
+        dbg!(&actual);
+        dbg!(&expected);
+
+        assert_eq!(actual, expected);
+    }
 }
