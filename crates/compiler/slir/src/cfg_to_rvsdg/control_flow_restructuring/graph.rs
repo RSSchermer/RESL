@@ -1,4 +1,4 @@
-use rustc_hash::{FxBuildHasher, FxHashMap};
+use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use slotmap::SlotMap;
 
 use crate::cfg::{
@@ -202,6 +202,16 @@ impl Graph {
             Terminator::Branch(b) => b.branches.as_slice(),
             Terminator::Return(_) => &[],
         }
+    }
+
+    pub fn branches_to_self(&self, bb: BasicBlock, edge_blacklist: &FxHashSet<Edge>) -> bool {
+        self.children(bb).iter().any(|child| {
+            *child == bb
+                && !edge_blacklist.contains(&Edge {
+                    source: bb,
+                    dest: bb,
+                })
+        })
     }
 
     pub fn into_inner(self) -> Body {

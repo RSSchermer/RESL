@@ -143,14 +143,19 @@ fn search_vertex(
             }
         }
 
-        // We're not interested in single-node components
-        if component.len() > 1 {
+        // The algorithm considers any node reachable from itself, and as such every single node
+        // is its own SCC. For our purposes, we're only interested in single node SCCs if the node
+        // actually branches to itself.
+        if component.len() > 1
+            || (component.len() == 1 && graph.branches_to_self(component[0], edge_blacklist))
+        {
             scc.push(component);
         }
     }
 }
 
 /// Summarizes the connectivity of a strongly connected component (SCC) as a whole.
+#[derive(Debug)]
 pub struct SccStructure {
     /// Edges from source nodes outside the strongly connected component, to a destination node
     /// inside the strongly connected component.
@@ -177,6 +182,12 @@ impl SccStructure {
         let mut exit_edges = Vec::new();
 
         for bb in scc {
+            // If the node is the graph's entry node, then it is trivially also an entry node for
+            // the SCC
+            if *bb == graph.entry() {
+                entry_nodes.insert(*bb);
+            }
+
             for parent in graph.parents(*bb) {
                 if !scc.contains(parent) {
                     entry_edges.push(Edge {
