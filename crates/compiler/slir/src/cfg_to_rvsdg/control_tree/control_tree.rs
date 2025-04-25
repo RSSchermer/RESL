@@ -151,19 +151,18 @@ impl<'a> ControlTreeGenerator<'a> {
             // Note that above, we `remove` the `loop_info` entry rather than just `get` it. We want to
             // further classify the loop's entry block (it may be e.g. a branching block also); if it
             // had not been removed from the `loop_info`, it would end up being classified as a loop
-            // entry block again, and we would end up in infinite recursion.
+            // entry block again, and we would trigger infinite recursion.
             self.visit(bb, Some(child_node), Some(loop_tail));
-
-            // Add the tail block to the loop, if it was not already added as the entry block (a loop
-            // may consist of a single block that is both the entry and tail).
-            if loop_tail != bb {
-                let tail_node = self.nodes.push(ControlTreeNodeKind::BasicBlock(loop_tail));
-
-                self.nodes[child_node]
-                    .expect_linear_mut()
-                    .children
-                    .push(tail_node);
-            }
+            
+            // In the above `visit` call, we passed the `loop_tail` as the visit's `end`, which
+            // means that the `loop_tail` itself will not have been added yet (even if this is a
+            // single node loop where `bb == loop_tail`), so we add it now.
+            let tail_node = self.nodes.push(ControlTreeNodeKind::BasicBlock(loop_tail));
+            
+            self.nodes[child_node]
+                .expect_linear_mut()
+                .children
+                .push(tail_node);
 
             let continuation = self.graph.children(loop_tail)[0];
 

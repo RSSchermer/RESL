@@ -1,8 +1,7 @@
-use std::collections::HashMap;
 use std::ops::Index;
 use std::slice;
 
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
 
@@ -940,7 +939,7 @@ macro_rules! add_const_methods {
 pub struct Rvsdg {
     regions: SlotMap<Region, RegionData>,
     nodes: SlotMap<Node, NodeData>,
-    function_regions: HashMap<Function, Region>,
+    function_regions: FxHashMap<Function, Region>,
 }
 
 impl Rvsdg {
@@ -1610,6 +1609,36 @@ impl Index<Node> for Rvsdg {
 
     fn index(&self, node: Node) -> &Self::Output {
         &self.nodes[node]
+    }
+}
+
+impl PartialEq for Rvsdg {
+    fn eq(&self, other: &Self) -> bool {
+        if self.function_regions != other.function_regions {
+            return false;
+        }
+
+        if self.regions.len() != other.regions.len() {
+            return false;
+        }
+
+        for (region, data) in other.regions.iter() {
+            if self.regions.get(region) != Some(data) {
+                return false;
+            }
+        }
+
+        if self.nodes.len() != other.nodes.len() {
+            return false;
+        }
+
+        for (node, data) in other.nodes.iter() {
+            if self.nodes.get(node) != Some(data) {
+                return false;
+            }
+        }
+
+        true
     }
 }
 

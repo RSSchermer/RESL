@@ -165,21 +165,18 @@ impl<'a> RegionBuilder<'a> {
         let demand = self.demand.get(node);
         let uses_state = self.state_use[node];
 
-        let mut value_inputs = Vec::with_capacity(item_deps.len() + demand.len());
+        let mut value_inputs = Vec::with_capacity(item_deps.len() + demand.len() + 1);
+
+        value_inputs.push(self.input_state_tracker[data.selector]);
 
         // We need to construct the input state for the branch regions, based on the inputs to the
         // switch node. Each region builder for a branch's sub-region will start with a copy of this
         // tracker.
         let mut branch_input_state = InputStateTracker::new(self.module, self.body);
 
-        for (i, value) in demand.iter().enumerate() {
+        for value in demand {
             value_inputs.push(self.input_state_tracker[*value]);
-
-            // The first input is the branch selector predicate, which we don't pass on to the
-            // branch regions
-            if i != 0 {
-                branch_input_state.insert_value_arg(*value);
-            }
+            branch_input_state.insert_value_arg(*value);
         }
 
         for dep in item_deps {
@@ -187,7 +184,10 @@ impl<'a> RegionBuilder<'a> {
             branch_input_state.insert_item_arg(*dep);
         }
 
-        // The branching node needs to output the values that it next sibling demands
+        // The branching node needs to output the values that its next sibling demands.
+        //
+        // Note that we don't have a node handle for the switch node yet, so we'll have to update
+        // the input state tracker later.
         let value_outputs = if let Some(next_sibling) = next_sibling {
             let next_sibling_demand = self.demand.get(next_sibling);
 
@@ -220,6 +220,17 @@ impl<'a> RegionBuilder<'a> {
                 for (i, value) in next_sibling_demand.iter().enumerate() {
                     branch_builder.connect_result(i as u32, value.into());
                 }
+            }
+        }
+
+        // Now that we have a node handle, update the input state tracker with the switch node's
+        // outputs
+        if let Some(next_sibling) = next_sibling {
+            let next_sibling_demand = self.demand.get(next_sibling);
+
+            for (i, value) in next_sibling_demand.iter().enumerate() {
+                self.input_state_tracker
+                    .insert_value_node(*value, node, i as u32);
             }
         }
 
@@ -265,6 +276,13 @@ impl<'a> RegionBuilder<'a> {
             let result_index = i as u32 + 1;
 
             inner_builder.connect_result(result_index, value.into());
+        }
+
+        // Now that we have a node handle, update the input state tracker with the switch node's
+        // outputs
+        for (i, value) in demand.iter().enumerate() {
+            self.input_state_tracker
+                .insert_value_node(*value, node, i as u32);
         }
 
         // Keep track of the state tail
@@ -480,6 +498,7 @@ fn build_body(
     input_state_tracker: InputStateTracker,
 ) {
     let mut graph = Graph::init(from.clone());
+
     let reentry_edges = restructure_loops(&mut graph);
     let branch_info = restructure_branches(&mut graph, &reentry_edges);
 
@@ -582,4 +601,353 @@ pub fn cfg_to_rvsdg(module: &Module, cfg: &Cfg) -> Rvsdg {
     }
 
     rvsdg
+}
+
+#[cfg(test)]
+mod tests {
+    use std::iter;
+
+    use smallvec::smallvec;
+
+    use super::*;
+    use crate::cfg::{Branch, LocalValueData};
+    use crate::ty::TY_DUMMY;
+    use crate::{BinaryOperator, FnArg, FnSig, Function, Symbol};
+
+    #[test]
+    fn test_single_bb() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut body = Body::init(&module.fn_sigs[function]);
+
+        let bb = body.append_block();
+
+        let a0 = body.params[0];
+        let a1 = body.params[1];
+        let l0 = body
+            .local_values
+            .insert(LocalValueData { ty: Some(TY_U32) });
+        let l1 = body
+            .local_values
+            .insert(LocalValueData { ty: Some(TY_U32) });
+
+        body.basic_blocks[bb]
+            .statements
+            .push(Statement::OpBinary(OpBinary {
+                operator: BinaryOperator::Add,
+                lhs: a0.into(),
+                rhs: Value::InlineConst(InlineConst::U32(5)),
+                result: l0,
+            }));
+        body.basic_blocks[bb]
+            .statements
+            .push(Statement::OpBinary(OpBinary {
+                operator: BinaryOperator::Add,
+                lhs: l0.into(),
+                rhs: a1.into(),
+                result: l1,
+            }));
+        body.basic_blocks[bb].terminator = Terminator::Return(Some(l1.into()));
+
+        let mut cfg = Cfg::default();
+
+        cfg.function_body.insert(function, body);
+
+        let actual = cfg_to_rvsdg(&module, &cfg);
+
+        let mut expected = Rvsdg::new();
+
+        let (_, region) = expected.register_function(&module, function, iter::empty());
+
+        let node_0 = expected.add_const_u32(region, 5);
+
+        let node_1 = expected.add_op_binary(
+            region,
+            BinaryOperator::Add,
+            ValueInput::argument(TY_U32, 0),
+            ValueInput::output(TY_U32, node_0, 0),
+        );
+
+        let node_2 = expected.add_op_binary(
+            region,
+            BinaryOperator::Add,
+            ValueInput::output(TY_U32, node_1, 0),
+            ValueInput::argument(TY_U32, 1),
+        );
+
+        expected.reconnect_region_result(
+            region,
+            0,
+            ValueInput {
+                ty: TY_U32,
+                origin: ValueOrigin::Output {
+                    producer: node_2,
+                    output: 0,
+                },
+            },
+        );
+
+        dbg!(&actual);
+        dbg!(&expected);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_simple_branch() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut body = Body::init(&module.fn_sigs[function]);
+
+        let bb0 = body.append_block();
+        let bb1 = body.append_block();
+        let bb2 = body.append_block();
+        let bb3 = body.append_block();
+
+        let a0 = body.params[0];
+        let a1 = body.params[1];
+        let l0 = body
+            .local_values
+            .insert(LocalValueData { ty: Some(TY_U32) });
+        let l1 = body
+            .local_values
+            .insert(LocalValueData { ty: Some(TY_U32) });
+
+        body.basic_blocks[bb0].terminator = Terminator::Branch(Branch {
+            selector: Some(a0),
+            branches: smallvec![bb1, bb2],
+        });
+
+        body.basic_blocks[bb1]
+            .statements
+            .push(Statement::OpBinary(OpBinary {
+                operator: BinaryOperator::Add,
+                lhs: a1.into(),
+                rhs: Value::InlineConst(InlineConst::U32(1)),
+                result: l0,
+            }));
+        body.basic_blocks[bb1]
+            .statements
+            .push(Statement::OpAssign(OpAssign {
+                value: l0.into(),
+                result: l1,
+            }));
+        body.basic_blocks[bb1].terminator = Terminator::Branch(Branch {
+            selector: None,
+            branches: smallvec![bb3],
+        });
+
+        body.basic_blocks[bb2]
+            .statements
+            .push(Statement::OpAssign(OpAssign {
+                value: Value::InlineConst(InlineConst::U32(0)),
+                result: l1,
+            }));
+        body.basic_blocks[bb2].terminator = Terminator::Branch(Branch {
+            selector: None,
+            branches: smallvec![bb3],
+        });
+
+        body.basic_blocks[bb3].terminator = Terminator::Return(Some(l1.into()));
+
+        let mut cfg = Cfg::default();
+
+        cfg.function_body.insert(function, body);
+
+        let actual = cfg_to_rvsdg(&module, &cfg);
+
+        let mut expected = Rvsdg::new();
+
+        let (_, region) = expected.register_function(&module, function, iter::empty());
+
+        let switch_node = expected.add_switch(
+            region,
+            vec![
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::argument(TY_U32, 1),
+            ],
+            vec![ValueOutput::new(Some(TY_U32))],
+            None,
+        );
+
+        expected.reconnect_region_result(region, 0, ValueInput::output(TY_U32, switch_node, 0));
+
+        let branch_0 = expected.add_switch_branch(switch_node);
+
+        let branch_0_node_0 = expected.add_const_u32(branch_0, 1);
+        let branch_0_node_1 = expected.add_op_binary(
+            branch_0,
+            BinaryOperator::Add,
+            ValueInput::argument(TY_U32, 0),
+            ValueInput::output(TY_U32, branch_0_node_0, 0),
+        );
+
+        expected.reconnect_region_result(
+            branch_0,
+            0,
+            ValueInput::output(TY_U32, branch_0_node_1, 0),
+        );
+
+        let branch_1 = expected.add_switch_branch(switch_node);
+
+        let branch_1_node_0 = expected.add_const_u32(branch_1, 0);
+
+        expected.reconnect_region_result(
+            branch_1,
+            0,
+            ValueInput::output(TY_U32, branch_1_node_0, 0),
+        );
+
+        dbg!(&actual);
+        dbg!(&expected);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_simple_loop() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![FnArg {
+                    ty: TY_U32,
+                    shader_io_binding: None,
+                }],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut body = Body::init(&module.fn_sigs[function]);
+
+        let bb0 = body.append_block();
+        let bb1 = body.append_block();
+
+        let a0 = body.params[0];
+        let l0 = body
+            .local_values
+            .insert(LocalValueData { ty: Some(TY_U32) });
+
+        body.basic_blocks[bb0]
+            .statements
+            .push(Statement::OpBinary(OpBinary {
+                operator: BinaryOperator::Add,
+                lhs: a0.into(),
+                rhs: Value::InlineConst(InlineConst::U32(1)),
+                result: a0,
+            }));
+        body.basic_blocks[bb0]
+            .statements
+            .push(Statement::OpBinary(OpBinary {
+                operator: BinaryOperator::Gt,
+                lhs: a0.into(),
+                rhs: Value::InlineConst(InlineConst::U32(10)),
+                result: l0,
+            }));
+        body.basic_blocks[bb0].terminator = Terminator::Branch(Branch {
+            selector: Some(l0),
+            branches: smallvec![bb1, bb0],
+        });
+
+        body.basic_blocks[bb1].terminator = Terminator::Return(Some(a0.into()));
+
+        let mut cfg = Cfg::default();
+
+        cfg.function_body.insert(function, body);
+
+        let actual = cfg_to_rvsdg(&module, &cfg);
+
+        let mut expected = Rvsdg::new();
+
+        let (_, region) = expected.register_function(&module, function, iter::empty());
+
+        let (loop_node, loop_region) =
+            expected.add_loop(region, vec![ValueInput::argument(TY_U32, 0)], None);
+
+        expected.reconnect_region_result(region, 0, ValueInput::output(TY_U32, loop_node, 0));
+
+        let loop_node_0 = expected.add_const_u32(loop_region, 1);
+        let loop_node_1 = expected.add_op_binary(
+            loop_region,
+            BinaryOperator::Add,
+            ValueInput::argument(TY_U32, 0),
+            ValueInput::output(TY_U32, loop_node_0, 0),
+        );
+        let loop_node_2 = expected.add_const_u32(loop_region, 10);
+        let loop_node_3 = expected.add_op_binary(
+            loop_region,
+            BinaryOperator::Gt,
+            ValueInput::output(TY_U32, loop_node_1, 0),
+            ValueInput::output(TY_U32, loop_node_2, 0),
+        );
+
+        expected.reconnect_region_result(
+            loop_region,
+            0,
+            ValueInput::output(TY_U32, loop_node_3, 0),
+        );
+        expected.reconnect_region_result(
+            loop_region,
+            1,
+            ValueInput::output(TY_U32, loop_node_1, 0),
+        );
+
+        dbg!(&actual);
+        dbg!(&expected);
+
+        assert_eq!(actual, expected);
+    }
 }
