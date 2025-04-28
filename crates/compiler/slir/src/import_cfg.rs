@@ -34,6 +34,8 @@ pub fn import_fn_cfg(from: (&Module, &Cfg), to: (&mut Module, &mut Cfg), functio
 
     let mut sig = from_module.fn_sigs[function].clone();
 
+    sig.ty = to_module.ty.register(TypeKind::Function(function));
+
     if let Some(ret_ty) = &mut sig.ret_ty {
         *ret_ty = import_type(from_module, to_module, *ret_ty);
     }
