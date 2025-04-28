@@ -60,5 +60,6 @@ pub fn Type(module: StoredValue<ModuleData>, ty: slir::ty::Type) -> impl IntoVie
         }
         TypeKind::Ptr => view! {"ptr"}.into_any(),
         TypeKind::Function(_) => view! {"fn"}.into_any(),
+        TypeKind::Dummy => view! {"dummy"}.into_any(),
     }
 }

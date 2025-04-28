@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::mem;
 use std::ops::Range;
 
@@ -8,7 +9,7 @@ use slir::rvsdg::{
     ValueUser,
 };
 use slir::ty::Type;
-use slir::Function;
+use slir::{Function, Module};
 use smallvec::SmallVec;
 
 pub struct Config {
@@ -35,18 +36,18 @@ impl Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            connector_size: 6.0,
-            connector_spacing: 4.0,
+            connector_size: 12.0,
+            connector_spacing: 15.0,
             font_width: 9.0,
             font_height: 15.0,
-            region_spacing: 4.0,
-            region_padding: 6.0,
+            region_spacing: 8.0,
+            region_padding: 16.0,
             node_padding: 6.0,
             node_spacing: 20.0,
-            traverser_zone_padding: 20.0,
-            traverser_line_spacing: 4.0,
+            traverser_zone_padding: 15.0,
+            traverser_line_spacing: 10.0,
             bypass_zone_padding: 20.0,
-            bypass_line_spacing: 4.0,
+            bypass_line_spacing: 10.0,
         }
     }
 }
@@ -168,14 +169,14 @@ struct RegionLayoutBuilder<'a> {
     argument_connectors: Vec<ConnectorElement>,
     result_connectors: Vec<ConnectorElement>,
     edge_lines: Vec<Line>,
-    edge_line_ranges: Vec<Range<usize>>,
+    edge_layouts: Vec<EdgeLayout>,
 }
 
 impl<'a> RegionLayoutBuilder<'a> {
-    fn init(config: &'a Config, rvsdg: &'a Rvsdg, region: Region) -> Self {
+    fn init(config: &'a Config, module: &Module, rvsdg: &'a Rvsdg, region: Region) -> Self {
         let strata = stratify_nodes(rvsdg, region)
             .into_iter()
-            .map(|nodes| Stratum::init(config.clone(), rvsdg, nodes))
+            .map(|nodes| Stratum::init(config, module, rvsdg, nodes))
             .collect::<Vec<_>>();
         let traverser_zones = vec![TraverserZone::default(); strata.len() + 1];
 
@@ -218,7 +219,7 @@ impl<'a> RegionLayoutBuilder<'a> {
             argument_connectors,
             result_connectors,
             edge_lines: vec![],
-            edge_line_ranges: vec![],
+            edge_layouts: vec![],
         }
     }
 
@@ -271,7 +272,9 @@ impl<'a> RegionLayoutBuilder<'a> {
             self.outgoing_bypass_edges.push(edge_index);
         }
 
-        self.set_next_stratum_bypass_lanes();
+        if let Some(stratum) = self.strata.get_mut(0) {
+            stratum.bypass_lanes = self.outgoing_bypass_edges.len() as u32;
+        }
 
         mem::swap(
             &mut self.incoming_bypass_edges,
@@ -286,10 +289,10 @@ impl<'a> RegionLayoutBuilder<'a> {
 
         let needs_bypass = |end, strata: &[Stratum], current_stratum| match end {
             EdgeEnd::Result(_) => current_stratum != strata.len() - 1,
-            EdgeEnd::Consumer { stratum, .. } => stratum != current_stratum as u32,
+            EdgeEnd::Consumer { stratum, .. } => stratum != current_stratum as u32 + 1,
         };
 
-        let zone_index = self.current_stratum - 1;
+        let zone_index = self.current_stratum + 1;
 
         // Add edges for each node in the current stratum
         for (node, layout) in self.strata[self.current_stratum].nodes.iter() {
@@ -323,7 +326,7 @@ impl<'a> RegionLayoutBuilder<'a> {
 
             // Add edge for the state output (if applicable)
             if let Some(state) = node_data.state() {
-                let start = self.state_origin_to_edge_start(&state.origin);
+                let start = self.state_origin_to_edge_start(&StateOrigin::Node(*node));
                 let end = self.state_user_to_edge_end(&state.user);
                 let traverser_lane = self.traverser_zones[zone_index].add_traverser_lane();
                 let edge_index = self.edges.len();
@@ -360,7 +363,9 @@ impl<'a> RegionLayoutBuilder<'a> {
             }
         }
 
-        self.set_next_stratum_bypass_lanes();
+        if let Some(stratum) = self.strata.get_mut(self.current_stratum + 1) {
+            stratum.bypass_lanes = self.outgoing_bypass_edges.len() as u32;
+        }
 
         mem::swap(
             &mut self.incoming_bypass_edges,
@@ -370,12 +375,6 @@ impl<'a> RegionLayoutBuilder<'a> {
         self.current_stratum += 1;
 
         true
-    }
-
-    fn set_next_stratum_bypass_lanes(&mut self) {
-        if let Some(stratum) = self.strata.get_mut(self.current_stratum + 1) {
-            stratum.bypass_lanes = self.outgoing_bypass_edges.len() as u32;
-        }
     }
 
     fn apply_vertical_offsets(&mut self) {
@@ -469,6 +468,7 @@ impl<'a> RegionLayoutBuilder<'a> {
 
     fn generate_edge_lines(&mut self, edge_index: usize) {
         let edge = &self.edges[edge_index];
+        let is_state_edge = edge.is_state_edge;
         let range_start = self.edge_lines.len();
 
         let base_traverser_zone = match edge.start {
@@ -530,7 +530,10 @@ impl<'a> RegionLayoutBuilder<'a> {
 
         let range_end = self.edge_lines.len();
 
-        self.edge_line_ranges.push(range_start..range_end);
+        self.edge_layouts.push(EdgeLayout {
+            lines: range_start..range_end,
+            is_state_edge,
+        });
     }
 
     fn value_origin_to_edge_start(&self, origin: &ValueOrigin) -> EdgeStart {
@@ -679,7 +682,7 @@ impl<'a> RegionLayoutBuilder<'a> {
             result_connectors,
             strata,
             edge_lines,
-            edge_line_ranges,
+            edge_layouts: edge_line_ranges,
             width,
             height,
             ..
@@ -696,7 +699,7 @@ impl<'a> RegionLayoutBuilder<'a> {
             result_connectors,
             node_layouts,
             edge_lines,
-            edge_line_ranges,
+            edge_layouts: edge_line_ranges,
             width,
             height,
             translation: [0.0; 2],
@@ -704,20 +707,21 @@ impl<'a> RegionLayoutBuilder<'a> {
     }
 }
 
+#[derive(Clone, PartialEq, Debug)]
 pub struct RegionLayout {
     argument_connectors: Vec<ConnectorElement>,
     result_connectors: Vec<ConnectorElement>,
     node_layouts: Vec<NodeLayout>,
     edge_lines: Vec<Line>,
-    edge_line_ranges: Vec<Range<usize>>,
+    edge_layouts: Vec<EdgeLayout>,
     width: f32,
     height: f32,
     translation: [f32; 2],
 }
 
 impl RegionLayout {
-    pub fn generate(config: &Config, rvsdg: &Rvsdg, region: Region) -> Self {
-        let mut builder = RegionLayoutBuilder::init(config, rvsdg, region);
+    pub fn generate(config: &Config, module: &Module, rvsdg: &Rvsdg, region: Region) -> Self {
+        let mut builder = RegionLayoutBuilder::init(config, module, rvsdg, region);
 
         builder.build_argument_edges();
         while builder.build_current_stratum_edges() {}
@@ -764,13 +768,17 @@ impl RegionLayout {
     }
 
     pub fn edge_count(&self) -> usize {
-        self.edge_line_ranges.len()
+        self.edge_layouts.len()
     }
 
     pub fn edge_lines(&self, edge_index: usize) -> &[Line] {
-        let range = self.edge_line_ranges[edge_index].clone();
+        let range = self.edge_layouts[edge_index].lines.clone();
 
         &self.edge_lines[range]
+    }
+
+    pub fn is_state_edge(&self, edge_index: usize) -> bool {
+        self.edge_layouts[edge_index].is_state_edge
     }
 }
 
@@ -845,10 +853,9 @@ impl TraverserZone {
     }
 
     fn traverser_lane_y(&self, lane: u32, config: &Config) -> f32 {
-        // We layout the traverse lanes from the bottom up
-        self.offset_y + self.height(config)
-            - config.traverser_zone_padding
-            - (lane as f32 * config.traverser_line_spacing)
+        self.offset_y
+            + config.traverser_zone_padding
+            + (lane as f32 * config.traverser_line_spacing)
     }
 }
 
@@ -861,19 +868,24 @@ struct Stratum {
 }
 
 impl Stratum {
-    fn init(config: &Config, rvsdg: &Rvsdg, nodes: impl IntoIterator<Item = Node>) -> Self {
+    fn init(
+        config: &Config,
+        module: &Module,
+        rvsdg: &Rvsdg,
+        nodes: impl IntoIterator<Item = Node>,
+    ) -> Self {
         let mut nodes_map = IndexMap::new();
         let mut nodes_width = 0.0;
         let mut height = 0.0;
 
         for (i, node) in nodes.into_iter().enumerate() {
-            let mut layout = NodeLayout::init(config, rvsdg, node);
+            let mut layout = NodeLayout::init(config, module, rvsdg, node);
 
             if i > 0 {
                 nodes_width += config.node_spacing;
             }
 
-            layout.translation[0] = nodes_width;
+            layout.translation[0] = config.region_padding + nodes_width;
 
             nodes_width += layout.width();
             height = f32::max(height, layout.height());
@@ -913,7 +925,7 @@ impl Stratum {
         };
 
         if self.bypass_lanes > 0 {
-            bypass_lanes_width += 2.0 * config.bypass_zone_padding;
+            bypass_lanes_width += config.bypass_zone_padding;
         }
 
         self.nodes_width + bypass_lanes_width
@@ -921,10 +933,16 @@ impl Stratum {
 
     fn bypass_lane_x(&self, lane: u32, config: &Config) -> f32 {
         if lane >= self.bypass_lanes {
-            panic!("lane out of bounds");
+            panic!(
+                "lane `{}` out of bounds (`{}` lanes)",
+                lane, self.bypass_lanes
+            );
         }
 
-        self.nodes_width + config.bypass_zone_padding + lane as f32 * config.bypass_line_spacing
+        config.region_padding
+            + self.nodes_width
+            + config.bypass_zone_padding
+            + lane as f32 * config.bypass_line_spacing
     }
 
     fn apply_offset_y(&mut self) {
@@ -934,17 +952,19 @@ impl Stratum {
     }
 }
 
+#[derive(Clone, PartialEq, Debug)]
 pub struct NodeLayout {
     content: NodeContent,
     input_connectors: Vec<ConnectorElement>,
     output_connectors: Vec<ConnectorElement>,
     width: f32,
     height: f32,
+    rect: Rect,
     translation: [f32; 2],
 }
 
 impl NodeLayout {
-    pub fn init(config: &Config, rvsdg: &Rvsdg, node: Node) -> Self {
+    pub fn init(config: &Config, module: &Module, rvsdg: &Rvsdg, node: Node) -> Self {
         let data = &rvsdg[node];
 
         let content = match data.kind() {
@@ -952,29 +972,33 @@ impl NodeLayout {
                 let region_layouts = node
                     .branches()
                     .iter()
-                    .map(|b| RegionLayout::generate(config, rvsdg, *b))
+                    .map(|b| RegionLayout::generate(config, module, rvsdg, *b))
                     .collect();
 
-                NodeContent::Switch(region_layouts)
+                NodeContent::Switch("switch".into(), region_layouts)
             }
             NodeKind::Loop(node) => {
-                let region_layout = RegionLayout::generate(config, rvsdg, *node.region());
+                let region_layout = RegionLayout::generate(config, module, rvsdg, *node.region());
 
-                NodeContent::Loop(region_layout)
+                NodeContent::Loop("loop".into(), region_layout)
             }
             NodeKind::Simple(simple_node) => match simple_node {
-                SimpleNode::ConstU32(v) => NodeContent::PlainText(v.value().to_string()),
-                SimpleNode::ConstI32(v) => NodeContent::PlainText(v.value().to_string()),
-                SimpleNode::ConstF32(v) => NodeContent::PlainText(v.value().to_string()),
-                SimpleNode::ConstBool(v) => NodeContent::PlainText(v.value().to_string()),
-                SimpleNode::ConstPtr(_) => NodeContent::PlainText("ptr".to_string()),
-                SimpleNode::OpAlloca(_) => NodeContent::PlainText("alloca".to_string()),
-                SimpleNode::OpLoad(_) => NodeContent::PlainText("load".to_string()),
-                SimpleNode::OpStore(_) => NodeContent::PlainText("store".to_string()),
-                SimpleNode::OpPtrElementPtr(_) => NodeContent::PlainText("pep".to_string()),
-                SimpleNode::OpApply(_) => NodeContent::PlainText("apply".to_string()),
-                SimpleNode::OpUnary(op) => NodeContent::PlainText(op.operator().to_string()),
-                SimpleNode::OpBinary(op) => NodeContent::PlainText(op.operator().to_string()),
+                SimpleNode::ConstU32(v) => NodeContent::PlainText(v.value().to_string().into()),
+                SimpleNode::ConstI32(v) => NodeContent::PlainText(v.value().to_string().into()),
+                SimpleNode::ConstF32(v) => NodeContent::PlainText(v.value().to_string().into()),
+                SimpleNode::ConstBool(v) => NodeContent::PlainText(v.value().to_string().into()),
+                SimpleNode::ConstPtr(_) => NodeContent::PlainText("ptr".into()),
+                SimpleNode::OpAlloca(_) => NodeContent::PlainText("alloca".into()),
+                SimpleNode::OpLoad(_) => NodeContent::PlainText("load".into()),
+                SimpleNode::OpStore(_) => NodeContent::PlainText("store".into()),
+                SimpleNode::OpPtrElementPtr(_) => NodeContent::PlainText("pep".into()),
+                SimpleNode::OpApply(op) => {
+                    NodeContent::FnApply("apply".into(), op.resolve_fn(module))
+                }
+                SimpleNode::OpUnary(op) => NodeContent::PlainText(op.operator().to_string().into()),
+                SimpleNode::OpBinary(op) => {
+                    NodeContent::PlainText(op.operator().to_string().into())
+                }
             },
             _ => panic!("node kind not allowed inside a region"),
         };
@@ -1008,6 +1032,7 @@ impl NodeLayout {
             output_connectors,
             width: 0.0,
             height: 0.0,
+            rect: Default::default(),
             translation: [0.0; 2],
         };
 
@@ -1034,10 +1059,7 @@ impl NodeLayout {
     }
 
     pub fn rect(&self) -> Rect {
-        Rect {
-            origin: self.translation,
-            size: [self.width, self.height],
-        }
+        self.rect
     }
 
     pub fn content(&self) -> &NodeContent {
@@ -1056,7 +1078,7 @@ impl NodeLayout {
         self.output_connectors.len() as u32
     }
 
-    fn update_width(&self, config: &Config) -> f32 {
+    fn update_width(&mut self, config: &Config) {
         let inputs_width = connectors_width(self.input_count(), config);
         let outputs_width = connectors_width(self.output_count(), config);
         let inner_width = self.content.width(config);
@@ -1065,7 +1087,7 @@ impl NodeLayout {
             .into_iter()
             .fold(0.0, f32::max);
 
-        max_width + config.node_padding * 2.0
+        self.width = max_width + config.node_padding * 2.0;
     }
 
     fn update_height(&mut self, config: &Config) {
@@ -1078,14 +1100,27 @@ impl NodeLayout {
     }
 
     fn place(&mut self, config: &Config) {
+        self.place_rect(config);
         self.place_input_connectors(config);
         self.place_output_connectors(config);
         self.place_content(config);
     }
 
+    fn place_rect(&mut self, config: &Config) {
+        let x = self.translation[0];
+        let y = self.translation[1] + config.connector_size;
+        let width = self.width;
+        let height = self.height - config.connector_size * 2.0;
+
+        self.rect = Rect {
+            origin: [x, y],
+            size: [width, height],
+        }
+    }
+
     fn place_input_connectors(&mut self, config: &Config) {
         let mut x = self.translation[0] + config.node_padding;
-        let y = 0.0;
+        let y = self.translation[1];
 
         for connector in &mut self.input_connectors {
             connector.rect = Rect {
@@ -1113,55 +1148,106 @@ impl NodeLayout {
 
     fn place_content(&mut self, config: &Config) {
         match &mut self.content {
-            NodeContent::Loop(region_layout) => {
-                let x = self.translation[0] + config.node_padding;
-                let y = self.translation[1]
+            NodeContent::PlainText(text) => {
+                text.translation[0] = self.translation[0] + config.node_padding;
+                text.translation[1] = self.translation[1]
                     + config.connector_size
                     + config.node_padding
-                    + config.font_height
-                    + config.region_spacing;
-
-                region_layout.translation = [x, y];
+                    + config.font_height;
             }
-            NodeContent::Switch(region_layouts) => {
-                let mut x = self.translation[0] + config.node_padding;
-                let y = self.translation[1]
+            NodeContent::FnApply(text, _) => {
+                text.translation[0] = self.translation[0] + config.node_padding;
+                text.translation[1] = self.translation[1]
                     + config.connector_size
                     + config.node_padding
-                    + config.font_height
-                    + config.region_spacing;
+                    + config.font_height;
+            }
+            NodeContent::Loop(text, region_layout) => {
+                let x = self.translation[0] + config.node_padding;
+                let text_y = self.translation[1]
+                    + config.connector_size
+                    + config.node_padding
+                    + config.font_height;
+                let region_y = text_y + config.region_spacing;
+
+                text.translation = [x, text_y];
+                region_layout.translation = [x, region_y];
+            }
+            NodeContent::Switch(text, region_layouts) => {
+                let mut x = self.translation[0] + config.node_padding;
+                let text_y = self.translation[1]
+                    + config.connector_size
+                    + config.node_padding
+                    + config.font_height;
+                let region_y = text_y + config.region_spacing;
+
+                text.translation = [x, text_y];
 
                 for region_layout in region_layouts {
-                    region_layout.translation = [x, y];
+                    region_layout.translation = [x, region_y];
 
                     x += region_layout.width() + config.region_spacing;
                 }
             }
-            _ => {}
         }
     }
 }
 
+#[derive(Clone, PartialEq, Debug)]
+pub struct TextElement {
+    text: Cow<'static, str>,
+    translation: [f32; 2],
+}
+
+impl TextElement {
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn translation(&self) -> [f32; 2] {
+        self.translation
+    }
+}
+
+impl From<String> for TextElement {
+    fn from(text: String) -> Self {
+        Self {
+            text: Cow::Owned(text),
+            translation: [0.0; 2],
+        }
+    }
+}
+
+impl From<&'static str> for TextElement {
+    fn from(text: &'static str) -> Self {
+        Self {
+            text: Cow::Borrowed(text),
+            translation: [0.0; 2],
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
 pub enum NodeContent {
-    PlainText(String),
-    FnApply(Function),
-    Loop(RegionLayout),
-    Switch(Vec<RegionLayout>),
+    PlainText(TextElement),
+    FnApply(TextElement, Function),
+    Loop(TextElement, RegionLayout),
+    Switch(TextElement, Vec<RegionLayout>),
 }
 
 impl NodeContent {
     fn width(&self, config: &Config) -> f32 {
         // Note that our text width calculations require a monospace font type
         match self {
-            NodeContent::PlainText(text) => text.chars().count() as f32 * config.font_width,
-            NodeContent::FnApply(_) => "apply".chars().count() as f32 * config.font_width,
-            NodeContent::Loop(region_layout) => {
-                let text_width = "loop".chars().count() as f32 * config.font_width;
+            NodeContent::PlainText(text) => text.text.chars().count() as f32 * config.font_width,
+            NodeContent::FnApply(text, ..) => text.text.chars().count() as f32 * config.font_width,
+            NodeContent::Loop(text, region_layout) => {
+                let text_width = text.text.chars().count() as f32 * config.font_width;
 
                 f32::max(text_width, region_layout.width())
             }
-            NodeContent::Switch(region_layouts) => {
-                let text_width = "switch".chars().count() as f32 * config.font_width;
+            NodeContent::Switch(text, region_layouts) => {
+                let text_width = text.text.chars().count() as f32 * config.font_width;
                 let region_width_sum: f32 = region_layouts.iter().map(|r| r.width()).sum();
                 let region_spacing = if region_layouts.len() > 1 {
                     (region_layouts.len() - 1) as f32 * config.region_spacing
@@ -1178,13 +1264,13 @@ impl NodeContent {
     fn height(&self, config: &Config) -> f32 {
         match self {
             NodeContent::PlainText(_) => config.font_height,
-            NodeContent::FnApply(_) => config.font_height,
-            NodeContent::Loop(region_layout) => {
+            NodeContent::FnApply(..) => config.font_height,
+            NodeContent::Loop(_, region_layout) => {
                 let text_height = config.font_height;
 
                 text_height + config.region_spacing + region_layout.height()
             }
-            NodeContent::Switch(region_layouts) => {
+            NodeContent::Switch(_, region_layouts) => {
                 let text_height = config.font_height;
                 let max_region_height = region_layouts
                     .iter()
@@ -1197,6 +1283,12 @@ impl NodeContent {
     }
 }
 
+#[derive(Clone, PartialEq, Debug)]
+struct EdgeLayout {
+    lines: Range<usize>,
+    is_state_edge: bool,
+}
+
 fn connectors_width(count: u32, config: &Config) -> f32 {
     let width_sum = count as f32 * config.connector_size;
     let spacing = if count > 1 {
@@ -1206,4 +1298,78 @@ fn connectors_width(count: u32, config: &Config) -> f32 {
     };
 
     width_sum + spacing
+}
+
+#[cfg(test)]
+mod tests {
+    use std::iter;
+
+    use slir::rvsdg::ValueInput;
+    use slir::ty::{TY_DUMMY, TY_U32};
+    use slir::{BinaryOperator, FnArg, FnSig, Module, Symbol};
+
+    use super::*;
+
+    #[test]
+    fn test_generate_layout_does_not_panic() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let node_0 = rvsdg.add_const_u32(region, 5);
+
+        let node_1 = rvsdg.add_op_binary(
+            region,
+            BinaryOperator::Add,
+            ValueInput::argument(TY_U32, 0),
+            ValueInput::output(TY_U32, node_0, 0),
+        );
+
+        let node_2 = rvsdg.add_op_binary(
+            region,
+            BinaryOperator::Add,
+            ValueInput::output(TY_U32, node_1, 0),
+            ValueInput::argument(TY_U32, 1),
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueInput {
+                ty: TY_U32,
+                origin: ValueOrigin::Output {
+                    producer: node_2,
+                    output: 0,
+                },
+            },
+        );
+
+        // Shouldn't panic
+        RegionLayout::generate(&Config::default(), &module, &rvsdg, region);
+    }
 }

@@ -3,6 +3,7 @@ use leptos::prelude::*;
 use thaw::*;
 
 use crate::module_explorer::cfg_explorer::CfgExplorer;
+use crate::module_explorer::rvsdg_explorer::RvsdgExplorer;
 use crate::module_explorer::tpe::Type;
 use crate::module_explorer::ModuleData;
 
@@ -54,6 +55,8 @@ pub fn FunctionExplorer(
                     {move || {
                         if mode.read().as_str() == "cfg" {
                             view! {<CfgExplorer module function/>}.into_any()
+                        } else if mode.read().as_str() == "rvsdg" {
+                            view! {<RvsdgExplorer module function/>}.into_any()
                         } else {
                             view! {}.into_any()
                         }

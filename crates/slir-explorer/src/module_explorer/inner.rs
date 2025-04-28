@@ -3,6 +3,7 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use leptos::leptos_dom::logging::console_log;
 use leptos::prelude::*;
 use slotmap::{Key, KeyData};
 use thaw::*;
