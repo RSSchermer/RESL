@@ -40,7 +40,6 @@ enum TypeInner {
     AtomicF32,
     AtomicBool,
     Ptr,
-    #[cfg(test)]
     Dummy,
     Registered(usize),
 }
@@ -66,7 +65,6 @@ pub enum TypeKind {
     Struct(Struct),
     Ptr,
     Function(Function),
-    #[cfg(test)]
     Dummy,
 }
 
@@ -207,7 +205,6 @@ pub const TY_KIND_ATOMIC_I32: TypeKind = TypeKind::Atomic(ScalarKind::I32);
 pub const TY_KIND_ATOMIC_F32: TypeKind = TypeKind::Atomic(ScalarKind::F32);
 pub const TY_KIND_ATOMIC_BOOL: TypeKind = TypeKind::Atomic(ScalarKind::Bool);
 pub const TY_KIND_PTR: TypeKind = TypeKind::Ptr;
-#[cfg(test)]
 pub const TY_KIND_DUMMY: TypeKind = TypeKind::Dummy;
 
 pub const TY_U32: Type = Type(TypeInner::U32);
@@ -240,7 +237,6 @@ pub const TY_ATOMIC_I32: Type = Type(TypeInner::AtomicI32);
 pub const TY_ATOMIC_F32: Type = Type(TypeInner::AtomicF32);
 pub const TY_ATOMIC_BOOL: Type = Type(TypeInner::AtomicBool);
 pub const TY_PTR: Type = Type(TypeInner::Ptr);
-#[cfg(test)]
 pub const TY_DUMMY: Type = Type(TypeInner::Dummy);
 
 #[derive(Clone, Default, Serialize, Deserialize, Debug)]
@@ -399,7 +395,6 @@ impl Index<Type> for TypeRegistry {
             TypeInner::AtomicF32 => &TY_KIND_ATOMIC_F32,
             TypeInner::AtomicBool => &TY_KIND_ATOMIC_BOOL,
             TypeInner::Ptr => &TY_KIND_PTR,
-            #[cfg(test)]
             TypeInner::Dummy => &TY_KIND_DUMMY,
             TypeInner::Registered(index) => self.store.get_index(index).expect("unregistered type"),
         }
