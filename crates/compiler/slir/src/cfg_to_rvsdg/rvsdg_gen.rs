@@ -193,7 +193,11 @@ impl<'a> RegionBuilder<'a> {
 
             next_sibling_demand
                 .iter()
-                .map(|value| ValueOutput::new(self.body[*value].ty))
+                .map(|value| {
+                    let ty = self.body[*value].ty.expect("used local values should be typed");
+                    
+                    ValueOutput::new(ty)
+                })
                 .collect()
         } else {
             Vec::new()
@@ -321,7 +325,7 @@ impl<'a> RegionBuilder<'a> {
     }
 
     fn visit_op_alloca(&mut self, op: &OpAlloca) {
-        let node = self.rvsdg.add_op_alloca(self.region);
+        let node = self.rvsdg.add_op_alloca(self.region, op.ty);
 
         self.input_state_tracker
             .insert_value_node(op.result, node, 0);
@@ -812,7 +816,7 @@ mod tests {
                 ValueInput::argument(TY_U32, 0),
                 ValueInput::argument(TY_U32, 1),
             ],
-            vec![ValueOutput::new(Some(TY_U32))],
+            vec![ValueOutput::new(TY_U32)],
             None,
         );
 

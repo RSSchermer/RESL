@@ -122,12 +122,12 @@ impl ValueOrigin {
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct ValueOutput {
-    pub ty: Option<Type>,
+    pub ty: Type,
     pub users: ThinSet<ValueUser>,
 }
 
 impl ValueOutput {
-    pub fn new(ty: Option<Type>) -> Self {
+    pub fn new(ty: Type) -> Self {
         ValueOutput {
             ty,
             users: ThinSet::new(),
@@ -472,10 +472,15 @@ impl Connectivity for LoopNode {
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct OpAlloca {
+    ty: Type,
     value_output: ValueOutput,
 }
 
 impl OpAlloca {
+    pub fn ty(&self) -> Type {
+        self.ty
+    }
+    
     pub fn value_output(&self) -> &ValueOutput {
         &self.value_output
     }
@@ -625,7 +630,7 @@ impl Connectivity for OpPtrElementPtr {
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct OpApply {
     value_inputs: Vec<ValueInput>,
-    value_output: ValueOutput,
+    value_output: Option<ValueOutput>,
     state: State,
 }
 
@@ -649,11 +654,11 @@ impl Connectivity for OpApply {
     }
 
     fn value_outputs(&self) -> &[ValueOutput] {
-        slice::from_ref(&self.value_output)
+        self.value_output.as_slice()
     }
 
     fn value_outputs_mut(&mut self) -> &mut [ValueOutput] {
-        slice::from_mut(&mut self.value_output)
+        self.value_output.as_mut_slice()
     }
 
     fn state(&self) -> Option<&State> {
@@ -920,7 +925,7 @@ macro_rules! add_const_methods {
                     kind: NodeKind::Simple(
                         $node {
                             value,
-                            output: ValueOutput::new(Some($ty_handle)),
+                            output: ValueOutput::new($ty_handle),
                         }
                         .into(),
                     ),
@@ -953,7 +958,7 @@ impl Rvsdg {
         self.nodes.insert(NodeData {
             kind: NodeKind::UniformBinding(UniformBindingNode {
                 binding,
-                output: ValueOutput::new(Some(ty)),
+                output: ValueOutput::new(ty),
             }),
             region: None,
         })
@@ -965,7 +970,7 @@ impl Rvsdg {
         self.nodes.insert(NodeData {
             kind: NodeKind::StorageBinding(StorageBindingNode {
                 binding,
-                output: ValueOutput::new(Some(ty)),
+                output: ValueOutput::new(ty),
             }),
             region: None,
         })
@@ -981,7 +986,7 @@ impl Rvsdg {
         self.nodes.insert(NodeData {
             kind: NodeKind::WorkgroupBinding(WorkgroupBindingNode {
                 binding,
-                output: ValueOutput::new(Some(ty)),
+                output: ValueOutput::new(ty),
             }),
             region: None,
         })
@@ -999,8 +1004,7 @@ impl Rvsdg {
             .into_iter()
             .map(|dep| {
                 let ty = self[dep].value_outputs()[0]
-                    .ty
-                    .expect("expected dependency to by typed");
+                    .ty;
 
                 ValueInput {
                     ty,
@@ -1014,10 +1018,10 @@ impl Rvsdg {
 
         let mut region_arguments: Vec<ValueOutput> = dependencies
             .iter()
-            .map(|d| ValueOutput::new(Some(d.ty)))
+            .map(|d| ValueOutput::new(d.ty))
             .collect();
 
-        region_arguments.extend(sig.args.iter().map(|a| ValueOutput::new(Some(a.ty))));
+        region_arguments.extend(sig.args.iter().map(|a| ValueOutput::new(a.ty)));
 
         let region_results = sig
             .ret_ty
@@ -1036,7 +1040,7 @@ impl Rvsdg {
         let node = self.nodes.insert(NodeData {
             kind: NodeKind::Function(FunctionNode {
                 dependencies,
-                output: ValueOutput::new(Some(sig.ty)),
+                output: ValueOutput::new(sig.ty),
                 region,
             }),
             region: None,
@@ -1058,7 +1062,7 @@ impl Rvsdg {
                 let region = &self[region];
 
                 if let Some(a) = region.value_arguments().get(*i as usize) {
-                    if Some(value_input.ty) != a.ty {
+                    if value_input.ty != a.ty {
                         panic!("cannot connect a node input of type `{:?}` to a region argument of type `{:?}", value_input.ty, a.ty);
                     }
                 } else {
@@ -1073,7 +1077,7 @@ impl Rvsdg {
                 }
 
                 if let Some(output) = producer.value_outputs().get(*output as usize) {
-                    if Some(value_input.ty) != output.ty {
+                    if value_input.ty != output.ty {
                         panic!(
                             "cannot connect a node input of type `{:?}` to an output of type `{:?}",
                             value_input.ty, output.ty
@@ -1227,7 +1231,7 @@ impl Rvsdg {
                 // input is not to be passed on to the region as an argument, so we skip it.
                 .skip(1)
                 .map(|input| ValueOutput {
-                    ty: Some(input.ty),
+                    ty: input.ty,
                     users: Default::default(),
                 })
                 .collect(),
@@ -1236,8 +1240,7 @@ impl Rvsdg {
                 .iter()
                 .map(|output| ValueInput {
                     ty: output
-                        .ty
-                        .expect("expect output of a node that contains a region to be typed"),
+                        .ty,
                     origin: ValueOrigin::placeholder(),
                 })
                 .collect(),
@@ -1265,7 +1268,7 @@ impl Rvsdg {
 
         let value_outputs = value_inputs
             .iter()
-            .map(|input| ValueOutput::new(Some(input.ty)))
+            .map(|input| ValueOutput::new(input.ty))
             .collect::<Vec<_>>();
 
         let mut contained_region_results = vec![ValueInput {
@@ -1332,7 +1335,7 @@ impl Rvsdg {
             kind: NodeKind::Simple(
                 ConstPtr {
                     base,
-                    output: ValueOutput::new(Some(TY_PTR)),
+                    output: ValueOutput::new(TY_PTR),
                     offset,
                     ty,
                 }
@@ -1347,11 +1350,12 @@ impl Rvsdg {
         node
     }
 
-    pub fn add_op_alloca(&mut self, region: Region) -> Node {
+    pub fn add_op_alloca(&mut self, region: Region, ty: Type) -> Node {
         let node = self.nodes.insert(NodeData {
             kind: NodeKind::Simple(
                 OpAlloca {
-                    value_output: ValueOutput::new(None),
+                    ty,
+                    value_output: ValueOutput::new(TY_PTR),
                 }
                 .into(),
             ),
@@ -1377,7 +1381,7 @@ impl Rvsdg {
             kind: NodeKind::Simple(
                 OpLoad {
                     ptr_input: ptr_input,
-                    value_output: ValueOutput::new(Some(output_ty)),
+                    value_output: ValueOutput::new(output_ty),
                     state: State {
                         origin: state_origin,
                         user: StateUser::Result, // Temp value
@@ -1446,7 +1450,7 @@ impl Rvsdg {
             kind: NodeKind::Simple(
                 OpPtrElementPtr {
                     inputs,
-                    output: ValueOutput::new(Some(TY_PTR)),
+                    output: ValueOutput::new(TY_PTR),
                 }
                 .into(),
             ),
@@ -1478,7 +1482,7 @@ impl Rvsdg {
             kind: NodeKind::Simple(
                 OpApply {
                     value_inputs,
-                    value_output: ValueOutput::new(ret_ty),
+                    value_output: ret_ty.map(|ty| ValueOutput::new(ty)),
                     state: State {
                         origin: state_origin,
                         user: StateUser::Result, // Temp value
@@ -1509,7 +1513,7 @@ impl Rvsdg {
                 OpUnary {
                     operator,
                     input,
-                    output: ValueOutput::new(Some(input.ty)),
+                    output: ValueOutput::new(input.ty),
                 }
                 .into(),
             ),
@@ -1539,7 +1543,7 @@ impl Rvsdg {
                 OpBinary {
                     operator,
                     inputs: [lhs_input, rhs_input],
-                    output: ValueOutput::new(Some(lhs_input.ty)),
+                    output: ValueOutput::new(lhs_input.ty),
                 }
                 .into(),
             ),
@@ -1705,7 +1709,7 @@ mod tests {
         assert_eq!(
             rvsdg[region].value_arguments()[0],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Input {
                     consumer: node,
                     input: 0,
@@ -1715,7 +1719,7 @@ mod tests {
         assert_eq!(
             rvsdg[region].value_arguments()[1],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Input {
                     consumer: node,
                     input: 1,
@@ -1735,7 +1739,7 @@ mod tests {
         assert_eq!(
             rvsdg[node].value_outputs()[0],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Result(0)],
             }
         );
@@ -1816,7 +1820,7 @@ mod tests {
         assert_eq!(
             rvsdg[region].value_arguments()[0],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Input {
                     consumer: node_1,
                     input: 0,
@@ -1826,7 +1830,7 @@ mod tests {
         assert_eq!(
             rvsdg[region].value_arguments()[1],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Input {
                     consumer: node_2,
                     input: 1,
@@ -1839,7 +1843,7 @@ mod tests {
         assert_eq!(
             rvsdg[node_0].value_outputs()[0],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Input {
                     consumer: node_1,
                     input: 1,
@@ -1859,7 +1863,7 @@ mod tests {
         assert_eq!(
             rvsdg[node_1].value_outputs()[0],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Input {
                     consumer: node_2,
                     input: 0,
@@ -1879,7 +1883,7 @@ mod tests {
         assert_eq!(
             rvsdg[node_2].value_outputs()[0],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Result(0)],
             }
         );
@@ -1928,7 +1932,7 @@ mod tests {
                 ValueInput::argument(TY_U32, 0),
                 ValueInput::argument(TY_U32, 1),
             ],
-            vec![ValueOutput::new(Some(TY_U32))],
+            vec![ValueOutput::new(TY_U32)],
             None,
         );
 
@@ -1956,7 +1960,7 @@ mod tests {
         assert_eq!(
             rvsdg[region].value_arguments()[0],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Input {
                     consumer: switch_node,
                     input: 0,
@@ -1966,7 +1970,7 @@ mod tests {
         assert_eq!(
             rvsdg[region].value_arguments()[1],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Input {
                     consumer: switch_node,
                     input: 1,
@@ -1986,7 +1990,7 @@ mod tests {
         assert_eq!(
             rvsdg[switch_node].value_outputs()[0],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Result(0)],
             }
         );
@@ -1996,7 +2000,7 @@ mod tests {
         assert_eq!(
             rvsdg[branch_0].value_arguments()[0],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Input {
                     consumer: branch_0_node_1,
                     input: 0,
@@ -2008,7 +2012,7 @@ mod tests {
         assert_eq!(
             rvsdg[branch_0_node_0].value_outputs()[0],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Input {
                     consumer: branch_0_node_1,
                     input: 1,
@@ -2028,7 +2032,7 @@ mod tests {
         assert_eq!(
             rvsdg[branch_0_node_1].value_outputs()[0],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Result(0)],
             }
         );
@@ -2045,7 +2049,7 @@ mod tests {
         assert_eq!(
             rvsdg[branch_1].value_arguments()[0],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![],
             }
         );
@@ -2054,7 +2058,7 @@ mod tests {
         assert_eq!(
             rvsdg[branch_1_node_0].value_outputs()[0],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Result(0)],
             }
         );
@@ -2126,7 +2130,7 @@ mod tests {
         assert_eq!(
             rvsdg[region].value_arguments()[0],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Input {
                     consumer: loop_node,
                     input: 0,
@@ -2142,7 +2146,7 @@ mod tests {
         assert_eq!(
             rvsdg[loop_node].value_outputs()[0],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Result(0)],
             }
         );
@@ -2151,7 +2155,7 @@ mod tests {
         assert_eq!(
             rvsdg[loop_region].value_arguments()[0],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Input {
                     consumer: loop_node_1,
                     input: 0,
@@ -2163,7 +2167,7 @@ mod tests {
         assert_eq!(
             rvsdg[loop_node_0].value_outputs()[0],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Input {
                     consumer: loop_node_1,
                     input: 1,
@@ -2183,7 +2187,7 @@ mod tests {
         assert_eq!(
             rvsdg[loop_node_1].value_outputs()[0],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![
                     ValueUser::Input {
                         consumer: loop_node_3,
@@ -2198,7 +2202,7 @@ mod tests {
         assert_eq!(
             rvsdg[loop_node_2].value_outputs()[0],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Input {
                     consumer: loop_node_3,
                     input: 1,
@@ -2218,7 +2222,7 @@ mod tests {
         assert_eq!(
             rvsdg[loop_node_3].value_outputs()[0],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Result(0)],
             }
         );
@@ -2297,7 +2301,7 @@ mod tests {
         assert_eq!(
             rvsdg[region].value_arguments()[0],
             ValueOutput {
-                ty: Some(TY_PTR),
+                ty: TY_PTR,
                 users: thin_set![
                     ValueUser::Input {
                         consumer: node_1,
@@ -2316,7 +2320,7 @@ mod tests {
         assert_eq!(
             rvsdg[node_0].value_outputs()[0],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Input {
                     consumer: node_2,
                     input: 1,
@@ -2349,7 +2353,7 @@ mod tests {
         assert_eq!(
             rvsdg[node_2].value_outputs()[0],
             ValueOutput {
-                ty: Some(TY_U32),
+                ty: TY_U32,
                 users: thin_set![ValueUser::Input {
                     consumer: node_3,
                     input: 1

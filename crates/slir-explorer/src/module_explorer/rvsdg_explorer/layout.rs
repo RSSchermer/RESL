@@ -187,7 +187,7 @@ impl<'a> RegionLayoutBuilder<'a> {
             .iter()
             .map(|arg| ConnectorElement {
                 rect: Rect::default(),
-                ty: arg.ty,
+                ty: Some(arg.ty),
             })
             .collect::<Vec<_>>();
 
@@ -1017,7 +1017,7 @@ impl NodeLayout {
             .iter()
             .map(|o| ConnectorElement {
                 rect: Default::default(),
-                ty: o.ty,
+                ty: Some(o.ty),
             })
             .collect::<Vec<_>>();
 
