@@ -602,7 +602,7 @@ impl OpPtrElementPtr {
 
 impl Connectivity for OpPtrElementPtr {
     fn value_inputs(&self) -> &[ValueInput] {
-        &self.value_inputs()
+        &self.inputs
     }
 
     fn value_outputs(&self) -> &[ValueOutput] {
@@ -1092,37 +1092,32 @@ impl Rvsdg {
 
     /// Helper that adds all of a node's value inputs to the corresponding value outputs as users.
     fn connect_node_value_inputs(&mut self, node: Node) {
-        let node_data = &mut self.nodes[node] as *mut NodeData;
+        let region = self.nodes[node]
+            .region
+            .expect("node region should be set before connecting inputs");
+        let input_count = self.nodes[node].value_inputs().len();
 
-        // SAFETY: we assert that the producer nodes are not equal to the node itself, so we never
-        // alias the dereferenced raw pointer
-        unsafe {
-            let region = (*node_data)
-                .region
-                .expect("node region should be set before connecting inputs");
+        for input_index in 0..input_count {
+            let user = ValueUser::Input {
+                consumer: node,
+                input: input_index as u32,
+            };
 
-            for (i, input) in (*node_data).value_inputs().iter().enumerate() {
-                let user = ValueUser::Input {
-                    consumer: node,
-                    input: i as u32,
-                };
+            match self.nodes[node].value_inputs()[input_index].origin {
+                ValueOrigin::Argument(arg_index) => {
+                    self.regions[region].value_arguments[arg_index as usize]
+                        .users
+                        .insert(user);
+                }
+                ValueOrigin::Output { producer, output } => {
+                    assert_ne!(
+                        producer, node,
+                        "cannot connect a node input to one of its own outputs"
+                    );
 
-                match &input.origin {
-                    ValueOrigin::Argument(i) => {
-                        self.regions[region].value_arguments[*i as usize]
-                            .users
-                            .insert(user);
-                    }
-                    ValueOrigin::Output { producer, output } => {
-                        assert_ne!(
-                            *producer, node,
-                            "cannot connect a node input to one of its own outputs"
-                        );
-
-                        self.nodes[*producer].value_outputs_mut()[*output as usize]
-                            .users
-                            .insert(user);
-                    }
+                    self.nodes[producer].value_outputs_mut()[output as usize]
+                        .users
+                        .insert(user);
                 }
             }
         }
@@ -1437,9 +1432,15 @@ impl Rvsdg {
         ptr_input: ValueInput,
         index_inputs: impl IntoIterator<Item = ValueInput>,
     ) -> Node {
+        self.validate_node_value_input(region, &ptr_input);
+
         let mut inputs = vec![ptr_input];
 
-        inputs.extend(index_inputs);
+        for input in index_inputs {
+            self.validate_node_value_input(region, &input);
+
+            inputs.push(input);
+        }
 
         let node = self.nodes.insert(NodeData {
             kind: NodeKind::Simple(
