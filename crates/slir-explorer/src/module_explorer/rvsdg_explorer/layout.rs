@@ -59,12 +59,6 @@ pub struct Rect {
 }
 
 #[derive(Clone, Copy, PartialEq, Default, Debug)]
-pub struct Line {
-    pub start: [f32; 2],
-    pub end: [f32; 2],
-}
-
-#[derive(Clone, Copy, PartialEq, Default, Debug)]
 pub struct ConnectorElement {
     pub rect: Rect,
     pub ty: Option<Type>,
@@ -168,7 +162,7 @@ struct RegionLayoutBuilder<'a> {
     height: f32,
     argument_connectors: Vec<ConnectorElement>,
     result_connectors: Vec<ConnectorElement>,
-    edge_lines: Vec<Line>,
+    edge_vertices: Vec<[f32; 2]>,
     edge_layouts: Vec<EdgeLayout>,
 }
 
@@ -218,7 +212,7 @@ impl<'a> RegionLayoutBuilder<'a> {
             height: 0.0,
             argument_connectors,
             result_connectors,
-            edge_lines: vec![],
+            edge_vertices: vec![],
             edge_layouts: vec![],
         }
     }
@@ -462,14 +456,18 @@ impl<'a> RegionLayoutBuilder<'a> {
 
     fn generate_edges_lines(&mut self) {
         for i in 0..self.edges.len() {
-            self.generate_edge_lines(i);
+            self.generate_edge_vertices(i);
         }
     }
 
-    fn generate_edge_lines(&mut self, edge_index: usize) {
+    fn generate_edge_vertices(&mut self, edge_index: usize) {
         let edge = &self.edges[edge_index];
         let is_state_edge = edge.is_state_edge;
-        let range_start = self.edge_lines.len();
+        let range_start = self.edge_vertices.len();
+
+        let [x, mut y] = self.edge_start_coords(edge_index);
+
+        self.edge_vertices.push([x, y]);
 
         let base_traverser_zone = match edge.start {
             EdgeStart::Argument(_) => 0,
@@ -478,12 +476,7 @@ impl<'a> RegionLayoutBuilder<'a> {
         let base_traverser_y = self.traverser_zones[base_traverser_zone]
             .traverser_lane_y(edge.traverser_lane, &self.config);
 
-        let [mut x, mut y] = self.edge_start_coords(edge_index);
-
-        self.edge_lines.push(Line {
-            start: [x, y],
-            end: [x, base_traverser_y],
-        });
+        self.edge_vertices.push([x, base_traverser_y]);
 
         y = base_traverser_y;
 
@@ -493,45 +486,31 @@ impl<'a> RegionLayoutBuilder<'a> {
             let bypass_lane_x =
                 self.strata[stratum].bypass_lane_x(bypass_segment.bypass_lane, self.config);
 
-            // Add traverser line
-            self.edge_lines.push(Line {
-                start: [x, y],
-                end: [bypass_lane_x, y],
-            });
+            // Add traverser segment
+            self.edge_vertices.push([bypass_lane_x, y]);
 
             let traverser_lane_y = self.traverser_zones[stratum + 1]
                 .traverser_lane_y(bypass_segment.traverser_lane, &self.config);
 
-            // Add bypass line
-            self.edge_lines.push(Line {
-                start: [bypass_lane_x, y],
-                end: [bypass_lane_x, traverser_lane_y],
-            });
+            // Add bypass segment
+            self.edge_vertices.push([bypass_lane_x, traverser_lane_y]);
 
-            x = bypass_lane_x;
             y = traverser_lane_y;
-
             stratum += 1;
         }
 
         let end_coords = self.edge_end_coords(edge_index);
 
-        // Add the final traverser line
-        self.edge_lines.push(Line {
-            start: [x, y],
-            end: [end_coords[0], y],
-        });
+        // Add the final traverser segment
+        self.edge_vertices.push([end_coords[0], y]);
 
-        // Add the line that connects the end connector
-        self.edge_lines.push(Line {
-            start: [end_coords[0], y],
-            end: end_coords,
-        });
+        // Add the segment that connects the end connector
+        self.edge_vertices.push(end_coords);
 
-        let range_end = self.edge_lines.len();
+        let range_end = self.edge_vertices.len();
 
         self.edge_layouts.push(EdgeLayout {
-            lines: range_start..range_end,
+            vertices: range_start..range_end,
             is_state_edge,
         });
     }
@@ -681,7 +660,7 @@ impl<'a> RegionLayoutBuilder<'a> {
             argument_connectors,
             result_connectors,
             strata,
-            edge_lines,
+            edge_vertices,
             edge_layouts: edge_line_ranges,
             width,
             height,
@@ -698,7 +677,7 @@ impl<'a> RegionLayoutBuilder<'a> {
             argument_connectors,
             result_connectors,
             node_layouts,
-            edge_lines,
+            edge_vertices,
             edge_layouts: edge_line_ranges,
             width,
             height,
@@ -712,7 +691,7 @@ pub struct RegionLayout {
     argument_connectors: Vec<ConnectorElement>,
     result_connectors: Vec<ConnectorElement>,
     node_layouts: Vec<NodeLayout>,
-    edge_lines: Vec<Line>,
+    edge_vertices: Vec<[f32; 2]>,
     edge_layouts: Vec<EdgeLayout>,
     width: f32,
     height: f32,
@@ -771,10 +750,10 @@ impl RegionLayout {
         self.edge_layouts.len()
     }
 
-    pub fn edge_lines(&self, edge_index: usize) -> &[Line] {
-        let range = self.edge_layouts[edge_index].lines.clone();
+    pub fn edge_vertices(&self, edge_index: usize) -> &[[f32; 2]] {
+        let range = self.edge_layouts[edge_index].vertices.clone();
 
-        &self.edge_lines[range]
+        &self.edge_vertices[range]
     }
 
     pub fn is_state_edge(&self, edge_index: usize) -> bool {
@@ -1285,7 +1264,7 @@ impl NodeContent {
 
 #[derive(Clone, PartialEq, Debug)]
 struct EdgeLayout {
-    lines: Range<usize>,
+    vertices: Range<usize>,
     is_state_edge: bool,
 }
 

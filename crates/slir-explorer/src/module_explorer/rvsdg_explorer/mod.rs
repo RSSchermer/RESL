@@ -95,14 +95,17 @@ pub fn RvsdgExplorer(module: StoredValue<ModuleData>, function: slir::Function) 
                             .edge-lines .visible-line {
                                 stroke-width: 2.0px;
                                 stroke: black;
+                                fill: none;
                             }
                             
                             .edge-lines .hover-target {
                                 stroke-width: 10.0px;
                                 stroke: transparent;
+                                fill: none;
                             }
                             
                             .edge-lines:hover .visible-line {
+                                stroke-width: 4.0px;
                                 stroke: #fcba03;
                             }
                             "#

@@ -22,17 +22,21 @@ pub fn Region(module: StoredValue<ModuleData>, region: RegionLayout) -> impl Int
                 let edge_count = region.edge_count();
 
                 (0..edge_count).map(|i| {
-                    let lines = region.edge_lines(i);
+                    let path = region.edge_vertices(i).iter().map(|v| format!("{},{}", v[0], v[1])).collect::<Vec<_>>().join(" ");
                     let is_state_edge = region.is_state_edge(i);
 
+                    // We want to do some edge-highlighting on hover (see the <style> block in the
+                    // root svg element in mod.rs) to make it easier to visually track individual
+                    // edges. However, mousing over the actual thin edge lines is somewhat finicky,
+                    // so to make that easier we place the hover effect on an enclosing <g> element
+                    // and then draw a second line as part of that group that is styled to be
+                    // transparent (invisible) and has a greater stroke-width. This creates some
+                    // margin around the "visible line" that makes it a bit easier to mouse over
+                    // the element group and trigger the hover effect.
                     view! {
                         <g class="edge-lines" class=("state-edge", move || is_state_edge)>
-                            {region.edge_lines(i).iter().map(|line| {
-                                view! {
-                                    <line class="visible-line" x1=line.start[0] y1=line.start[1] x2=line.end[0] y2=line.end[1] />
-                                    <line class="hover-target" x1=line.start[0] y1=line.start[1] x2=line.end[0] y2=line.end[1] />
-                                }
-                            }).collect_view()}
+                            <polyline class="visible-line" points=path.clone() />
+                            <polyline class="hover-target" points=path />
                         </g>
                     }
 
