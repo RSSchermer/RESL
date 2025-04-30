@@ -454,14 +454,19 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
 
     fn alloca(&mut self, layout: TyAndLayout) -> Self::Value {
         let ty = ty_and_layout_resolve(self.cx, layout);
+        let ptr_ty = self
+            .module
+            .borrow_mut()
+            .ty
+            .register(slir::ty::TypeKind::Ptr(ty));
 
         let mut cfg = self.cfg.borrow_mut();
         let mut body = &mut cfg.function_body[self.function];
         let mut bb = &mut body.basic_blocks[self.basic_block];
 
-        let result = body.local_values.insert(slir::cfg::LocalValueData {
-            ty: Some(slir::ty::TY_PTR),
-        });
+        let result = body
+            .local_values
+            .insert(slir::cfg::LocalValueData { ty: Some(ptr_ty) });
 
         bb.statements
             .push(slir::cfg::OpAlloca { ty, result }.into());
@@ -559,6 +564,11 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         };
 
         let elem_ty = elem_ty.expect_slir_type();
+        let elem_ptr_ty = self
+            .module
+            .borrow_mut()
+            .ty
+            .register(slir::ty::TypeKind::Ptr(elem_ty));
         let elem = elem.expect_value();
         let dest = dest.val.llval.expect_value();
 
@@ -569,12 +579,12 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         for i in 0..count {
             let index = self.const_usize(i).expect_value();
             let elem_ptr = body.local_values.insert(LocalValueData {
-                ty: Some(slir::ty::TY_PTR),
+                ty: Some(elem_ptr_ty),
             });
 
             bb.statements.push(
                 slir::cfg::OpPtrElementPtr {
-                    ty: elem_ty,
+                    element_ty: elem_ty,
                     ptr: dest,
                     indices: thin_vec![index],
                     result: elem_ptr,
@@ -625,7 +635,12 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         ptr: Self::Value,
         indices: &[Self::Value],
     ) -> Self::Value {
-        let ty = ty.expect_slir_type();
+        let elem_ty = ty.expect_slir_type();
+        let elem_ptr_ty = self
+            .module
+            .borrow_mut()
+            .ty
+            .register(slir::ty::TypeKind::Ptr(elem_ty));
         let indices = indices.iter().map(|i| i.expect_value()).collect();
 
         let mut cfg = self.cfg.borrow_mut();
@@ -633,12 +648,12 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         let mut bb = &mut body.basic_blocks[self.basic_block];
 
         let result = body.local_values.insert(slir::cfg::LocalValueData {
-            ty: Some(slir::ty::TY_PTR),
+            ty: Some(elem_ptr_ty),
         });
 
         bb.statements.push(
             slir::cfg::OpPtrElementPtr {
-                ty,
+                element_ty: elem_ty,
                 ptr: ptr.expect_value(),
                 indices,
                 result,

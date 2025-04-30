@@ -84,7 +84,7 @@ fn InlineConst(
             ":"
             {format!("{}", v.offset)}
             "("
-            <Type module ty=v.ty/>
+            <Type module ty=v.pointee_ty/>
             ")"
         }
         .into_any(),

@@ -5,7 +5,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
 
-use crate::ty::{Type, TY_BOOL, TY_F32, TY_I32, TY_PTR, TY_U32};
+use crate::ty::{Type, TypeKind, TypeRegistry, TY_BOOL, TY_F32, TY_I32, TY_U32};
 use crate::util::thin_set::ThinSet;
 use crate::{
     BinaryOperator, Function, Module, StorageBinding, UnaryOperator, UniformBinding,
@@ -587,6 +587,7 @@ impl Connectivity for OpStore {
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct OpPtrElementPtr {
+    element_ty: Type,
     inputs: Vec<ValueInput>,
     output: ValueOutput,
 }
@@ -815,17 +816,12 @@ gen_const_nodes! {
 pub struct ConstPtr {
     base: ValueInput,
     output: ValueOutput,
-    offset: u32,
     ty: Type,
 }
 
 impl ConstPtr {
     pub fn base(&self) -> &ValueInput {
         &self.base
-    }
-
-    pub fn offset(&self) -> u32 {
-        self.offset
     }
 
     pub fn ty(&self) -> Type {
@@ -1324,18 +1320,19 @@ impl Rvsdg {
 
     pub fn add_const_ptr(
         &mut self,
+        type_registry: &mut TypeRegistry,
         region: Region,
+        pointee_ty: Type,
         base: ValueInput,
-        offset: u32,
-        ty: Type,
     ) -> Node {
+        let ptr_ty = type_registry.register(TypeKind::Ptr(pointee_ty));
+
         let node = self.nodes.insert(NodeData {
             kind: NodeKind::Simple(
                 ConstPtr {
                     base,
-                    output: ValueOutput::new(TY_PTR),
-                    offset,
-                    ty,
+                    output: ValueOutput::new(ptr_ty),
+                    ty: pointee_ty,
                 }
                 .into(),
             ),
@@ -1348,12 +1345,19 @@ impl Rvsdg {
         node
     }
 
-    pub fn add_op_alloca(&mut self, region: Region, ty: Type) -> Node {
+    pub fn add_op_alloca(
+        &mut self,
+        type_registry: &mut TypeRegistry,
+        region: Region,
+        ty: Type,
+    ) -> Node {
+        let ptr_ty = type_registry.register(TypeKind::Ptr(ty));
+
         let node = self.nodes.insert(NodeData {
             kind: NodeKind::Simple(
                 OpAlloca {
                     ty,
-                    value_output: ValueOutput::new(TY_PTR),
+                    value_output: ValueOutput::new(ptr_ty),
                 }
                 .into(),
             ),
@@ -1430,7 +1434,9 @@ impl Rvsdg {
 
     pub fn add_op_ptr_element_ptr(
         &mut self,
+        type_registry: &mut TypeRegistry,
         region: Region,
+        element_ty: Type,
         ptr_input: ValueInput,
         index_inputs: impl IntoIterator<Item = ValueInput>,
     ) -> Node {
@@ -1444,11 +1450,14 @@ impl Rvsdg {
             inputs.push(input);
         }
 
+        let ptr_ty = type_registry.register(TypeKind::Ptr(element_ty));
+
         let node = self.nodes.insert(NodeData {
             kind: NodeKind::Simple(
                 OpPtrElementPtr {
+                    element_ty,
                     inputs,
-                    output: ValueOutput::new(TY_PTR),
+                    output: ValueOutput::new(ptr_ty),
                 }
                 .into(),
             ),
@@ -2259,7 +2268,7 @@ mod tests {
                 ty: TY_DUMMY,
                 args: vec![
                     FnArg {
-                        ty: TY_PTR,
+                        ty: module.ty.register(TypeKind::Ptr(TY_U32)),
                         shader_io_binding: None,
                     },
                     FnArg {
@@ -2278,7 +2287,7 @@ mod tests {
         let node_0 = rvsdg.add_const_u32(region, 1);
         let node_1 = rvsdg.add_op_load(
             region,
-            ValueInput::argument(TY_PTR, 0),
+            ValueInput::argument(module.ty.register(TypeKind::Ptr(TY_U32)), 0),
             TY_U32,
             StateOrigin::Argument,
         );
@@ -2290,7 +2299,7 @@ mod tests {
         );
         let node_3 = rvsdg.add_op_store(
             region,
-            ValueInput::argument(TY_PTR, 0),
+            ValueInput::argument(module.ty.register(TypeKind::Ptr(TY_U32)), 0),
             ValueInput::output(TY_U32, node_2, 0),
             StateOrigin::Node(node_1),
         );
@@ -2299,7 +2308,7 @@ mod tests {
         assert_eq!(
             rvsdg[region].value_arguments()[0],
             ValueOutput {
-                ty: TY_PTR,
+                ty: module.ty.register(TypeKind::Ptr(TY_U32)),
                 users: thin_set![
                     ValueUser::Input {
                         consumer: node_1,
@@ -2329,7 +2338,7 @@ mod tests {
         // Check node_1 inputs and outputs
         assert_eq!(
             rvsdg[node_1].value_inputs()[0],
-            ValueInput::argument(TY_PTR, 0),
+            ValueInput::argument(module.ty.register(TypeKind::Ptr(TY_U32)), 0),
         );
         assert_eq!(
             rvsdg[node_1].state(),
@@ -2362,7 +2371,7 @@ mod tests {
         // Check node_3 inputs and outputs
         assert_eq!(
             rvsdg[node_3].value_inputs()[0],
-            ValueInput::argument(TY_PTR, 0),
+            ValueInput::argument(module.ty.register(TypeKind::Ptr(TY_U32)), 0),
         );
         assert_eq!(
             rvsdg[node_3].value_inputs()[1],

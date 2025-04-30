@@ -39,7 +39,6 @@ enum TypeInner {
     AtomicI32,
     AtomicF32,
     AtomicBool,
-    Ptr,
     Dummy,
     Registered(usize),
 }
@@ -63,7 +62,7 @@ pub enum TypeKind {
         count: u64,
     },
     Struct(Struct),
-    Ptr,
+    Ptr(Type),
     Function(Function),
     Dummy,
 }
@@ -204,7 +203,6 @@ pub const TY_KIND_ATOMIC_U32: TypeKind = TypeKind::Atomic(ScalarKind::U32);
 pub const TY_KIND_ATOMIC_I32: TypeKind = TypeKind::Atomic(ScalarKind::I32);
 pub const TY_KIND_ATOMIC_F32: TypeKind = TypeKind::Atomic(ScalarKind::F32);
 pub const TY_KIND_ATOMIC_BOOL: TypeKind = TypeKind::Atomic(ScalarKind::Bool);
-pub const TY_KIND_PTR: TypeKind = TypeKind::Ptr;
 pub const TY_KIND_DUMMY: TypeKind = TypeKind::Dummy;
 
 pub const TY_U32: Type = Type(TypeInner::U32);
@@ -236,7 +234,6 @@ pub const TY_ATOMIC_U32: Type = Type(TypeInner::AtomicU32);
 pub const TY_ATOMIC_I32: Type = Type(TypeInner::AtomicI32);
 pub const TY_ATOMIC_F32: Type = Type(TypeInner::AtomicF32);
 pub const TY_ATOMIC_BOOL: Type = Type(TypeInner::AtomicBool);
-pub const TY_PTR: Type = Type(TypeInner::Ptr);
 pub const TY_DUMMY: Type = Type(TypeInner::Dummy);
 
 #[derive(Clone, Default, Serialize, Deserialize, Debug)]
@@ -348,7 +345,6 @@ impl TypeRegistry {
                 columns: VectorSize::Four,
                 scalar: ScalarKind::F32,
             } => return TY_MAT4X4,
-            TypeKind::Ptr => return TY_PTR,
             #[cfg(test)]
             TypeKind::Dummy => return TY_DUMMY,
             _ => (),
@@ -394,7 +390,6 @@ impl Index<Type> for TypeRegistry {
             TypeInner::AtomicI32 => &TY_KIND_ATOMIC_I32,
             TypeInner::AtomicF32 => &TY_KIND_ATOMIC_F32,
             TypeInner::AtomicBool => &TY_KIND_ATOMIC_BOOL,
-            TypeInner::Ptr => &TY_KIND_PTR,
             TypeInner::Dummy => &TY_KIND_DUMMY,
             TypeInner::Registered(index) => self.store.get_index(index).expect("unregistered type"),
         }

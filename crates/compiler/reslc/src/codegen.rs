@@ -170,7 +170,7 @@ pub fn codegen_shader_modules(cx: &Cx) -> (slir::Module, slir::cfg::Cfg) {
 
             gather_and_import_dependencies(cx, &mut module, &mut cfg);
 
-            let rvsdg = slir::cfg_to_rvsdg::cfg_to_rvsdg(&module, &cfg);
+            let rvsdg = slir::cfg_to_rvsdg::cfg_to_rvsdg(&mut module, &cfg);
 
             // TODO: only add RVSDG for debug builds?
             create_slir_artifact(cx, &module, &cfg, Some(&rvsdg));

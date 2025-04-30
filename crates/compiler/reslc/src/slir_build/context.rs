@@ -12,7 +12,8 @@ use stable_mir::abi::{
 use stable_mir::mir::alloc::GlobalAlloc;
 use stable_mir::mir::mono::{Instance, StaticDef};
 use stable_mir::target::MachineInfo;
-use stable_mir::ty::{Align, Allocation};
+use stable_mir::ty::ConstantKind::Ty;
+use stable_mir::ty::{Align, Allocation, RigidTy, TyKind};
 use stable_mir::{abi, CrateDef};
 
 use crate::context::ReslContext;
@@ -29,7 +30,7 @@ use crate::stable_cg::traits::{
 };
 use crate::stable_cg::{Scalar, ScalarExt, TyAndLayoutExt, TypeKind};
 
-fn scalar_ty(scalar: abi::Scalar) -> slir::ty::Type {
+fn scalar_ty(cx: &CodegenContext, scalar: abi::Scalar, layout: TyAndLayout) -> slir::ty::Type {
     if matches!(
         scalar,
         abi::Scalar::Initialized {
@@ -54,7 +55,32 @@ fn scalar_ty(scalar: abi::Scalar) -> slir::ty::Type {
         Primitive::Float {
             length: FloatLength::F32,
         } => slir::ty::TY_F32,
-        Primitive::Pointer(_) => slir::ty::TY_PTR,
+        Primitive::Pointer(_) => {
+            let TyKind::RigidTy(ty) = layout.ty.kind() else {
+                bug!("primitive type must be rigid")
+            };
+
+            match ty {
+                RigidTy::Ref(_, pointee_ty, _) | RigidTy::RawPtr(pointee_ty, _) => {
+                    let pointee_layout = pointee_ty
+                        .layout()
+                        .expect("type must have known layout during codegen");
+                    let pointee_ty = ty_and_layout_resolve(
+                        cx,
+                        TyAndLayout {
+                            ty: pointee_ty,
+                            layout: pointee_layout,
+                        },
+                    );
+
+                    cx.module
+                        .borrow_mut()
+                        .ty
+                        .register(slir::ty::TypeKind::Ptr(pointee_ty))
+                }
+                _ => bug!("pointer primitive type must be a ref or raw ptr"),
+            }
+        }
         _ => bug!("primitive type not supported by SLIR"),
     }
 }
@@ -80,11 +106,11 @@ fn ty_and_layout_register(cx: &CodegenContext, layout: TyAndLayout) -> slir::ty:
 
     match shape.abi {
         ValueAbi::Scalar(scalar) => {
-            return scalar_ty(scalar);
+            return scalar_ty(cx, scalar, layout);
         }
         ValueAbi::ScalarPair(s0, s1) => {
-            let t0 = scalar_ty(s0);
-            let t1 = scalar_ty(s1);
+            let t0 = scalar_ty(cx, s0, layout.field(0));
+            let t1 = scalar_ty(cx, s1, layout.field(1));
 
             // My understanding from rustc_codegen_llvm is that there is never any padding between
             // the values of a scalar pair (as they are never meant to be stored to memory).
@@ -112,7 +138,7 @@ fn ty_and_layout_register(cx: &CodegenContext, layout: TyAndLayout) -> slir::ty:
             return ty;
         }
         ValueAbi::Vector { element, count } => {
-            let base = scalar_ty(element);
+            let base = scalar_ty(cx, element, layout.field(0));
             let stride = element.size(&MachineInfo::target()).bytes() as u64;
             let ty = cx
                 .module
@@ -374,8 +400,20 @@ impl<'a, 'tcx> PreDefineCodegenMethods for CodegenContext<'a, 'tcx> {
         let mut args = Vec::new();
 
         if matches!(abi.ret.mode, PassMode::Indirect { .. }) {
+            let ret_ty = ty_and_layout_resolve(
+                self,
+                TyAndLayout {
+                    ty: abi.ret.ty,
+                    layout: abi.ret.layout,
+                },
+            );
+
             args.push(slir::FnArg {
-                ty: slir::ty::TY_PTR,
+                ty: self
+                    .module
+                    .borrow_mut()
+                    .ty
+                    .register(slir::ty::TypeKind::Ptr(ret_ty)),
                 shader_io_binding: None,
             })
         }
@@ -402,8 +440,13 @@ impl<'a, 'tcx> PreDefineCodegenMethods for CodegenContext<'a, 'tcx> {
                         bug!("value ABI does not match pass-mode")
                     };
 
-                    let a_ty = scalar_ty(a);
-                    let b_ty = scalar_ty(b);
+                    let layout = TyAndLayout {
+                        ty: arg.ty,
+                        layout: arg.layout,
+                    };
+
+                    let a_ty = scalar_ty(self, a, layout.field(0));
+                    let b_ty = scalar_ty(self, b, layout.field(1));
 
                     args.push(slir::FnArg {
                         ty: a_ty,
@@ -415,8 +458,20 @@ impl<'a, 'tcx> PreDefineCodegenMethods for CodegenContext<'a, 'tcx> {
                     });
                 }
                 PassMode::Indirect { .. } => {
+                    let ty = ty_and_layout_resolve(
+                        self,
+                        TyAndLayout {
+                            ty: arg.ty,
+                            layout: arg.layout,
+                        },
+                    );
+
                     args.push(slir::FnArg {
-                        ty: slir::ty::TY_PTR,
+                        ty: self
+                            .module
+                            .borrow_mut()
+                            .ty
+                            .register(slir::ty::TypeKind::Ptr(ty)),
                         shader_io_binding: binding.map(shader_io_binding_to_slir),
                     });
                 }
@@ -609,7 +664,7 @@ impl<'a, 'tcx> ConstCodegenMethods for CodegenContext<'a, 'tcx> {
                 };
 
                 slir::cfg::InlineConst::Ptr(slir::cfg::Ptr {
-                    ty,
+                    pointee_ty: ty,
                     base,
                     offset: ptr.offset as u32,
                 })

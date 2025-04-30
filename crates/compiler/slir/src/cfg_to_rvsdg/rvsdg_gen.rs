@@ -17,7 +17,7 @@ use crate::cfg_to_rvsdg::control_tree::{
 };
 use crate::cfg_to_rvsdg::item_dependencies::{item_dependencies, Item, ItemDependencies};
 use crate::rvsdg::{Node, Region, Rvsdg, StateOrigin, ValueInput, ValueOrigin, ValueOutput};
-use crate::ty::{TY_BOOL, TY_F32, TY_I32, TY_PTR, TY_U32};
+use crate::ty::{Type, TypeKind, TY_BOOL, TY_F32, TY_I32, TY_U32};
 use crate::Module;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -43,16 +43,14 @@ enum InputState {
 /// prior nodes, thus such lookups should never fail.
 #[derive(Clone, Debug)]
 struct InputStateTracker<'a> {
-    module: &'a Module,
     body: &'a Body,
     state: FxHashMap<InputState, ValueInput>,
     current_arg_index: u32,
 }
 
 impl<'a> InputStateTracker<'a> {
-    fn new(module: &'a Module, body: &'a Body) -> Self {
+    fn new(body: &'a Body) -> Self {
         InputStateTracker {
-            module,
             body,
             state: Default::default(),
             current_arg_index: 0,
@@ -76,9 +74,7 @@ impl<'a> InputStateTracker<'a> {
         self.current_arg_index += 1;
     }
 
-    fn insert_item_arg(&mut self, item: Item) {
-        let ty = item.ty(self.module);
-
+    fn insert_item_arg(&mut self, item: Item, ty: Type) {
         let input = ValueInput {
             ty,
             origin: ValueOrigin::Argument(self.current_arg_index),
@@ -121,7 +117,7 @@ impl Index<Item> for InputStateTracker<'_> {
 
 struct RegionBuilder<'a> {
     region: Region,
-    module: &'a Module,
+    module: &'a mut Module,
     control_tree: &'a ControlTree,
     body: &'a Body,
     item_dependencies: &'a SliceAnnotation<Item>,
@@ -172,7 +168,7 @@ impl<'a> RegionBuilder<'a> {
         // We need to construct the input state for the branch regions, based on the inputs to the
         // switch node. Each region builder for a branch's sub-region will start with a copy of this
         // tracker.
-        let mut branch_input_state = InputStateTracker::new(self.module, self.body);
+        let mut branch_input_state = InputStateTracker::new(self.body);
 
         for value in demand {
             value_inputs.push(self.input_state_tracker[*value]);
@@ -181,7 +177,7 @@ impl<'a> RegionBuilder<'a> {
 
         for dep in item_deps {
             value_inputs.push(self.input_state_tracker[*dep]);
-            branch_input_state.insert_item_arg(*dep);
+            branch_input_state.insert_item_arg(*dep, dep.ty(self.module));
         }
 
         // The branching node needs to output the values that its next sibling demands.
@@ -252,7 +248,7 @@ impl<'a> RegionBuilder<'a> {
         let uses_state = self.state_use[node];
 
         let mut value_inputs = Vec::with_capacity(item_deps.len() + demand.len());
-        let mut inner_input_state = InputStateTracker::new(self.module, self.body);
+        let mut inner_input_state = InputStateTracker::new(self.body);
 
         for value in demand {
             value_inputs.push(self.input_state_tracker[*value]);
@@ -261,7 +257,7 @@ impl<'a> RegionBuilder<'a> {
 
         for dep in item_deps {
             value_inputs.push(self.input_state_tracker[*dep]);
-            inner_input_state.insert_item_arg(*dep);
+            inner_input_state.insert_item_arg(*dep, dep.ty(self.module));
         }
 
         let state_origin = uses_state.then(|| self.state_origin);
@@ -327,7 +323,9 @@ impl<'a> RegionBuilder<'a> {
     }
 
     fn visit_op_alloca(&mut self, op: &OpAlloca) {
-        let node = self.rvsdg.add_op_alloca(self.region, op.ty);
+        let node = self
+            .rvsdg
+            .add_op_alloca(&mut self.module.ty, self.region, op.ty);
 
         self.input_state_tracker
             .insert_value_node(op.result, node, 0);
@@ -374,9 +372,13 @@ impl<'a> RegionBuilder<'a> {
             .copied()
             .map(|v| self.resolve_value(v))
             .collect::<Vec<_>>();
-        let node = self
-            .rvsdg
-            .add_op_ptr_element_ptr(self.region, ptr_input, index_inputs);
+        let node = self.rvsdg.add_op_ptr_element_ptr(
+            &mut self.module.ty,
+            self.region,
+            op.element_ty,
+            ptr_input,
+            index_inputs,
+        );
 
         self.input_state_tracker
             .insert_value_node(op.result, node, 0);
@@ -450,11 +452,14 @@ impl<'a> RegionBuilder<'a> {
             InlineConst::Bool(v) => (TY_BOOL, self.rvsdg.add_const_bool(self.region, v)),
             InlineConst::Ptr(ptr) => {
                 let base = self.resolve_root_identifier(ptr.base);
-                let node = self
-                    .rvsdg
-                    .add_const_ptr(self.region, base, ptr.offset, ptr.ty);
+                let node = self.rvsdg.add_const_ptr(
+                    &mut self.module.ty,
+                    self.region,
+                    ptr.pointee_ty,
+                    base,
+                );
 
-                (TY_PTR, node)
+                (self.module.ty.register(TypeKind::Ptr(ptr.pointee_ty)), node)
             }
         };
 
@@ -499,7 +504,7 @@ impl<'a> RegionBuilder<'a> {
 fn build_body(
     into: Region,
     from: &Body,
-    module: &Module,
+    module: &mut Module,
     rvsdg: &mut Rvsdg,
     input_state_tracker: InputStateTracker,
 ) {
@@ -534,7 +539,7 @@ fn build_body(
 
 fn add_item(
     item: Item,
-    module: &Module,
+    module: &mut Module,
     cfg: &Cfg,
     item_dependencies: &ItemDependencies,
     rvsdg: &mut Rvsdg,
@@ -549,7 +554,7 @@ fn add_item(
             Item::Function(function) => {
                 let body = &cfg.function_body[function];
 
-                let mut input_state_tracker = InputStateTracker::new(module, body);
+                let mut input_state_tracker = InputStateTracker::new(body);
 
                 let (node, region) = if let Some(deps) = item_dependencies.get(&item) {
                     for dep in deps {
@@ -563,7 +568,7 @@ fn add_item(
                             item_node,
                         );
 
-                        input_state_tracker.insert_item_arg(*dep);
+                        input_state_tracker.insert_item_arg(*dep, dep.ty(module));
                     }
 
                     let deps = deps.iter().map(|dep| item_node.get(dep).unwrap()).copied();
@@ -587,7 +592,7 @@ fn add_item(
     }
 }
 
-pub fn cfg_to_rvsdg(module: &Module, cfg: &Cfg) -> Rvsdg {
+pub fn cfg_to_rvsdg(module: &mut Module, cfg: &Cfg) -> Rvsdg {
     let mut rvsdg = Rvsdg::new();
     let mut visited = FxHashSet::default();
     let mut item_node = FxHashMap::default();
@@ -682,7 +687,7 @@ mod tests {
 
         cfg.function_body.insert(function, body);
 
-        let actual = cfg_to_rvsdg(&module, &cfg);
+        let actual = cfg_to_rvsdg(&mut module, &cfg);
 
         let mut expected = Rvsdg::new();
 
@@ -806,7 +811,7 @@ mod tests {
 
         cfg.function_body.insert(function, body);
 
-        let actual = cfg_to_rvsdg(&module, &cfg);
+        let actual = cfg_to_rvsdg(&mut module, &cfg);
 
         let mut expected = Rvsdg::new();
 
@@ -914,7 +919,7 @@ mod tests {
 
         cfg.function_body.insert(function, body);
 
-        let actual = cfg_to_rvsdg(&module, &cfg);
+        let actual = cfg_to_rvsdg(&mut module, &cfg);
 
         let mut expected = Rvsdg::new();
 
@@ -972,7 +977,7 @@ mod tests {
                 ty: TY_DUMMY,
                 args: vec![
                     FnArg {
-                        ty: TY_PTR,
+                        ty: module.ty.register(TypeKind::Ptr(TY_U32)),
                         shader_io_binding: None,
                     },
                     FnArg {
@@ -1023,7 +1028,7 @@ mod tests {
 
         cfg.function_body.insert(function, body);
 
-        let actual = cfg_to_rvsdg(&module, &cfg);
+        let actual = cfg_to_rvsdg(&mut module, &cfg);
 
         let mut expected = Rvsdg::new();
 
@@ -1031,7 +1036,7 @@ mod tests {
 
         let node_0 = expected.add_op_load(
             region,
-            ValueInput::argument(TY_PTR, 0),
+            ValueInput::argument(module.ty.register(TypeKind::Ptr(TY_U32)), 0),
             TY_U32,
             StateOrigin::Argument,
         );
@@ -1044,7 +1049,7 @@ mod tests {
         );
         let node_3 = expected.add_op_store(
             region,
-            ValueInput::argument(TY_PTR, 0),
+            ValueInput::argument(module.ty.register(TypeKind::Ptr(TY_U32)), 0),
             ValueInput::output(TY_U32, node_2, 0),
             StateOrigin::Node(node_0),
         );

@@ -89,7 +89,7 @@ pub enum RootIdentifier {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct Ptr {
-    pub ty: Type,
+    pub pointee_ty: Type,
     pub base: RootIdentifier,
     pub offset: u32,
 }
@@ -116,7 +116,7 @@ impl InlineConst {
             InlineConst::I32(_) => TY_I32,
             InlineConst::F32(_) => TY_F32,
             InlineConst::Bool(_) => TY_BOOL,
-            InlineConst::Ptr(ptr) => ptr.ty,
+            InlineConst::Ptr(ptr) => ptr.pointee_ty,
         }
     }
 }
@@ -230,7 +230,7 @@ pub struct OpStore {
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct OpPtrElementPtr {
-    pub ty: Type,
+    pub element_ty: Type,
     pub ptr: Value,
     pub indices: ThinVec<Value>,
     pub result: LocalValue,
