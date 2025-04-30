@@ -194,8 +194,10 @@ impl<'a> RegionBuilder<'a> {
             next_sibling_demand
                 .iter()
                 .map(|value| {
-                    let ty = self.body[*value].ty.expect("used local values should be typed");
-                    
+                    let ty = self.body[*value]
+                        .ty
+                        .expect("used local values should be typed");
+
                     ValueOutput::new(ty)
                 })
                 .collect()

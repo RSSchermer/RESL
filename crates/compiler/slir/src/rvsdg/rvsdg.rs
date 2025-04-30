@@ -480,7 +480,7 @@ impl OpAlloca {
     pub fn ty(&self) -> Type {
         self.ty
     }
-    
+
     pub fn value_output(&self) -> &ValueOutput {
         &self.value_output
     }
@@ -1003,8 +1003,7 @@ impl Rvsdg {
         let dependencies: Vec<ValueInput> = dependencies
             .into_iter()
             .map(|dep| {
-                let ty = self[dep].value_outputs()[0]
-                    .ty;
+                let ty = self[dep].value_outputs()[0].ty;
 
                 ValueInput {
                     ty,
@@ -1239,8 +1238,7 @@ impl Rvsdg {
                 .value_outputs
                 .iter()
                 .map(|output| ValueInput {
-                    ty: output
-                        .ty,
+                    ty: output.ty,
                     origin: ValueOrigin::placeholder(),
                 })
                 .collect(),
