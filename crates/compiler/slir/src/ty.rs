@@ -1,12 +1,20 @@
+use std::fmt;
+use std::fmt::Formatter;
 use std::ops::{Deref, Index};
 
 use indexmap::IndexSet;
 use serde::{Deserialize, Serialize};
 
-use crate::{Function, Struct};
+use crate::{Function, Module, Struct};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct Type(TypeInner);
+
+impl Type {
+    pub fn to_string(&self, module: &Module) -> String {
+        module.ty[*self].to_string(module)
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 enum TypeInner {
@@ -75,6 +83,50 @@ impl TypeKind {
             panic!("not a function type");
         }
     }
+
+    pub fn is_ptr(&self) -> bool {
+        if let TypeKind::Ptr(_) = self {
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl TypeKind {
+    fn to_string(&self, module: &Module) -> String {
+        match self {
+            TypeKind::Scalar(scalar) => format!("{}", scalar),
+            TypeKind::Atomic(scalar) => format!("atomic<{}>", scalar),
+            TypeKind::Vector { size, scalar } => match size {
+                VectorSize::Two => format!("vec2<{}>", scalar),
+                VectorSize::Three => format!("vec3<{}>", scalar),
+                VectorSize::Four => format!("vec4<{}>", scalar),
+            },
+            TypeKind::Matrix {
+                rows,
+                columns,
+                scalar,
+            } => match (columns, rows) {
+                (VectorSize::Two, VectorSize::Two) => format!("mat2x2<{}>", scalar),
+                (VectorSize::Two, VectorSize::Three) => format!("mat2x3<{}>", scalar),
+                (VectorSize::Two, VectorSize::Four) => format!("mat2x4<{}>", scalar),
+                (VectorSize::Three, VectorSize::Two) => format!("mat3x2<{}>", scalar),
+                (VectorSize::Three, VectorSize::Three) => format!("mat3x3<{}>", scalar),
+                (VectorSize::Three, VectorSize::Four) => format!("mat3x4<{}>", scalar),
+                (VectorSize::Four, VectorSize::Two) => format!("mat4x2<{}>", scalar),
+                (VectorSize::Four, VectorSize::Three) => format!("mat4x3<{}>", scalar),
+                (VectorSize::Four, VectorSize::Four) => format!("mat4x4<{}>", scalar),
+            },
+            TypeKind::Array { base, count, .. } => {
+                format!("array<{}, {}>", base.to_string(module), count)
+            }
+            TypeKind::Struct(struct_handle) => format!("Struct_{}", struct_handle.to_usize()),
+            TypeKind::Ptr(pointee_ty) => format!("ptr<{}>", pointee_ty.to_string(module)),
+            TypeKind::Function(f) => format!("Function_{}_{}", f.module, f.name),
+            TypeKind::Dummy => "dummy".to_string(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
@@ -83,6 +135,17 @@ pub enum ScalarKind {
     U32,
     F32,
     Bool,
+}
+
+impl fmt::Display for ScalarKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ScalarKind::I32 => write!(f, "i32"),
+            ScalarKind::U32 => write!(f, "u32"),
+            ScalarKind::F32 => write!(f, "f32"),
+            ScalarKind::Bool => write!(f, "bool"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]

@@ -1339,12 +1339,9 @@ mod tests {
         rvsdg.reconnect_region_result(
             region,
             0,
-            ValueInput {
-                ty: TY_U32,
-                origin: ValueOrigin::Output {
-                    producer: node_2,
-                    output: 0,
-                },
+            ValueOrigin::Output {
+                producer: node_2,
+                output: 0,
             },
         );
 

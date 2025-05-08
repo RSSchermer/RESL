@@ -117,6 +117,10 @@ impl FnSigRegistry {
     pub fn keys(&self) -> impl Iterator<Item = Function> + use<'_> {
         self.store.keys().copied()
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&Function, &FnSig)> + use<'_> {
+        self.store.iter()
+    }
 }
 
 impl Index<Function> for FnSigRegistry {

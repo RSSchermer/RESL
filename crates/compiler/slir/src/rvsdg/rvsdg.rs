@@ -15,6 +15,8 @@ use crate::{
 pub trait Connectivity {
     fn value_inputs(&self) -> &[ValueInput];
 
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput];
+
     fn value_outputs(&self) -> &[ValueOutput];
 
     fn value_outputs_mut(&mut self) -> &mut [ValueOutput];
@@ -53,6 +55,10 @@ impl FunctionNode {
 impl Connectivity for FunctionNode {
     fn value_inputs(&self) -> &[ValueInput] {
         &self.dependencies
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        &mut self.dependencies
     }
 
     fn value_outputs(&self) -> &[ValueOutput] {
@@ -225,6 +231,215 @@ impl NodeData {
     pub fn kind(&self) -> &NodeKind {
         &self.kind
     }
+
+    pub fn region(&self) -> Region {
+        self.region
+            .expect("should have a region after initialization")
+    }
+
+    pub fn is_switch(&self) -> bool {
+        matches!(self.kind, NodeKind::Switch(_))
+    }
+
+    pub fn expect_switch(&self) -> &SwitchNode {
+        if let NodeKind::Switch(n) = &self.kind {
+            n
+        } else {
+            panic!("expected node to be a switch node")
+        }
+    }
+
+    pub fn is_loop(&self) -> bool {
+        matches!(self.kind, NodeKind::Loop(_))
+    }
+
+    pub fn expect_loop(&self) -> &LoopNode {
+        if let NodeKind::Loop(n) = &self.kind {
+            n
+        } else {
+            panic!("expected node to be a loop node")
+        }
+    }
+
+    pub fn is_uniform_binding(&self) -> bool {
+        matches!(self.kind, NodeKind::UniformBinding(_))
+    }
+
+    pub fn expect_uniform_binding(&self) -> &UniformBindingNode {
+        if let NodeKind::UniformBinding(n) = &self.kind {
+            n
+        } else {
+            panic!("expected node to be a uniform binding node")
+        }
+    }
+
+    pub fn is_storage_binding(&self) -> bool {
+        matches!(self.kind, NodeKind::StorageBinding(_))
+    }
+
+    pub fn expect_storage_binding(&self) -> &StorageBindingNode {
+        if let NodeKind::StorageBinding(n) = &self.kind {
+            n
+        } else {
+            panic!("expected node to be a storage binding node")
+        }
+    }
+
+    pub fn is_workgroup_binding(&self) -> bool {
+        matches!(self.kind, NodeKind::WorkgroupBinding(_))
+    }
+
+    pub fn expect_workgroup_binding(&self) -> &WorkgroupBindingNode {
+        if let NodeKind::WorkgroupBinding(n) = &self.kind {
+            n
+        } else {
+            panic!("expected node to be a workgroup binding node")
+        }
+    }
+
+    pub fn is_const_u32(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::ConstU32(_)))
+    }
+
+    pub fn expect_const_u32(&self) -> &ConstU32 {
+        if let NodeKind::Simple(SimpleNode::ConstU32(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be a `u32` constant")
+        }
+    }
+
+    pub fn is_const_i32(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::ConstI32(_)))
+    }
+
+    pub fn expect_const_i32(&self) -> &ConstI32 {
+        if let NodeKind::Simple(SimpleNode::ConstI32(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be an `i32` constant")
+        }
+    }
+
+    pub fn is_const_f32(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::ConstF32(_)))
+    }
+
+    pub fn expect_const_f32(&self) -> &ConstF32 {
+        if let NodeKind::Simple(SimpleNode::ConstF32(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be an `f32` constant")
+        }
+    }
+
+    pub fn is_const_bool(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::ConstBool(_)))
+    }
+
+    pub fn expect_const_bool(&self) -> &ConstBool {
+        if let NodeKind::Simple(SimpleNode::ConstBool(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be a `bool` constant")
+        }
+    }
+
+    pub fn is_const_ptr(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::ConstPtr(_)))
+    }
+
+    pub fn expect_const_ptr(&self) -> &ConstPtr {
+        if let NodeKind::Simple(SimpleNode::ConstPtr(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be a pointer constant")
+        }
+    }
+
+    pub fn is_op_alloca(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::OpAlloca(_)))
+    }
+
+    pub fn expect_op_alloca(&self) -> &OpAlloca {
+        if let NodeKind::Simple(SimpleNode::OpAlloca(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be an `alloca` operation")
+        }
+    }
+
+    pub fn is_op_load(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::OpLoad(_)))
+    }
+
+    pub fn expect_op_load(&self) -> &OpLoad {
+        if let NodeKind::Simple(SimpleNode::OpLoad(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be a `load` operation")
+        }
+    }
+
+    pub fn is_op_store(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::OpStore(_)))
+    }
+
+    pub fn expect_op_store(&self) -> &OpStore {
+        if let NodeKind::Simple(SimpleNode::OpStore(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be a `store` operation")
+        }
+    }
+
+    pub fn is_op_ptr_element_ptr(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::OpPtrElementPtr(_)))
+    }
+
+    pub fn expect_op_ptr_element_ptr(&self) -> &OpPtrElementPtr {
+        if let NodeKind::Simple(SimpleNode::OpPtrElementPtr(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be a `pointer-element-pointer` operation")
+        }
+    }
+
+    pub fn is_op_apply(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::OpApply(_)))
+    }
+
+    pub fn expect_op_apply(&self) -> &OpApply {
+        if let NodeKind::Simple(SimpleNode::OpApply(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be an `apply` operation")
+        }
+    }
+
+    pub fn is_op_unary(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::OpUnary(_)))
+    }
+
+    pub fn expect_op_unary(&self) -> &OpUnary {
+        if let NodeKind::Simple(SimpleNode::OpUnary(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be a `unary` operation")
+        }
+    }
+
+    pub fn is_op_binary(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::OpBinary(_)))
+    }
+
+    pub fn expect_op_binary(&self) -> &OpBinary {
+        if let NodeKind::Simple(SimpleNode::OpBinary(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be a `binary` operation")
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
@@ -258,6 +473,18 @@ impl Connectivity for NodeData {
             NodeKind::StorageBinding(n) => n.value_inputs(),
             NodeKind::WorkgroupBinding(n) => n.value_inputs(),
             NodeKind::Function(n) => n.value_inputs(),
+        }
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        match &mut self.kind {
+            NodeKind::Switch(n) => n.value_inputs_mut(),
+            NodeKind::Loop(n) => n.value_inputs_mut(),
+            NodeKind::Simple(n) => n.value_inputs_mut(),
+            NodeKind::UniformBinding(n) => n.value_inputs_mut(),
+            NodeKind::StorageBinding(n) => n.value_inputs_mut(),
+            NodeKind::WorkgroupBinding(n) => n.value_inputs_mut(),
+            NodeKind::Function(n) => n.value_inputs_mut(),
         }
     }
 
@@ -321,6 +548,10 @@ impl Connectivity for UniformBindingNode {
         &[]
     }
 
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        &mut []
+    }
+
     fn value_outputs(&self) -> &[ValueOutput] {
         slice::from_ref(&self.output)
     }
@@ -349,6 +580,10 @@ impl Connectivity for StorageBindingNode {
         &[]
     }
 
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        &mut []
+    }
+
     fn value_outputs(&self) -> &[ValueOutput] {
         slice::from_ref(&self.output)
     }
@@ -375,6 +610,10 @@ pub struct WorkgroupBindingNode {
 impl Connectivity for WorkgroupBindingNode {
     fn value_inputs(&self) -> &[ValueInput] {
         &[]
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        &mut []
     }
 
     fn value_outputs(&self) -> &[ValueOutput] {
@@ -417,6 +656,10 @@ impl Connectivity for SwitchNode {
         &self.value_inputs
     }
 
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        &mut self.value_inputs
+    }
+
     fn value_outputs(&self) -> &[ValueOutput] {
         &self.value_outputs
     }
@@ -451,6 +694,10 @@ impl LoopNode {
 impl Connectivity for LoopNode {
     fn value_inputs(&self) -> &[ValueInput] {
         &self.value_inputs
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        &mut self.value_inputs
     }
 
     fn value_outputs(&self) -> &[ValueOutput] {
@@ -489,6 +736,10 @@ impl OpAlloca {
 impl Connectivity for OpAlloca {
     fn value_inputs(&self) -> &[ValueInput] {
         &[]
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        &mut []
     }
 
     fn value_outputs(&self) -> &[ValueOutput] {
@@ -530,6 +781,10 @@ impl Connectivity for OpLoad {
         slice::from_ref(&self.ptr_input)
     }
 
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        slice::from_mut(&mut self.ptr_input)
+    }
+
     fn value_outputs(&self) -> &[ValueOutput] {
         slice::from_ref(&self.value_output)
     }
@@ -568,6 +823,10 @@ impl Connectivity for OpStore {
         &self.value_inputs
     }
 
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        &mut self.value_inputs
+    }
+
     fn value_outputs(&self) -> &[ValueOutput] {
         &[]
     }
@@ -593,6 +852,10 @@ pub struct OpPtrElementPtr {
 }
 
 impl OpPtrElementPtr {
+    pub fn element_ty(&self) -> Type {
+        self.element_ty
+    }
+
     pub fn ptr(&self) -> &ValueInput {
         &self.inputs[0]
     }
@@ -609,6 +872,10 @@ impl OpPtrElementPtr {
 impl Connectivity for OpPtrElementPtr {
     fn value_inputs(&self) -> &[ValueInput] {
         &self.inputs
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        &mut self.inputs
     }
 
     fn value_outputs(&self) -> &[ValueOutput] {
@@ -654,6 +921,10 @@ impl Connectivity for OpApply {
         &self.value_inputs
     }
 
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        &mut self.value_inputs
+    }
+
     fn value_outputs(&self) -> &[ValueOutput] {
         self.value_output.as_slice()
     }
@@ -695,6 +966,10 @@ impl OpUnary {
 impl Connectivity for OpUnary {
     fn value_inputs(&self) -> &[ValueInput] {
         slice::from_ref(&self.input)
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        slice::from_mut(&mut self.input)
     }
 
     fn value_outputs(&self) -> &[ValueOutput] {
@@ -744,6 +1019,10 @@ impl Connectivity for OpBinary {
         &self.inputs
     }
 
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        &mut self.inputs
+    }
+
     fn value_outputs(&self) -> &[ValueOutput] {
         slice::from_ref(&self.output)
     }
@@ -785,6 +1064,10 @@ macro_rules! gen_const_nodes {
                     &[]
                 }
 
+                fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+                    &mut []
+                }
+
                 fn value_outputs(&self) -> &[ValueOutput] {
                     slice::from_ref(&self.output)
                 }
@@ -816,7 +1099,7 @@ gen_const_nodes! {
 pub struct ConstPtr {
     base: ValueInput,
     output: ValueOutput,
-    ty: Type,
+    pointee_ty: Type,
 }
 
 impl ConstPtr {
@@ -824,14 +1107,18 @@ impl ConstPtr {
         &self.base
     }
 
-    pub fn ty(&self) -> Type {
-        self.ty
+    pub fn pointee_ty(&self) -> Type {
+        self.pointee_ty
     }
 }
 
 impl Connectivity for ConstPtr {
     fn value_inputs(&self) -> &[ValueInput] {
         slice::from_ref(&self.base)
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        slice::from_mut(&mut self.base)
     }
 
     fn value_outputs(&self) -> &[ValueOutput] {
@@ -862,6 +1149,12 @@ macro_rules! gen_simple_node {
             fn value_inputs(&self) -> &[ValueInput] {
                 match self {
                     $(SimpleNode::$ty(n) => n.value_inputs()),*
+                }
+            }
+
+            fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+                match self {
+                    $(SimpleNode::$ty(n) => n.value_inputs_mut()),*
                 }
             }
 
@@ -1051,114 +1344,6 @@ impl Rvsdg {
         self.function_regions.get(&function).copied()
     }
 
-    fn validate_node_value_input(&mut self, region: Region, value_input: &ValueInput) {
-        match &value_input.origin {
-            ValueOrigin::Argument(i) => {
-                let region = &self[region];
-
-                if let Some(a) = region.value_arguments().get(*i as usize) {
-                    if value_input.ty != a.ty {
-                        panic!("cannot connect a node input of type `{:?}` to a region argument of type `{:?}", value_input.ty, a.ty);
-                    }
-                } else {
-                    panic!("tried to connect to region argument `{}`, but region only has {} arguments", i, region.value_arguments().len());
-                }
-            }
-            ValueOrigin::Output { producer, output } => {
-                let producer = &self[*producer];
-
-                if producer.region != Some(region) {
-                    panic!("cannot connect a node input to a node output in a different region");
-                }
-
-                if let Some(output) = producer.value_outputs().get(*output as usize) {
-                    if value_input.ty != output.ty {
-                        panic!(
-                            "cannot connect a node input of type `{:?}` to an output of type `{:?}",
-                            value_input.ty, output.ty
-                        );
-                    }
-                } else {
-                    panic!(
-                        "tried to connect to node output `{}`, but the target only has {} outputs",
-                        output,
-                        producer.value_outputs().len()
-                    );
-                }
-            }
-        }
-    }
-
-    /// Helper that adds all of a node's value inputs to the corresponding value outputs as users.
-    fn connect_node_value_inputs(&mut self, node: Node) {
-        let region = self.nodes[node]
-            .region
-            .expect("node region should be set before connecting inputs");
-        let input_count = self.nodes[node].value_inputs().len();
-
-        for input_index in 0..input_count {
-            let user = ValueUser::Input {
-                consumer: node,
-                input: input_index as u32,
-            };
-
-            match self.nodes[node].value_inputs()[input_index].origin {
-                ValueOrigin::Argument(arg_index) => {
-                    self.regions[region].value_arguments[arg_index as usize]
-                        .users
-                        .insert(user);
-                }
-                ValueOrigin::Output { producer, output } => {
-                    assert_ne!(
-                        producer, node,
-                        "cannot connect a node input to one of its own outputs"
-                    );
-
-                    self.nodes[producer].value_outputs_mut()[output as usize]
-                        .users
-                        .insert(user);
-                }
-            }
-        }
-    }
-
-    fn insert_state(&mut self, region: Region, node: Node, state_origin: StateOrigin) {
-        fn adjust_user_origin(
-            rvsdg: &mut Rvsdg,
-            region: Region,
-            node: Node,
-            state_user: StateUser,
-        ) {
-            match state_user {
-                StateUser::Result => rvsdg.regions[region].state_result = StateOrigin::Node(node),
-                StateUser::Node(n) => {
-                    rvsdg.nodes[n].state_mut().unwrap().origin = StateOrigin::Node(node)
-                }
-            }
-        }
-
-        let state_user = match state_origin {
-            StateOrigin::Argument => {
-                let state_user = self[region].state_argument;
-
-                self.regions[region].state_argument = StateUser::Node(node);
-                adjust_user_origin(self, region, node, state_user);
-
-                state_user
-            }
-            StateOrigin::Node(n) => {
-                let state_user = self[n].state().unwrap().user;
-
-                self.nodes[n].state_mut().unwrap().user = StateUser::Node(node);
-                adjust_user_origin(self, region, node, state_user);
-
-                state_user
-            }
-        };
-
-        self.nodes[node].state_mut().unwrap().user = state_user;
-    }
-
     /// Adds a switch node to the given `region`.
     ///
     /// Must supply the `value_inputs` and `value_outputs` for the node at creation. May optionally
@@ -1203,7 +1388,7 @@ impl Rvsdg {
         });
 
         if let Some(state_origin) = state_origin {
-            self.insert_state(region, node, state_origin);
+            self.link_state(region, node, state_origin);
         }
 
         self.regions[region].nodes.insert(node);
@@ -1302,7 +1487,7 @@ impl Rvsdg {
         self.regions[contained_region].owner = Some(node);
 
         if let Some(state_origin) = state_origin {
-            self.insert_state(region, node, state_origin);
+            self.link_state(region, node, state_origin);
         }
 
         self.regions[region].nodes.insert(node);
@@ -1332,7 +1517,7 @@ impl Rvsdg {
                 ConstPtr {
                     base,
                     output: ValueOutput::new(ptr_ty),
-                    ty: pointee_ty,
+                    pointee_ty,
                 }
                 .into(),
             ),
@@ -1394,7 +1579,7 @@ impl Rvsdg {
             region: Some(region),
         });
 
-        self.insert_state(region, node, state_origin);
+        self.link_state(region, node, state_origin);
         self.regions[region].nodes.insert(node);
         self.connect_node_value_inputs(node);
 
@@ -1425,7 +1610,7 @@ impl Rvsdg {
             region: Some(region),
         });
 
-        self.insert_state(region, node, state_origin);
+        self.link_state(region, node, state_origin);
         self.regions[region].nodes.insert(node);
         self.connect_node_value_inputs(node);
 
@@ -1479,11 +1664,37 @@ impl Rvsdg {
         state_origin: StateOrigin,
     ) -> Node {
         let function = module.ty[fn_input.ty].expect_fn();
-        let ret_ty = module.fn_sigs[*function].ret_ty;
+        let sig = &module.fn_sigs[*function];
+        let ret_ty = sig.ret_ty;
 
         let mut value_inputs = vec![fn_input];
 
         value_inputs.extend(argument_inputs);
+
+        // The total length of the value_inputs also includes the function input, so subtract `1`.
+        let arg_count = value_inputs.len() - 1;
+
+        // Validate the value input arguments
+        assert_eq!(
+            sig.args.len(),
+            arg_count,
+            "function expects {} arguments, but {} were provided",
+            sig.args.len(),
+            arg_count
+        );
+        for i in 0..arg_count {
+            let sig_arg_ty = sig.args[i].ty;
+            let value_input_ty = value_inputs[i + 1].ty;
+
+            assert_eq!(
+                sig_arg_ty,
+                value_input_ty,
+                "argument `{}` expects a value of type `{}`, but a value input of type `{}` was provided",
+                i,
+                sig_arg_ty.to_string(module),
+                value_input_ty.to_string(module)
+            );
+        }
 
         let node = self.nodes.insert(NodeData {
             kind: NodeKind::Simple(
@@ -1500,7 +1711,7 @@ impl Rvsdg {
             region: Some(region),
         });
 
-        self.insert_state(region, node, state_origin);
+        self.link_state(region, node, state_origin);
         self.regions[region].nodes.insert(node);
         self.connect_node_value_inputs(node);
 
@@ -1563,48 +1774,271 @@ impl Rvsdg {
         node
     }
 
-    pub fn reconnect_region_result(&mut self, region: Region, result: u32, input: ValueInput) {
+    pub fn reconnect_value_input(&mut self, node: Node, value_input: u32, origin: ValueOrigin) {
+        let old_input = self.nodes[node].value_inputs()[value_input as usize];
+        let old_origin = old_input.origin;
+        let region = self.nodes[node].region();
+
+        self.validate_node_value_input(
+            region,
+            &ValueInput {
+                ty: old_input.ty,
+                origin,
+            },
+        );
+
+        let user = ValueUser::Input {
+            consumer: node,
+            input: value_input,
+        };
+
+        // Remove the input as a user from the old origin (if any)
+        if !old_origin.is_placeholder() {
+            self.remove_user(region, old_origin, user);
+        }
+
+        // Add the input as a user to the new origin
+        self.add_user(region, origin, user);
+
+        // Update the input's origin
+        self.nodes[node].value_inputs_mut()[value_input as usize].origin = origin;
+    }
+
+    pub fn reconnect_region_result(&mut self, region: Region, result: u32, origin: ValueOrigin) {
         let old_input = self[region].value_results[result as usize];
 
-        if old_input.ty != input.ty {
-            panic!(
-                "cannot connect an output of type {:?} to a region result of type {:?}",
-                input.ty, old_input.ty
-            );
-        }
+        self.validate_node_value_input(
+            region,
+            &ValueInput {
+                ty: old_input.ty,
+                origin,
+            },
+        );
 
-        if let ValueOrigin::Output { producer, .. } = input.origin {
-            if self[producer].region != Some(region) {
-                panic!("cannot connect a region result to the output of a node that does not belong to that region");
-            }
-        }
+        let user = ValueUser::Result(result);
 
         // Remove the result as a user from the old origin (if any)
         if !old_input.origin.is_placeholder() {
-            match old_input.origin {
-                ValueOrigin::Argument(i) => self.regions[region].value_arguments[i as usize]
-                    .users
-                    .remove(&ValueUser::Result(result)),
-                ValueOrigin::Output { producer, output } => self.nodes[producer]
-                    .value_outputs_mut()[output as usize]
-                    .users
-                    .remove(&ValueUser::Result(result)),
-            }
+            self.remove_user(region, old_input.origin, user);
         }
 
         // Add the result as a user to the new origin
-        match input.origin {
+        self.add_user(region, origin, user);
+
+        // Update the result's origin
+        self.regions[region].value_results[result as usize].origin = origin;
+    }
+
+    /// Removes the given `node` from the RVSDG.
+    ///
+    /// The node should not have any users for any of its value outputs, will panic otherwise.
+    pub fn remove_node(&mut self, node: Node) {
+        let data = &self.nodes[node];
+
+        for (i, output) in data.value_outputs().iter().enumerate() {
+            if !output.users.is_empty() {
+                panic!(
+                    "cannot remove a node that still has users (output {} has users)",
+                    i
+                );
+            }
+        }
+
+        let region = data.region();
+
+        for i in 0..data.value_inputs().len() {
+            let origin = self.nodes[node].value_inputs()[i].origin;
+
+            self.remove_user(
+                region,
+                origin,
+                ValueUser::Input {
+                    consumer: node,
+                    input: i as u32,
+                },
+            );
+        }
+
+        self.unlink_state(node);
+        self.regions[region].nodes.remove(&node);
+        self.nodes.remove(node);
+    }
+
+    /// A helper function that validates that the origin of the given `value_input` exists, belongs
+    /// to the given `region`, and matches the `value_input`'s expected typed.
+    fn validate_node_value_input(&mut self, region: Region, value_input: &ValueInput) {
+        match &value_input.origin {
+            ValueOrigin::Argument(i) => {
+                let region = &self[region];
+
+                if let Some(a) = region.value_arguments().get(*i as usize) {
+                    if value_input.ty != a.ty {
+                        panic!("cannot connect a node input of type `{:?}` to a region argument of type `{:?}", value_input.ty, a.ty);
+                    }
+                } else {
+                    panic!("tried to connect to region argument `{}`, but region only has {} arguments", i, region.value_arguments().len());
+                }
+            }
+            ValueOrigin::Output { producer, output } => {
+                let producer = &self[*producer];
+
+                if producer.region != Some(region) {
+                    panic!("cannot connect a node input to a node output in a different region");
+                }
+
+                if let Some(output) = producer.value_outputs().get(*output as usize) {
+                    if value_input.ty != output.ty {
+                        panic!(
+                            "cannot connect a node input of type `{:?}` to an output of type `{:?}",
+                            value_input.ty, output.ty
+                        );
+                    }
+                } else {
+                    panic!(
+                        "tried to connect to node output `{}`, but the target only has {} outputs",
+                        output,
+                        producer.value_outputs().len()
+                    );
+                }
+            }
+        }
+    }
+
+    /// Helper that adds all of a node's value inputs to the corresponding value outputs as users.
+    fn connect_node_value_inputs(&mut self, node: Node) {
+        let region = self.nodes[node]
+            .region
+            .expect("node region should be set before connecting inputs");
+        let input_count = self.nodes[node].value_inputs().len();
+
+        for input_index in 0..input_count {
+            let user = ValueUser::Input {
+                consumer: node,
+                input: input_index as u32,
+            };
+
+            match self.nodes[node].value_inputs()[input_index].origin {
+                ValueOrigin::Argument(arg_index) => {
+                    self.regions[region].value_arguments[arg_index as usize]
+                        .users
+                        .insert(user);
+                }
+                ValueOrigin::Output { producer, output } => {
+                    assert_ne!(
+                        producer, node,
+                        "cannot connect a node input to one of its own outputs"
+                    );
+
+                    self.nodes[producer].value_outputs_mut()[output as usize]
+                        .users
+                        .insert(user);
+                }
+            }
+        }
+    }
+
+    /// A helper function that links the given `node` into the state chain after the `state_origin`.
+    fn link_state(&mut self, region: Region, node: Node, state_origin: StateOrigin) {
+        fn adjust_user_origin(
+            rvsdg: &mut Rvsdg,
+            region: Region,
+            node: Node,
+            state_user: StateUser,
+        ) {
+            match state_user {
+                StateUser::Result => rvsdg.regions[region].state_result = StateOrigin::Node(node),
+                StateUser::Node(n) => {
+                    rvsdg.nodes[n].state_mut().unwrap().origin = StateOrigin::Node(node)
+                }
+            }
+        }
+
+        let state_user = match state_origin {
+            StateOrigin::Argument => {
+                let state_user = self[region].state_argument;
+
+                self.regions[region].state_argument = StateUser::Node(node);
+                adjust_user_origin(self, region, node, state_user);
+
+                state_user
+            }
+            StateOrigin::Node(n) => {
+                let state_user = self[n].state().unwrap().user;
+
+                self.nodes[n].state_mut().unwrap().user = StateUser::Node(node);
+                adjust_user_origin(self, region, node, state_user);
+
+                state_user
+            }
+        };
+
+        self.nodes[node].state_mut().unwrap().user = state_user;
+    }
+
+    /// Helper function that unlinks the given `node` from its region's state chain.
+    fn unlink_state(&mut self, node: Node) {
+        let Some(state) = self.nodes[node].state().copied() else {
+            // The node has no state information, there's nothing to unlink.
+            return;
+        };
+
+        let region = self.nodes[node].region();
+
+        match state.origin {
+            StateOrigin::Argument => {
+                self.regions[region].state_argument = state.user;
+            }
+            StateOrigin::Node(producer) => {
+                self.nodes[producer]
+                    .state_mut()
+                    .expect("a node that is part of the state chain should have state information")
+                    .user = state.user;
+            }
+        }
+
+        match state.user {
+            StateUser::Result => {
+                self.regions[region].state_result = state.origin;
+            }
+            StateUser::Node(consumer) => {
+                self.nodes[consumer]
+                    .state_mut()
+                    .expect("a node that is part of the state chain should have state information")
+                    .origin = state.origin;
+            }
+        }
+    }
+
+    /// Helper function for adding a user to an origin.
+    ///
+    /// Does not modify the user side; this needs to be updated separately to ensure a valid two-way
+    /// connection.
+    fn add_user(&mut self, region: Region, origin: ValueOrigin, user: ValueUser) {
+        match origin {
             ValueOrigin::Argument(i) => self.regions[region].value_arguments[i as usize]
                 .users
-                .insert(ValueUser::Result(result)),
+                .insert(user),
             ValueOrigin::Output { producer, output } => self.nodes[producer].value_outputs_mut()
                 [output as usize]
                 .users
-                .insert(ValueUser::Result(result)),
+                .insert(user),
         }
+    }
 
-        // Update the result's origin
-        self.regions[region].value_results[result as usize].origin = input.origin;
+    /// Helper function for removing a user from an origin.
+    ///
+    /// Does not modify the user side; this needs to be updated separately to ensure a valid two-way
+    /// connection.
+    fn remove_user(&mut self, region: Region, origin: ValueOrigin, user: ValueUser) {
+        match origin {
+            ValueOrigin::Argument(i) => self.regions[region].value_arguments[i as usize]
+                .users
+                .remove(&user),
+            ValueOrigin::Output { producer, output } => self.nodes[producer].value_outputs_mut()
+                [output as usize]
+                .users
+                .remove(&user),
+        }
     }
 }
 
@@ -1703,12 +2137,9 @@ mod tests {
         rvsdg.reconnect_region_result(
             region,
             0,
-            ValueInput {
-                ty: TY_U32,
-                origin: ValueOrigin::Output {
-                    producer: node,
-                    output: 0,
-                },
+            ValueOrigin::Output {
+                producer: node,
+                output: 0,
             },
         );
 
@@ -1814,12 +2245,9 @@ mod tests {
         rvsdg.reconnect_region_result(
             region,
             0,
-            ValueInput {
-                ty: TY_U32,
-                origin: ValueOrigin::Output {
-                    producer: node_2,
-                    output: 0,
-                },
+            ValueOrigin::Output {
+                producer: node_2,
+                output: 0,
             },
         );
 
@@ -1943,7 +2371,14 @@ mod tests {
             None,
         );
 
-        rvsdg.reconnect_region_result(region, 0, ValueInput::output(TY_U32, switch_node, 0));
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: switch_node,
+                output: 0,
+            },
+        );
 
         let branch_0 = rvsdg.add_switch_branch(switch_node);
 
@@ -1955,13 +2390,27 @@ mod tests {
             ValueInput::output(TY_U32, branch_0_node_0, 0),
         );
 
-        rvsdg.reconnect_region_result(branch_0, 0, ValueInput::output(TY_U32, branch_0_node_1, 0));
+        rvsdg.reconnect_region_result(
+            branch_0,
+            0,
+            ValueOrigin::Output {
+                producer: branch_0_node_1,
+                output: 0,
+            },
+        );
 
         let branch_1 = rvsdg.add_switch_branch(switch_node);
 
         let branch_1_node_0 = rvsdg.add_const_u32(branch_1, 0);
 
-        rvsdg.reconnect_region_result(branch_1, 0, ValueInput::output(TY_U32, branch_1_node_0, 0));
+        rvsdg.reconnect_region_result(
+            branch_1,
+            0,
+            ValueOrigin::Output {
+                producer: branch_1_node_0,
+                output: 0,
+            },
+        );
 
         // Check the base region arguments
         assert_eq!(
@@ -2113,7 +2562,14 @@ mod tests {
         let (loop_node, loop_region) =
             rvsdg.add_loop(region, vec![ValueInput::argument(TY_U32, 0)], None);
 
-        rvsdg.reconnect_region_result(region, 0, ValueInput::output(TY_U32, loop_node, 0));
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: loop_node,
+                output: 0,
+            },
+        );
 
         let loop_node_0 = rvsdg.add_const_u32(loop_region, 1);
         let loop_node_1 = rvsdg.add_op_binary(
@@ -2130,8 +2586,22 @@ mod tests {
             ValueInput::output(TY_U32, loop_node_2, 0),
         );
 
-        rvsdg.reconnect_region_result(loop_region, 0, ValueInput::output(TY_U32, loop_node_3, 0));
-        rvsdg.reconnect_region_result(loop_region, 1, ValueInput::output(TY_U32, loop_node_1, 0));
+        rvsdg.reconnect_region_result(
+            loop_region,
+            0,
+            ValueOrigin::Output {
+                producer: loop_node_3,
+                output: 0,
+            },
+        );
+        rvsdg.reconnect_region_result(
+            loop_region,
+            1,
+            ValueOrigin::Output {
+                producer: loop_node_1,
+                output: 0,
+            },
+        );
 
         // Check the base region arguments
         assert_eq!(

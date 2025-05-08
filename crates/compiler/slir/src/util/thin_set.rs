@@ -1,3 +1,4 @@
+use std::ops::Index;
 use std::slice;
 
 use serde::{Deserialize, Serialize};
@@ -42,8 +43,24 @@ impl<T> ThinSet<T> {
         }
     }
 
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
     pub fn iter(&self) -> slice::Iter<T> {
         self.inner.iter()
+    }
+}
+
+impl<T> Index<usize> for ThinSet<T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.inner.index(index)
     }
 }
 

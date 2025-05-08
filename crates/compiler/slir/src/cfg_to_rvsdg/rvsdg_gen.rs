@@ -430,7 +430,7 @@ impl<'a> RegionBuilder<'a> {
         let input = self.resolve_value(value);
 
         self.rvsdg
-            .reconnect_region_result(self.region, result, input);
+            .reconnect_region_result(self.region, result, input.origin);
     }
 
     fn resolve_value(&mut self, value: Value) -> ValueInput {
@@ -712,12 +712,9 @@ mod tests {
         expected.reconnect_region_result(
             region,
             0,
-            ValueInput {
-                ty: TY_U32,
-                origin: ValueOrigin::Output {
-                    producer: node_2,
-                    output: 0,
-                },
+            ValueOrigin::Output {
+                producer: node_2,
+                output: 0,
             },
         );
 
@@ -827,7 +824,14 @@ mod tests {
             None,
         );
 
-        expected.reconnect_region_result(region, 0, ValueInput::output(TY_U32, switch_node, 0));
+        expected.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: switch_node,
+                output: 0,
+            },
+        );
 
         let branch_0 = expected.add_switch_branch(switch_node);
 
@@ -842,7 +846,10 @@ mod tests {
         expected.reconnect_region_result(
             branch_0,
             0,
-            ValueInput::output(TY_U32, branch_0_node_1, 0),
+            ValueOrigin::Output {
+                producer: branch_0_node_1,
+                output: 0,
+            },
         );
 
         let branch_1 = expected.add_switch_branch(switch_node);
@@ -852,7 +859,10 @@ mod tests {
         expected.reconnect_region_result(
             branch_1,
             0,
-            ValueInput::output(TY_U32, branch_1_node_0, 0),
+            ValueOrigin::Output {
+                producer: branch_1_node_0,
+                output: 0,
+            },
         );
 
         dbg!(&actual);
@@ -928,7 +938,14 @@ mod tests {
         let (loop_node, loop_region) =
             expected.add_loop(region, vec![ValueInput::argument(TY_U32, 0)], None);
 
-        expected.reconnect_region_result(region, 0, ValueInput::output(TY_U32, loop_node, 0));
+        expected.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: loop_node,
+                output: 0,
+            },
+        );
 
         let loop_node_0 = expected.add_const_u32(loop_region, 1);
         let loop_node_1 = expected.add_op_binary(
@@ -948,12 +965,18 @@ mod tests {
         expected.reconnect_region_result(
             loop_region,
             0,
-            ValueInput::output(TY_U32, loop_node_3, 0),
+            ValueOrigin::Output {
+                producer: loop_node_3,
+                output: 0,
+            },
         );
         expected.reconnect_region_result(
             loop_region,
             1,
-            ValueInput::output(TY_U32, loop_node_1, 0),
+            ValueOrigin::Output {
+                producer: loop_node_1,
+                output: 0,
+            },
         );
 
         dbg!(&actual);

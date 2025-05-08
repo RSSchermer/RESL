@@ -1,3 +1,5 @@
+#![feature(let_chains)]
+
 pub mod cfg;
 pub mod cfg_to_rvsdg;
 pub mod dependencies;
