@@ -54,6 +54,10 @@ impl<T> ThinSet<T> {
     pub fn iter(&self) -> slice::Iter<T> {
         self.inner.iter()
     }
+
+    pub fn iter_mut(&mut self) -> slice::IterMut<T> {
+        self.inner.iter_mut()
+    }
 }
 
 impl<T> Index<usize> for ThinSet<T> {

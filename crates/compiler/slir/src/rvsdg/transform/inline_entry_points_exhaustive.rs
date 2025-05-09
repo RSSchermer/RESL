@@ -44,6 +44,9 @@ pub fn inline_entry_points_exhaustive(module: &mut Module, rvsdg: &mut Rvsdg) {
                     }
                 }
             }
+
+            // After we're done inlining, clean up the entry point's dependencies
+            rvsdg.remove_unused_dependencies(function_node);
         }
     }
 }
@@ -201,5 +204,11 @@ mod tests {
                 .count(),
             0
         );
+
+        // The entry_point function should no longer have any dependencies.
+        assert!(rvsdg[entry_point_node]
+            .expect_function()
+            .dependencies()
+            .is_empty());
     }
 }

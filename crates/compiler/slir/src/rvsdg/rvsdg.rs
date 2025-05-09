@@ -1309,8 +1309,10 @@ impl Rvsdg {
     ) -> (Node, Region) {
         let sig = &module.fn_sigs[function];
 
-        let dependencies: Vec<ValueInput> = dependencies
-            .into_iter()
+        let dep_nodes = dependencies.into_iter().collect::<Vec<_>>();
+        let dependencies: Vec<ValueInput> = dep_nodes
+            .iter()
+            .copied()
             .map(|dep| {
                 let ty = self[dep].value_outputs()[0].ty;
 
@@ -1347,7 +1349,7 @@ impl Rvsdg {
 
         let node = self.nodes.insert(NodeData {
             kind: NodeKind::Function(FunctionNode {
-                dependencies,
+                dependencies: dependencies.clone(),
                 output: ValueOutput::new(sig.ty),
                 region,
             }),
@@ -1356,6 +1358,15 @@ impl Rvsdg {
 
         self.regions[region].owner = Some(node);
         self.function_node.insert(function, node);
+
+        for (i, dep) in dep_nodes.into_iter().enumerate() {
+            self.nodes[dep].value_outputs_mut()[0]
+                .users
+                .insert(ValueUser::Input {
+                    consumer: node,
+                    input: i as u32,
+                })
+        }
 
         (node, region)
     }
@@ -1934,6 +1945,78 @@ impl Rvsdg {
         index as u32
     }
 
+    /// For the given `function_node`, removes any the dependencies (and their corresponding region
+    /// arguments) that don't have any users.
+    pub fn remove_unused_dependencies(&mut self, function_node: Node) {
+        let node_data = self.nodes[function_node].expect_function_mut();
+        let body_region = node_data.body_region();
+        let mut correction_start = node_data.dependencies.len();
+
+        // Iterate over the dependencies in reverse order, so that when we remove dependencies
+        // during iteration, we don't skip nodes
+        for i in (0..node_data.dependencies.len()).rev() {
+            if self.regions[body_region].value_arguments()[i]
+                .users
+                .is_empty()
+            {
+                let input = self.nodes[function_node]
+                    .expect_function_mut()
+                    .dependencies
+                    .remove(i);
+
+                self.regions[body_region].value_arguments.remove(i);
+
+                let ValueOrigin::Output {
+                    producer,
+                    output: 0,
+                } = input.origin
+                else {
+                    panic!("dependency origin should be the first output of a node");
+                };
+
+                self.nodes[producer].value_outputs_mut()[0]
+                    .users
+                    .remove(&ValueUser::Input {
+                        consumer: function_node,
+                        input: i as u32,
+                    });
+
+                // We won't have to correct all region arguments, only those that came after the
+                // left-most dependency removed. Since we're iterating in reverse, simply setting
+                // `correction_start` to the current index should ensure it ends up being the
+                // correct index at the end of this loop.
+                correction_start = i;
+            }
+        }
+
+        // Correct the region argument back-edge connections.
+        self.correct_region_argument_connections(body_region, correction_start);
+
+        let new_dep_count = self.nodes[function_node]
+            .expect_function()
+            .dependencies
+            .len();
+
+        // Correct the edges from dependency nodes to the remaining dependency inputs.
+        for i in 0..new_dep_count {
+            let ValueOrigin::Output {
+                producer: dep_node,
+                output: 0,
+            } = self.nodes[function_node].expect_function().dependencies()[i].origin
+            else {
+                panic!("dependency origin should be the first output of a node");
+            };
+
+            for user in self.nodes[dep_node].value_outputs_mut()[0].users.iter_mut() {
+                if let ValueUser::Input { consumer, input } = user
+                    && *consumer == function_node
+                {
+                    *input = i as u32;
+                }
+            }
+        }
+    }
+
     /// Helper function that inserts an argument of the given `ty` into the given `region` at the
     /// given `index`.
     fn insert_region_argument(&mut self, region: Region, ty: Type, at: usize) {
@@ -1953,9 +2036,16 @@ impl Rvsdg {
         // incorrect, so we visit all their consumers and adjust their value origins to reflect the
         // new argument position.
         let correction_start = at + 1;
-        let correction_end = region_data.value_arguments.len();
 
-        for i in correction_start..correction_end {
+        self.correct_region_argument_connections(region, correction_start);
+    }
+
+    /// Helper function that for each argument with an index of `start` or greater, updates all
+    /// back-edges from that argument's users to use the current index of that argument.
+    fn correct_region_argument_connections(&mut self, region: Region, start: usize) {
+        let end = self.regions[region].value_arguments.len();
+
+        for i in start..end {
             let user_count = self.regions[region].value_arguments[i].users.len();
 
             for j in 0..user_count {
@@ -2967,5 +3057,125 @@ mod tests {
         // Check region results
         assert!(rvsdg[region].value_results().is_empty());
         assert_eq!(rvsdg[region].state_result(), &StateOrigin::Node(node_3),);
+    }
+
+    #[test]
+    fn test_remove_unused_dependencies() {
+        let mut module = Module::new(Symbol::from_ref(""));
+
+        let dependency_0 = Function {
+            name: Symbol::from_ref("dependency_0"),
+            module: Symbol::from_ref(""),
+        };
+        let dependency_0_ty = module.ty.register(TypeKind::Function(dependency_0));
+
+        module.fn_sigs.register(
+            dependency_0,
+            FnSig {
+                name: Default::default(),
+                ty: dependency_0_ty,
+                args: vec![],
+                ret_ty: None,
+            },
+        );
+
+        let dependency_1 = Function {
+            name: Symbol::from_ref("dependency_1"),
+            module: Symbol::from_ref(""),
+        };
+        let dependency_1_ty = module.ty.register(TypeKind::Function(dependency_1));
+
+        module.fn_sigs.register(
+            dependency_1,
+            FnSig {
+                name: Default::default(),
+                ty: dependency_1_ty,
+                args: vec![],
+                ret_ty: None,
+            },
+        );
+
+        let dependency_2 = Function {
+            name: Symbol::from_ref("dependency_2"),
+            module: Symbol::from_ref(""),
+        };
+        let dependency_2_ty = module.ty.register(TypeKind::Function(dependency_2));
+
+        module.fn_sigs.register(
+            dependency_2,
+            FnSig {
+                name: Default::default(),
+                ty: dependency_2_ty,
+                args: vec![],
+                ret_ty: None,
+            },
+        );
+
+        let dependent = Function {
+            name: Symbol::from_ref("dependent"),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            dependent,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![FnArg {
+                    ty: TY_U32,
+                    shader_io_binding: None,
+                }],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (dep_0_node, _) = rvsdg.register_function(&module, dependency_0, iter::empty());
+        let (dep_1_node, _) = rvsdg.register_function(&module, dependency_1, iter::empty());
+        let (dep_2_node, _) = rvsdg.register_function(&module, dependency_2, iter::empty());
+
+        let (dependent_node, dependent_region) =
+            rvsdg.register_function(&module, dependent, [dep_0_node, dep_1_node, dep_2_node]);
+
+        rvsdg.add_op_apply(
+            &module,
+            dependent_region,
+            ValueInput::argument(dependency_1_ty, 1),
+            iter::empty(),
+            StateOrigin::Argument,
+        );
+        rvsdg.reconnect_region_result(dependent_region, 0, ValueOrigin::Argument(3));
+
+        rvsdg.remove_unused_dependencies(dependent_node);
+
+        // The dependent function should now only depend on dependency `1`.
+        assert_eq!(
+            rvsdg[dependent_node].expect_function().dependencies(),
+            &[ValueInput::output(dependency_1_ty, dep_1_node, 0)]
+        );
+
+        // Dependency `0` should not have any users.
+        assert!(rvsdg[dep_0_node].value_outputs()[0].users.is_empty());
+
+        // Dependency `1` should still have the dependent node as its user.
+        assert_eq!(rvsdg[dep_1_node].value_outputs()[0].users.len(), 1);
+        assert_eq!(
+            rvsdg[dep_1_node].value_outputs()[0].users[0],
+            ValueUser::Input {
+                consumer: dependent_node,
+                input: 0
+            }
+        );
+
+        // Dependency `2` should not have any users.
+        assert!(rvsdg[dep_2_node].value_outputs()[0].users.is_empty());
+
+        // The region result's origin should have been updated to point the shifted argument
+        // position.
+        assert_eq!(
+            rvsdg[dependent_region].value_results()[0].origin,
+            ValueOrigin::Argument(1)
+        );
     }
 }
