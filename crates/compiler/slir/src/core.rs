@@ -248,6 +248,29 @@ impl Index<WorkgroupBinding> for WorkgroupBindingRegistry {
     }
 }
 
+#[derive(Clone, Default, Serialize, Deserialize, Debug)]
+pub struct EntryPointRegistry {
+    data: FxHashMap<Function, EntryPointKind>,
+}
+
+impl EntryPointRegistry {
+    pub fn register(&mut self, function: Function, entry_point: EntryPointKind) {
+        self.data.insert(function, entry_point);
+    }
+
+    pub fn get_kind(&self, function: Function) -> Option<&EntryPointKind> {
+        self.data.get(&function)
+    }
+
+    pub fn is_entry_point(&self, function: Function) -> bool {
+        self.data.contains_key(&function)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (Function, EntryPointKind)> + use<'_> {
+        self.data.iter().map(|(f, e)| (*f, *e))
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Module {
     pub name: Symbol,
@@ -257,6 +280,7 @@ pub struct Module {
     pub uniform_bindings: UniformBindingRegistry,
     pub storage_bindings: StorageBindingRegistry,
     pub workgroup_bindings: WorkgroupBindingRegistry,
+    pub entry_points: EntryPointRegistry,
 }
 
 impl Module {
@@ -269,6 +293,7 @@ impl Module {
             uniform_bindings: Default::default(),
             storage_bindings: Default::default(),
             workgroup_bindings: Default::default(),
+            entry_points: Default::default(),
         }
     }
 }
@@ -296,6 +321,13 @@ pub struct StructData {
 pub struct StructField {
     pub offset: u64,
     pub ty: Type,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
+pub enum EntryPointKind {
+    Vertex,
+    Fragment,
+    Compute(u32, u32, u32),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]

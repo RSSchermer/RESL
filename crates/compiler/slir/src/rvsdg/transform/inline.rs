@@ -357,8 +357,6 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
     }
 
     fn mapped_value_input(&self, input: &ValueInput) -> ValueInput {
-        dbg!(input);
-        dbg!(&self.value_argument_mapping);
         let origin = match input.origin {
             ValueOrigin::Argument(i) => self.value_argument_mapping[i as usize],
             ValueOrigin::Output { producer, output } => ValueOrigin::Output {
@@ -414,29 +412,67 @@ pub fn replicate_region(
 
 pub fn inline_function(module: &mut Module, rvsdg: &mut Rvsdg, apply_node: Node) {
     let node_data = &rvsdg[apply_node];
-    let region = node_data.region();
+
+    let dst_region = node_data.region();
+    let dst_owner_node = rvsdg[dst_region].owner();
+
+    let value_output_count = node_data.value_outputs().len();
     let apply_site = node_data.expect_op_apply();
 
-    dbg!(apply_site);
-
-    let argument_mapping = apply_site
-        .argument_inputs()
-        .iter()
-        .map(|input| input.origin)
-        .collect::<Vec<_>>();
-    let state_argument_mapping = apply_site.state().map(|state| state.origin);
-    let value_output_count = node_data.value_outputs().len();
-
     let function = apply_site.resolve_fn(module);
-    let function_region = rvsdg
-        .get_function_region(function)
-        .expect("cannot apply a function without a body region");
+    let function_node = rvsdg
+        .get_function_node(function)
+        .expect("cannot apply an unregistered function");
+    let function_node_data = rvsdg[function_node].expect_function();
+    let src_region = function_node_data.body_region();
+    let dependency_count = function_node_data.dependencies().len();
+    let function_argument_count = apply_site.argument_inputs().len();
+    let region_argument_count = dependency_count + function_argument_count;
+
+    // The state origin to which the inlined region's state argument maps in the destination region.
+    let state_argument_mapping = apply_site.state().map(|state| state.origin);
+
+    // We also have to construct a mapping that maps each of the non-state arguments to origins in
+    // the destination region. These will first map the inlined function's dependencies (if any),
+    // followed by the mappings for the call arguments (as that is how a function region's arguments
+    // are organized).
+    let mut argument_mapping = Vec::with_capacity(region_argument_count);
+
+    // We first add the mappings for the inlined function's dependencies.
+    for i in 0..dependency_count {
+        let ValueOrigin::Output {
+            producer,
+            output: 0,
+        } = rvsdg[function_node].expect_function().dependencies()[i].origin
+        else {
+            panic!("expect dependency input to connect to output `0` or a producer node");
+        };
+
+        // Note that `add_function_dependency` will only insert a dependency if the
+        // `dst_owner_node` (the function we're inlining into) does not already have that
+        // dependency; if it does not yet have the dependency, then the dependency is inserted
+        // at an argument index that is greater than the index of the pre-existing dependencies.
+        // This is important because otherwise the argument indices in the mapping we are building
+        // might get invalidated by the argument indices shifting as a result of insertions.
+        let arg_index = rvsdg.add_function_dependency(dst_owner_node, producer);
+
+        argument_mapping.push(ValueOrigin::Argument(arg_index));
+    }
+
+    // Then add mappings for the call arguments.
+    argument_mapping.extend(
+        rvsdg[apply_node]
+            .expect_op_apply()
+            .argument_inputs()
+            .iter()
+            .map(|input| input.origin),
+    );
 
     let result_mapping = replicate_region(
         module,
         rvsdg,
-        function_region,
-        region,
+        src_region,
+        dst_region,
         argument_mapping,
         state_argument_mapping,
     );
@@ -455,7 +491,7 @@ pub fn inline_function(module: &mut Module, rvsdg: &mut Rvsdg, apply_node: Node)
         for j in (0..user_count).rev() {
             match rvsdg[apply_node].value_outputs()[i].users[j] {
                 ValueUser::Result(res) => {
-                    rvsdg.reconnect_region_result(region, res, mapped_origin);
+                    rvsdg.reconnect_region_result(dst_region, res, mapped_origin);
                 }
                 ValueUser::Input { consumer, input } => {
                     rvsdg.reconnect_value_input(consumer, input, mapped_origin);

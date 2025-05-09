@@ -18,7 +18,7 @@ use stable_mir::{abi, CrateDef};
 
 use crate::context::ReslContext;
 use crate::hir_ext::{
-    BlendSrc, Interpolation, InterpolationSampling, InterpolationType, ResourceBinding,
+    BlendSrc, FnExt, Interpolation, InterpolationSampling, InterpolationType, ResourceBinding,
     ShaderIOBinding, StaticExt,
 };
 use crate::slir_build::builder::Builder;
@@ -394,6 +394,32 @@ impl<'a, 'tcx> PreDefineCodegenMethods for CodegenContext<'a, 'tcx> {
                 {
                     arg_io_bindings[i] = Some(shader_io_binding)
                 }
+            }
+
+            match fn_ext {
+                FnExt::Compute(size) => {
+                    let (x, y, z) = if let Some(size) = size {
+                        (size.x, size.y, size.z)
+                    } else {
+                        (1, 1, 1)
+                    };
+
+                    self.module
+                        .borrow_mut()
+                        .entry_points
+                        .register(function, slir::EntryPointKind::Compute(x, y, z))
+                }
+                FnExt::VertexEntryPoint => self
+                    .module
+                    .borrow_mut()
+                    .entry_points
+                    .register(function, slir::EntryPointKind::Vertex),
+                FnExt::FragmentEntryPoint => self
+                    .module
+                    .borrow_mut()
+                    .entry_points
+                    .register(function, slir::EntryPointKind::Fragment),
+                _ => {}
             }
         }
 

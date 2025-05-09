@@ -15,7 +15,9 @@ pub fn RvsdgExplorer(module: StoredValue<ModuleData>, function: slir::Function) 
         let module = module.read_value();
 
         module.rvsdg.as_ref().and_then(|rvsdg| {
-            rvsdg.get_function_region(function).map(|region| {
+            rvsdg.get_function_node(function).map(|node| {
+                let region = rvsdg[node].expect_function().body_region();
+
                 RegionLayout::generate(&Config::default(), &module.module, rvsdg, region)
             })
         })

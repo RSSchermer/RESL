@@ -39,7 +39,7 @@ pub struct FunctionNode {
 }
 
 impl FunctionNode {
-    pub fn region(&self) -> Region {
+    pub fn body_region(&self) -> Region {
         self.region
     }
 
@@ -200,7 +200,7 @@ impl RegionData {
         self.owner.expect("region not correctly initialized")
     }
 
-    pub fn nodes(&self) -> impl IntoIterator<Item = Node> + use<'_> {
+    pub fn nodes(&self) -> impl Iterator<Item = Node> + use<'_> {
         self.nodes.iter().copied()
     }
 
@@ -237,27 +237,23 @@ impl NodeData {
             .expect("should have a region after initialization")
     }
 
-    pub fn is_switch(&self) -> bool {
-        matches!(self.kind, NodeKind::Switch(_))
+    pub fn is_function(&self) -> bool {
+        matches!(self.kind, NodeKind::Function(_))
     }
 
-    pub fn expect_switch(&self) -> &SwitchNode {
-        if let NodeKind::Switch(n) = &self.kind {
+    pub fn expect_function(&self) -> &FunctionNode {
+        if let NodeKind::Function(n) = &self.kind {
             n
         } else {
-            panic!("expected node to be a switch node")
+            panic!("expected node to be a function node")
         }
     }
 
-    pub fn is_loop(&self) -> bool {
-        matches!(self.kind, NodeKind::Loop(_))
-    }
-
-    pub fn expect_loop(&self) -> &LoopNode {
-        if let NodeKind::Loop(n) = &self.kind {
+    fn expect_function_mut(&mut self) -> &mut FunctionNode {
+        if let NodeKind::Function(n) = &mut self.kind {
             n
         } else {
-            panic!("expected node to be a loop node")
+            panic!("expected node to be a function node")
         }
     }
 
@@ -294,6 +290,30 @@ impl NodeData {
             n
         } else {
             panic!("expected node to be a workgroup binding node")
+        }
+    }
+
+    pub fn is_switch(&self) -> bool {
+        matches!(self.kind, NodeKind::Switch(_))
+    }
+
+    pub fn expect_switch(&self) -> &SwitchNode {
+        if let NodeKind::Switch(n) = &self.kind {
+            n
+        } else {
+            panic!("expected node to be a switch node")
+        }
+    }
+
+    pub fn is_loop(&self) -> bool {
+        matches!(self.kind, NodeKind::Loop(_))
+    }
+
+    pub fn expect_loop(&self) -> &LoopNode {
+        if let NodeKind::Loop(n) = &self.kind {
+            n
+        } else {
+            panic!("expected node to be a loop node")
         }
     }
 
@@ -1233,7 +1253,7 @@ macro_rules! add_const_methods {
 pub struct Rvsdg {
     regions: SlotMap<Region, RegionData>,
     nodes: SlotMap<Node, NodeData>,
-    function_regions: FxHashMap<Function, Region>,
+    function_node: FxHashMap<Function, Node>,
 }
 
 impl Rvsdg {
@@ -1335,13 +1355,13 @@ impl Rvsdg {
         });
 
         self.regions[region].owner = Some(node);
-        self.function_regions.insert(function, region);
+        self.function_node.insert(function, node);
 
         (node, region)
     }
 
-    pub fn get_function_region(&self, function: Function) -> Option<Region> {
-        self.function_regions.get(&function).copied()
+    pub fn get_function_node(&self, function: Function) -> Option<Node> {
+        self.function_node.get(&function).copied()
     }
 
     /// Adds a switch node to the given `region`.
@@ -1864,6 +1884,95 @@ impl Rvsdg {
         self.nodes.remove(node);
     }
 
+    /// Adds a dependency on the given `dependency` node to the `function_node`.
+    ///
+    /// If the `function_node` was already dependent on the `dependency`, then this operation does
+    /// nothing and returns the region argument index for the `dependency`. If the function was not
+    /// already dependent on the `dependency`, a dependency is added at the end of the dependency
+    /// list, and all call arguments are shifted to the right; the RVSDG is updated so that all
+    /// users of the body region's call arguments remain valid.
+    pub fn add_function_dependency(&mut self, function_node: Node, dependency: Node) -> u32 {
+        let ty = self[dependency].value_outputs()[0].ty;
+        let fn_data = self.nodes[function_node].expect_function_mut();
+
+        for (i, dep_input) in fn_data.dependencies().iter().enumerate() {
+            if let ValueOrigin::Output {
+                producer,
+                output: 0,
+            } = dep_input.origin
+            {
+                if producer == dependency {
+                    // The function already has a dependency on the node, so return the argument
+                    // position for that dependency.
+                    return i as u32;
+                }
+            }
+        }
+
+        let index = fn_data.dependencies().len();
+
+        fn_data.dependencies.push(ValueInput {
+            ty,
+            origin: ValueOrigin::Output {
+                producer: dependency,
+                output: 0,
+            },
+        });
+
+        let body_region = fn_data.body_region();
+
+        self.insert_region_argument(body_region, ty, index);
+
+        // Add the function as a user of the dependency's output
+        self.nodes[dependency].value_outputs_mut()[0]
+            .users
+            .insert(ValueUser::Input {
+                consumer: function_node,
+                input: index as u32,
+            });
+
+        index as u32
+    }
+
+    /// Helper function that inserts an argument of the given `ty` into the given `region` at the
+    /// given `index`.
+    fn insert_region_argument(&mut self, region: Region, ty: Type, at: usize) {
+        let region_data = &mut self.regions[region];
+
+        // Insert the new argument at the given position, shifting all arguments after it to the
+        // right.
+        region_data.value_arguments.insert(
+            at,
+            ValueOutput {
+                ty,
+                users: Default::default(),
+            },
+        );
+
+        // All back-edges connecting to arguments to the right of the insertion index will now be
+        // incorrect, so we visit all their consumers and adjust their value origins to reflect the
+        // new argument position.
+        let correction_start = at + 1;
+        let correction_end = region_data.value_arguments.len();
+
+        for i in correction_start..correction_end {
+            let user_count = self.regions[region].value_arguments[i].users.len();
+
+            for j in 0..user_count {
+                match self.regions[region].value_arguments[i].users[j] {
+                    ValueUser::Result(result_index) => {
+                        self.regions[region].value_results[result_index as usize].origin =
+                            ValueOrigin::Argument(i as u32);
+                    }
+                    ValueUser::Input { consumer, input } => {
+                        self.nodes[consumer].value_inputs_mut()[input as usize].origin =
+                            ValueOrigin::Argument(i as u32);
+                    }
+                }
+            }
+        }
+    }
+
     /// A helper function that validates that the origin of the given `value_input` exists, belongs
     /// to the given `region`, and matches the `value_input`'s expected typed.
     fn validate_node_value_input(&mut self, region: Region, value_input: &ValueInput) {
@@ -2060,7 +2169,7 @@ impl Index<Node> for Rvsdg {
 
 impl PartialEq for Rvsdg {
     fn eq(&self, other: &Self) -> bool {
-        if self.function_regions != other.function_regions {
+        if self.function_node != other.function_node {
             return false;
         }
 
