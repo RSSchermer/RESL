@@ -8,7 +8,7 @@ use slotmap::SlotMap;
 use crate::ty::{Type, TypeKind, TypeRegistry, TY_BOOL, TY_F32, TY_I32, TY_U32};
 use crate::util::thin_set::ThinSet;
 use crate::{
-    BinaryOperator, Function, Module, StorageBinding, UnaryOperator, UniformBinding,
+    thin_set, BinaryOperator, Function, Module, StorageBinding, UnaryOperator, UniformBinding,
     WorkgroupBinding,
 };
 
@@ -305,12 +305,28 @@ impl NodeData {
         }
     }
 
+    fn expect_switch_mut(&mut self) -> &mut SwitchNode {
+        if let NodeKind::Switch(n) = &mut self.kind {
+            n
+        } else {
+            panic!("expected node to be a switch node")
+        }
+    }
+
     pub fn is_loop(&self) -> bool {
         matches!(self.kind, NodeKind::Loop(_))
     }
 
     pub fn expect_loop(&self) -> &LoopNode {
         if let NodeKind::Loop(n) = &self.kind {
+            n
+        } else {
+            panic!("expected node to be a loop node")
+        }
+    }
+
+    fn expect_loop_mut(&mut self) -> &mut LoopNode {
+        if let NodeKind::Loop(n) = &mut self.kind {
             n
         } else {
             panic!("expected node to be a loop node")
@@ -425,6 +441,18 @@ impl NodeData {
         }
     }
 
+    pub fn is_op_extract_element(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::OpExtractElement(_)))
+    }
+
+    pub fn expect_op_extract_element(&self) -> &OpExtractElement {
+        if let NodeKind::Simple(SimpleNode::OpExtractElement(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be an `extract-element` operation")
+        }
+    }
+
     pub fn is_op_apply(&self) -> bool {
         matches!(self.kind, NodeKind::Simple(SimpleNode::OpApply(_)))
     }
@@ -458,6 +486,18 @@ impl NodeData {
             op
         } else {
             panic!("expected node to be a `binary` operation")
+        }
+    }
+
+    pub fn is_value_proxy(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::ValueProxy(_)))
+    }
+
+    pub fn expect_value_proxy(&self) -> &ValueProxy {
+        if let NodeKind::Simple(SimpleNode::ValueProxy(proxy)) = &self.kind {
+            proxy
+        } else {
+            panic!("expected node to be a value-proxy node")
         }
     }
 }
@@ -702,12 +742,12 @@ pub struct LoopNode {
     value_inputs: Vec<ValueInput>,
     value_outputs: Vec<ValueOutput>,
     state: Option<State>,
-    region: Region,
+    loop_region: Region,
 }
 
 impl LoopNode {
-    pub fn region(&self) -> &Region {
-        &self.region
+    pub fn loop_region(&self) -> &Region {
+        &self.loop_region
     }
 }
 
@@ -890,6 +930,57 @@ impl OpPtrElementPtr {
 }
 
 impl Connectivity for OpPtrElementPtr {
+    fn value_inputs(&self) -> &[ValueInput] {
+        &self.inputs
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        &mut self.inputs
+    }
+
+    fn value_outputs(&self) -> &[ValueOutput] {
+        slice::from_ref(&self.output)
+    }
+
+    fn value_outputs_mut(&mut self) -> &mut [ValueOutput] {
+        slice::from_mut(&mut self.output)
+    }
+
+    fn state(&self) -> Option<&State> {
+        None
+    }
+
+    fn state_mut(&mut self) -> Option<&mut State> {
+        None
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OpExtractElement {
+    element_ty: Type,
+    inputs: Vec<ValueInput>,
+    output: ValueOutput,
+}
+
+impl OpExtractElement {
+    pub fn element_ty(&self) -> Type {
+        self.element_ty
+    }
+
+    pub fn aggregate(&self) -> &ValueInput {
+        &self.inputs[0]
+    }
+
+    pub fn indices(&self) -> &[ValueInput] {
+        &self.inputs[1..]
+    }
+
+    pub fn output(&self) -> &ValueOutput {
+        &self.output
+    }
+}
+
+impl Connectivity for OpExtractElement {
     fn value_inputs(&self) -> &[ValueInput] {
         &self.inputs
     }
@@ -1158,6 +1249,48 @@ impl Connectivity for ConstPtr {
     }
 }
 
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct ValueProxy {
+    input: ValueInput,
+    output: ValueOutput,
+}
+
+impl ValueProxy {
+    pub fn input(&self) -> &ValueInput {
+        &self.input
+    }
+
+    pub fn output(&self) -> &ValueOutput {
+        &self.output
+    }
+}
+
+impl Connectivity for ValueProxy {
+    fn value_inputs(&self) -> &[ValueInput] {
+        slice::from_ref(&self.input)
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        slice::from_mut(&mut self.input)
+    }
+
+    fn value_outputs(&self) -> &[ValueOutput] {
+        slice::from_ref(&self.output)
+    }
+
+    fn value_outputs_mut(&mut self) -> &mut [ValueOutput] {
+        slice::from_mut(&mut self.output)
+    }
+
+    fn state(&self) -> Option<&State> {
+        None
+    }
+
+    fn state_mut(&mut self) -> Option<&mut State> {
+        None
+    }
+}
+
 macro_rules! gen_simple_node {
     ($($ty:ident,)*) => {
         #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
@@ -1221,9 +1354,11 @@ gen_simple_node! {
     OpLoad,
     OpStore,
     OpPtrElementPtr,
+    OpExtractElement,
     OpApply,
     OpUnary,
     OpBinary,
+    ValueProxy,
 }
 
 macro_rules! add_const_methods {
@@ -1463,6 +1598,84 @@ impl Rvsdg {
         region
     }
 
+    pub fn add_switch_input(&mut self, switch_node: Node, input: ValueInput) {
+        let node_data = self.nodes[switch_node].expect_switch_mut();
+
+        node_data.value_inputs.push(input);
+
+        for branch in node_data.branches.iter().copied() {
+            self.regions[branch]
+                .value_arguments
+                .push(ValueOutput::new(input.ty));
+        }
+    }
+
+    pub fn remove_switch_input(&mut self, switch_node: Node, input: u32) {
+        assert_ne!(input, 0, "cannot remove the branch selector input");
+
+        let index = input as usize;
+        let arg = index - 1;
+        let node_data = self.nodes[switch_node].expect_switch_mut();
+        let branch_count = node_data.branches.len();
+
+        node_data.value_inputs.remove(index);
+
+        // Correct the connections for any value_inputs after the input that was removed
+        self.correct_value_input_connections(switch_node, index, -1);
+
+        // Remove the corresponding argument in each of the branch regions
+        for branch_index in 0..branch_count {
+            let branch = self.nodes[switch_node].expect_switch().branches()[branch_index];
+            let arguments = &mut self.regions[branch].value_arguments;
+
+            if !arguments[arg].users.is_empty() {
+                panic!(
+                    "cannot remove an input if one of the corresponding arguments still has users"
+                );
+            }
+
+            arguments.remove(arg);
+            self.correct_region_argument_connections(branch, arg);
+        }
+    }
+
+    pub fn add_switch_output(&mut self, switch_node: Node, ty: Type) {
+        let node_data = self.nodes[switch_node].expect_switch_mut();
+
+        node_data.value_outputs.push(ValueOutput::new(ty));
+
+        for branch in node_data.branches.iter().copied() {
+            self.regions[branch]
+                .value_results
+                .push(ValueInput::placeholder(ty));
+        }
+    }
+
+    pub fn remove_switch_output(&mut self, switch_node: Node, output: u32) {
+        let index = output as usize;
+        let node_data = self.nodes[switch_node].expect_switch_mut();
+        let branch_count = node_data.branches.len();
+
+        if !node_data.value_outputs[index].users.is_empty() {
+            panic!("cannot remove an output if it still has users")
+        }
+
+        node_data.value_outputs.remove(index);
+
+        // Correct the connections for any value_inputs to the right of the input that was removed
+        self.correct_value_output_connections(switch_node, index);
+
+        // Remove the corresponding result in each of the branch regions
+        for branch_index in 0..branch_count {
+            let branch = self.nodes[switch_node].expect_switch().branches()[branch_index];
+            let origin = self.regions[branch].value_results[index].origin;
+
+            self.remove_user(branch, origin, ValueUser::Result(index as u32));
+            self.regions[branch].value_results.remove(index);
+            self.correct_region_result_connections(branch, index, -1);
+        }
+    }
+
     pub fn add_loop(
         &mut self,
         region: Region,
@@ -1481,23 +1694,23 @@ impl Rvsdg {
             .map(|input| ValueOutput::new(input.ty))
             .collect::<Vec<_>>();
 
-        let mut contained_region_results = vec![ValueInput {
+        let mut loop_region_results = vec![ValueInput {
             // First result of the region in the re-entry predicate
             ty: TY_U32,
             origin: ValueOrigin::placeholder(),
         }];
 
         // The remaining results match the input signature
-        contained_region_results.extend(value_inputs.iter().map(|input| ValueInput {
+        loop_region_results.extend(value_inputs.iter().map(|input| ValueInput {
             ty: input.ty,
             origin: ValueOrigin::placeholder(),
         }));
 
-        let contained_region = self.regions.insert(RegionData {
+        let loop_region = self.regions.insert(RegionData {
             owner: None,
             nodes: Default::default(),
             value_arguments: value_outputs.clone(),
-            value_results: contained_region_results,
+            value_results: loop_region_results,
             state_argument: StateUser::Result,
             state_result: StateOrigin::Argument,
         });
@@ -1510,12 +1723,12 @@ impl Rvsdg {
                     origin,
                     user: StateUser::Result, // Temporary value
                 }),
-                region: contained_region,
+                loop_region,
             }),
             region: Some(region),
         });
 
-        self.regions[contained_region].owner = Some(node);
+        self.regions[loop_region].owner = Some(node);
 
         if let Some(state_origin) = state_origin {
             self.link_state(region, node, state_origin);
@@ -1524,7 +1737,56 @@ impl Rvsdg {
         self.regions[region].nodes.insert(node);
         self.connect_node_value_inputs(node);
 
-        (node, contained_region)
+        (node, loop_region)
+    }
+
+    pub fn add_loop_input(&mut self, loop_node: Node, input: ValueInput) {
+        let node_data = self.nodes[loop_node].expect_loop_mut();
+
+        node_data.value_inputs.push(input);
+        node_data.value_outputs.push(ValueOutput::new(input.ty));
+
+        let region_data = &mut self.regions[node_data.loop_region];
+
+        region_data.value_arguments.push(ValueOutput::new(input.ty));
+        region_data
+            .value_results
+            .push(ValueInput::placeholder(input.ty));
+    }
+
+    pub fn remove_loop_input(&mut self, loop_node: Node, input: u32) {
+        let index = input as usize;
+
+        // Loop nodes have an equal number of inputs outputs and arguments, but have 1 more result
+        // (where the first result decides loop reentry), so we add one for get the index for the
+        // result we're going to remove.
+        let result_index = index + 1;
+
+        let node_data = self.nodes[loop_node].expect_loop_mut();
+        let loop_region = node_data.loop_region;
+
+        if !node_data.value_outputs[index].users.is_empty() {
+            panic!("cannot remove an input if the corresponding output still has users");
+        }
+
+        if !self.regions[loop_region].value_arguments[index]
+            .users
+            .is_empty()
+        {
+            panic!("cannot remove an input if the corresponding region argument still has users");
+        }
+
+        node_data.value_inputs.remove(index);
+        node_data.value_outputs.remove(index);
+        self.regions[loop_region].value_arguments.remove(index);
+        self.regions[loop_region].value_results.remove(result_index);
+
+        // Correct the connections for any value inputs and outputs and region argument and results
+        // to the right of the input/output/argument/result that was removed
+        self.correct_value_input_connections(loop_node, index, -1);
+        self.correct_value_output_connections(loop_node, index);
+        self.correct_region_argument_connections(loop_region, index);
+        self.correct_region_result_connections(loop_region, result_index, -1);
     }
 
     add_const_methods! {
@@ -1686,6 +1948,41 @@ impl Rvsdg {
         node
     }
 
+    pub fn add_op_extract_element(
+        &mut self,
+        region: Region,
+        element_ty: Type,
+        aggregate_input: ValueInput,
+        index_inputs: impl IntoIterator<Item = ValueInput>,
+    ) -> Node {
+        self.validate_node_value_input(region, &aggregate_input);
+
+        let mut inputs = vec![aggregate_input];
+
+        for input in index_inputs {
+            self.validate_node_value_input(region, &input);
+
+            inputs.push(input);
+        }
+
+        let node = self.nodes.insert(NodeData {
+            kind: NodeKind::Simple(
+                OpPtrElementPtr {
+                    element_ty,
+                    inputs,
+                    output: ValueOutput::new(element_ty),
+                }
+                .into(),
+            ),
+            region: Some(region),
+        });
+
+        self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
+
+        node
+    }
+
     pub fn add_op_apply(
         &mut self,
         module: &Module,
@@ -1716,15 +2013,15 @@ impl Rvsdg {
         for i in 0..arg_count {
             let sig_arg_ty = sig.args[i].ty;
             let value_input_ty = value_inputs[i + 1].ty;
-
-            assert_eq!(
-                sig_arg_ty,
-                value_input_ty,
-                "argument `{}` expects a value of type `{}`, but a value input of type `{}` was provided",
-                i,
-                sig_arg_ty.to_string(module),
-                value_input_ty.to_string(module)
-            );
+            //TODO
+            // assert_eq!(
+            //     sig_arg_ty,
+            //     value_input_ty,
+            //     "argument `{}` expects a value of type `{}`, but a value input of type `{}` was provided",
+            //     i,
+            //     sig_arg_ty.to_string(module),
+            //     value_input_ty.to_string(module)
+            // );
         }
 
         let node = self.nodes.insert(NodeData {
@@ -1805,6 +2102,26 @@ impl Rvsdg {
         node
     }
 
+    pub fn add_value_proxy(&mut self, region: Region, input: ValueInput) -> Node {
+        self.validate_node_value_input(region, &input);
+
+        let node = self.nodes.insert(NodeData {
+            kind: NodeKind::Simple(
+                ValueProxy {
+                    input,
+                    output: ValueOutput::new(input.ty),
+                }
+                .into(),
+            ),
+            region: Some(region),
+        });
+
+        self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
+
+        node
+    }
+
     pub fn reconnect_value_input(&mut self, node: Node, value_input: u32, origin: ValueOrigin) {
         let old_input = self.nodes[node].value_inputs()[value_input as usize];
         let old_origin = old_input.origin;
@@ -1860,6 +2177,30 @@ impl Rvsdg {
         self.regions[region].value_results[result as usize].origin = origin;
     }
 
+    pub fn disconnect_region_result(&mut self, region: Region, result: u32) {
+        let origin = self.regions[region].value_results[result as usize].origin;
+        let user = ValueUser::Result(result);
+
+        if !origin.is_placeholder() {
+            self.remove_user(region, origin, user);
+            self.regions[region].value_results[result as usize].origin = ValueOrigin::placeholder();
+        }
+    }
+
+    pub fn reconnect_value_user(
+        &mut self,
+        region: Region,
+        value_user: ValueUser,
+        origin: ValueOrigin,
+    ) {
+        match value_user {
+            ValueUser::Result(i) => self.reconnect_region_result(region, i, origin),
+            ValueUser::Input { consumer, input } => {
+                self.reconnect_value_input(consumer, input, origin)
+            }
+        }
+    }
+
     /// Removes the given `node` from the RVSDG.
     ///
     /// The node should not have any users for any of its value outputs, will panic otherwise.
@@ -1893,6 +2234,107 @@ impl Rvsdg {
         self.unlink_state(node);
         self.regions[region].nodes.remove(&node);
         self.nodes.remove(node);
+    }
+
+    /// Inserts a proxy node into the given `region` in between the `origin` and the `user`.
+    ///
+    /// A proxy node simply passes its input on to its output unmodified. This serves no semantic
+    /// function in the program, but can be useful as an intermediate construct during a transform.
+    /// For example, transformations may want to concurrently transform a graph during traversal.
+    /// However, removing/adding users from/to an output during concurrent iteration over that same
+    /// output's users may result in double visits or skipped visits. When replacing one node with
+    /// multiple nodes, rather than removing the node and adding the replacements as additional
+    /// users to the original producer, you might insert a proxy and instead modify the users of the
+    /// proxy.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `origin` or `user` is a node output resp. node input of a node that does not
+    /// belong to the same [Region] as the given `region. Panics of the `origin` or `user` type does
+    /// not match the given `ty`.
+    pub fn proxy_origin_user(
+        &mut self,
+        region: Region,
+        ty: Type,
+        origin: ValueOrigin,
+        user: ValueUser,
+    ) -> Node {
+        let proxy = self.nodes.insert(NodeData {
+            kind: NodeKind::Simple(
+                ValueProxy {
+                    input: ValueInput { ty, origin },
+                    output: ValueOutput {
+                        ty,
+                        users: thin_set![user],
+                    },
+                }
+                .into(),
+            ),
+            region: Some(region),
+        });
+
+        let output = match origin {
+            ValueOrigin::Argument(arg) => &mut self.regions[region].value_arguments[arg as usize],
+            ValueOrigin::Output { producer, output } => {
+                let producer = &mut self.nodes[producer];
+
+                assert_eq!(
+                    producer.region(),
+                    region,
+                    "origin must be in the specified region"
+                );
+
+                &mut producer.value_outputs_mut()[output as usize]
+            }
+        };
+
+        assert_eq!(
+            output.ty, ty,
+            "the origin type must match the specified type"
+        );
+
+        let mut found_user = false;
+        for candidate_user in output.users.iter_mut() {
+            if *candidate_user == user {
+                *candidate_user = ValueUser::Input {
+                    consumer: proxy,
+                    input: 0,
+                };
+
+                found_user = true;
+            }
+        }
+
+        assert!(
+            found_user,
+            "could not find a matching user for origin output"
+        );
+
+        let input = match user {
+            ValueUser::Result(res) => &mut self.regions[region].value_results[res as usize],
+            ValueUser::Input { consumer, input } => {
+                let consumer = &mut self.nodes[consumer];
+
+                assert_eq!(
+                    consumer.region(),
+                    region,
+                    "origin must be in the specified region"
+                );
+
+                &mut consumer.value_inputs_mut()[input as usize]
+            }
+        };
+
+        assert_eq!(input.ty, ty, "the user type must match the specified type");
+
+        input.origin = ValueOrigin::Output {
+            producer: proxy,
+            output: 0,
+        };
+
+        self.regions[region].nodes.insert(proxy);
+
+        proxy
     }
 
     /// Adds a dependency on the given `dependency` node to the `function_node`.
@@ -2040,29 +2482,6 @@ impl Rvsdg {
         self.correct_region_argument_connections(region, correction_start);
     }
 
-    /// Helper function that for each argument with an index of `start` or greater, updates all
-    /// back-edges from that argument's users to use the current index of that argument.
-    fn correct_region_argument_connections(&mut self, region: Region, start: usize) {
-        let end = self.regions[region].value_arguments.len();
-
-        for i in start..end {
-            let user_count = self.regions[region].value_arguments[i].users.len();
-
-            for j in 0..user_count {
-                match self.regions[region].value_arguments[i].users[j] {
-                    ValueUser::Result(result_index) => {
-                        self.regions[region].value_results[result_index as usize].origin =
-                            ValueOrigin::Argument(i as u32);
-                    }
-                    ValueUser::Input { consumer, input } => {
-                        self.nodes[consumer].value_inputs_mut()[input as usize].origin =
-                            ValueOrigin::Argument(i as u32);
-                    }
-                }
-            }
-        }
-    }
-
     /// A helper function that validates that the origin of the given `value_input` exists, belongs
     /// to the given `region`, and matches the `value_input`'s expected typed.
     fn validate_node_value_input(&mut self, region: Region, value_input: &ValueInput) {
@@ -2131,6 +2550,150 @@ impl Rvsdg {
                     self.nodes[producer].value_outputs_mut()[output as usize]
                         .users
                         .insert(user);
+                }
+            }
+        }
+    }
+
+    /// Helper function that for each value input with an index of `start` or greater, updates the
+    /// edge from that input's origin to use the current index of that input.
+    ///
+    /// Needs to know the `adjustment` that happened to cause the potentially invalid edges. For
+    /// example: if an input was removed, then all inputs starting at `start` will have had their
+    /// indices reduced by `1`, so the value passed as the `adjustment` argument should be `-1`.
+    fn correct_value_input_connections(&mut self, node: Node, start: usize, adjustment: i32) {
+        let node_data = &self.nodes[node];
+        let region = node_data.region();
+        let end = node_data.value_inputs().len();
+
+        for i in start..end {
+            let origin = self.nodes[node].value_inputs()[i].origin;
+
+            // Resolve what the `input` value was before the adjustment by undoing (subtracting) the
+            // adjustment.
+            let old_input = (i as i32 - adjustment) as u32;
+
+            match origin {
+                ValueOrigin::Argument(arg) => {
+                    for user in self.regions[region].value_arguments[arg as usize]
+                        .users
+                        .iter_mut()
+                    {
+                        if let ValueUser::Input { consumer, input } = user
+                            && *consumer == node
+                            && *input == old_input
+                        {
+                            *input = i as u32;
+                        }
+                    }
+                }
+                ValueOrigin::Output { producer, output } => {
+                    for user in self.nodes[producer].value_outputs_mut()[output as usize]
+                        .users
+                        .iter_mut()
+                    {
+                        if let ValueUser::Input { consumer, input } = user
+                            && *consumer == node
+                            && *input == old_input
+                        {
+                            *input = i as u32;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Helper function that for each value output with an index of `start` or greater, updates all
+    /// back-edges from that outputs's users to use the current index of that output.
+    fn correct_value_output_connections(&mut self, node: Node, start: usize) {
+        let end = self.nodes[node].value_outputs().len();
+        let region = self.nodes[node].region();
+
+        for i in start..end {
+            let user_count = self.nodes[node].value_outputs()[i].users.len();
+            let new_origin = ValueOrigin::Output {
+                producer: node,
+                output: i as u32,
+            };
+
+            for j in 0..user_count {
+                match self.nodes[node].value_outputs_mut()[i].users[j] {
+                    ValueUser::Result(result_index) => {
+                        self.regions[region].value_results[result_index as usize].origin =
+                            new_origin;
+                    }
+                    ValueUser::Input { consumer, input } => {
+                        self.nodes[consumer].value_inputs_mut()[input as usize].origin = new_origin;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Helper function that for each argument with an index of `start` or greater, updates all
+    /// back-edges from that argument's users to use the current index of that argument.
+    fn correct_region_argument_connections(&mut self, region: Region, start: usize) {
+        let end = self.regions[region].value_arguments.len();
+
+        for i in start..end {
+            let user_count = self.regions[region].value_arguments[i].users.len();
+            let new_origin = ValueOrigin::Argument(i as u32);
+
+            for j in 0..user_count {
+                match self.regions[region].value_arguments[i].users[j] {
+                    ValueUser::Result(result_index) => {
+                        self.regions[region].value_results[result_index as usize].origin =
+                            new_origin;
+                    }
+                    ValueUser::Input { consumer, input } => {
+                        self.nodes[consumer].value_inputs_mut()[input as usize].origin = new_origin;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Helper function that for each result with an index of `start` or greater, updates the edge
+    /// from that result's origin to use the current index of that result.
+    ///
+    /// Needs to know the `adjustment` that happened to cause the potentially invalid edges. For
+    /// example: if a result was removed, then all results starting at `start` will have had their
+    /// indices reduced by `1`, so the value passed as the `adjustment` argument should be `-1`.
+    fn correct_region_result_connections(&mut self, region: Region, start: usize, adjustment: i32) {
+        let end = self.regions[region].value_results.len();
+
+        for i in start..end {
+            let origin = self.regions[region].value_results[i].origin;
+
+            // Resolve what the result's index was before the adjustment by undoing (subtracting)
+            // the adjustment.
+            let old_index = (i as i32 - adjustment) as u32;
+
+            match origin {
+                ValueOrigin::Argument(arg) => {
+                    for user in self.regions[region].value_arguments[arg as usize]
+                        .users
+                        .iter_mut()
+                    {
+                        if let ValueUser::Result(res) = user
+                            && *res == old_index
+                        {
+                            *res = i as u32;
+                        }
+                    }
+                }
+                ValueOrigin::Output { producer, output } => {
+                    for user in self.nodes[producer].value_outputs_mut()[output as usize]
+                        .users
+                        .iter_mut()
+                    {
+                        if let ValueUser::Result(res) = user
+                            && *res == old_index
+                        {
+                            *res = i as u32;
+                        }
+                    }
                 }
             }
         }

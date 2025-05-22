@@ -130,9 +130,13 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
             NodeKind::Simple(SimpleNode::OpPtrElementPtr(_)) => {
                 self.replicate_op_ptr_element_ptr_node(node)
             }
+            NodeKind::Simple(SimpleNode::OpExtractElement(_)) => {
+                self.replicate_op_extract_element(node)
+            }
             NodeKind::Simple(SimpleNode::OpApply(_)) => self.replicate_op_apply_node(node),
             NodeKind::Simple(SimpleNode::OpUnary(_)) => self.replicate_op_unary_node(node),
             NodeKind::Simple(SimpleNode::OpBinary(_)) => self.replicate_op_binary_node(node),
+            NodeKind::Simple(SimpleNode::ValueProxy(_)) => self.replicate_value_proxy_node(node),
             NodeKind::Function(_)
             | NodeKind::UniformBinding(_)
             | NodeKind::StorageBinding(_)
@@ -206,7 +210,7 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
         let state_origin = data
             .state()
             .map(|state| self.mapped_state_origin(&state.origin));
-        let src_region = *data.region();
+        let src_region = *data.loop_region();
 
         let (replicate_node, replicate_region) =
             self.rvsdg
@@ -319,6 +323,25 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
         )
     }
 
+    fn replicate_op_extract_element(&mut self, node: Node) -> Node {
+        let data = self.rvsdg[node].expect_op_extract_element();
+        let element_ty = data.element_ty();
+        let aggregate_input = self.mapped_value_input(data.aggregate());
+        let index_inputs = data
+            .indices()
+            .iter()
+            .map(|input| self.mapped_value_input(input))
+            .collect::<Vec<_>>();
+
+        self.rvsdg.add_op_ptr_element_ptr(
+            &mut self.module.ty,
+            self.dst_region,
+            element_ty,
+            aggregate_input,
+            index_inputs,
+        )
+    }
+
     fn replicate_op_apply_node(&mut self, node: Node) -> Node {
         let data = self.rvsdg[node].expect_op_apply();
         let fn_input = self.mapped_value_input(data.fn_input());
@@ -354,6 +377,13 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
 
         self.rvsdg
             .add_op_binary(self.dst_region, operator, lhs_input, rhs_input)
+    }
+
+    fn replicate_value_proxy_node(&mut self, node: Node) -> Node {
+        let data = self.rvsdg[node].expect_value_proxy();
+        let input = self.mapped_value_input(data.input());
+
+        self.rvsdg.add_value_proxy(self.dst_region, input)
     }
 
     fn mapped_value_input(&self, input: &ValueInput) -> ValueInput {

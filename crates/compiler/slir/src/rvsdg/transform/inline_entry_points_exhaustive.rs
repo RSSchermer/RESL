@@ -45,7 +45,7 @@ pub fn inline_entry_points_exhaustive(module: &mut Module, rvsdg: &mut Rvsdg) {
                 }
             }
 
-            // Any function dependencies that were inlined will now be unused, so clean up the entry 
+            // Any function dependencies that were inlined will now be unused, so clean up the entry
             // point's dependencies.
             rvsdg.remove_unused_dependencies(function_node);
         }

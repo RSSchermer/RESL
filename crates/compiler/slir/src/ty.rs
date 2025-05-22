@@ -91,6 +91,13 @@ impl TypeKind {
             false
         }
     }
+
+    pub fn is_aggregate(&self) -> bool {
+        match self {
+            TypeKind::Struct(_) | TypeKind::Array { .. } => true,
+            _ => false,
+        }
+    }
 }
 
 impl TypeKind {

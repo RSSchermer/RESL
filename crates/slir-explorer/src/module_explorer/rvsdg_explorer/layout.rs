@@ -957,7 +957,8 @@ impl NodeLayout {
                 NodeContent::Switch("switch".into(), region_layouts)
             }
             NodeKind::Loop(node) => {
-                let region_layout = RegionLayout::generate(config, module, rvsdg, *node.region());
+                let region_layout =
+                    RegionLayout::generate(config, module, rvsdg, *node.loop_region());
 
                 NodeContent::Loop("loop".into(), region_layout)
             }
@@ -971,6 +972,7 @@ impl NodeLayout {
                 SimpleNode::OpLoad(_) => NodeContent::PlainText("load".into()),
                 SimpleNode::OpStore(_) => NodeContent::PlainText("store".into()),
                 SimpleNode::OpPtrElementPtr(_) => NodeContent::PlainText("pep".into()),
+                SimpleNode::OpExtractElement(_) => NodeContent::PlainText("extract".into()),
                 SimpleNode::OpApply(op) => {
                     NodeContent::FnApply("apply".into(), op.resolve_fn(module))
                 }
@@ -978,6 +980,7 @@ impl NodeLayout {
                 SimpleNode::OpBinary(op) => {
                     NodeContent::PlainText(op.operator().to_string().into())
                 }
+                SimpleNode::ValueProxy(_) => NodeContent::PlainText("proxy".into()),
             },
             _ => panic!("node kind not allowed inside a region"),
         };
