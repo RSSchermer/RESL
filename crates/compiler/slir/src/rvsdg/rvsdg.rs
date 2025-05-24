@@ -1510,6 +1510,14 @@ impl Rvsdg {
         self.function_node.get(&function).copied()
     }
 
+    pub fn is_live_region(&self, region: Region) -> bool {
+        self.regions.contains_key(region)
+    }
+
+    pub fn is_live_node(&self, node: Node) -> bool {
+        self.nodes.contains_key(node)
+    }
+
     /// Adds a switch node to the given `region`.
     ///
     /// Must supply the `value_inputs` and `value_outputs` for the node at creation. May optionally
@@ -1599,7 +1607,12 @@ impl Rvsdg {
     }
 
     pub fn add_switch_input(&mut self, switch_node: Node, input: ValueInput) {
+        let region = self.nodes[switch_node].region();
+
+        self.validate_node_value_input(region, &input);
+
         let node_data = self.nodes[switch_node].expect_switch_mut();
+        let input_index = node_data.value_inputs.len();
 
         node_data.value_inputs.push(input);
 
@@ -1608,6 +1621,8 @@ impl Rvsdg {
                 .value_arguments
                 .push(ValueOutput::new(input.ty));
         }
+
+        self.connect_node_value_input(region, switch_node, input_index);
     }
 
     pub fn remove_switch_input(&mut self, switch_node: Node, input: u32) {
@@ -1615,7 +1630,9 @@ impl Rvsdg {
 
         let index = input as usize;
         let arg = index - 1;
+        let region = self.nodes[switch_node].region();
         let node_data = self.nodes[switch_node].expect_switch_mut();
+        let input_origin = node_data.value_inputs[input as usize].origin;
         let branch_count = node_data.branches.len();
 
         node_data.value_inputs.remove(index);
@@ -1637,6 +1654,16 @@ impl Rvsdg {
             arguments.remove(arg);
             self.correct_region_argument_connections(branch, arg);
         }
+
+        // Remove the input as a user from its origin
+        self.remove_user(
+            region,
+            input_origin,
+            ValueUser::Input {
+                consumer: switch_node,
+                input,
+            },
+        );
     }
 
     pub fn add_switch_output(&mut self, switch_node: Node, ty: Type) {
@@ -1741,7 +1768,12 @@ impl Rvsdg {
     }
 
     pub fn add_loop_input(&mut self, loop_node: Node, input: ValueInput) {
+        let region = self.nodes[loop_node].region();
+
+        self.validate_node_value_input(region, &input);
+
         let node_data = self.nodes[loop_node].expect_loop_mut();
+        let input_index = node_data.value_inputs.len();
 
         node_data.value_inputs.push(input);
         node_data.value_outputs.push(ValueOutput::new(input.ty));
@@ -1752,6 +1784,8 @@ impl Rvsdg {
         region_data
             .value_results
             .push(ValueInput::placeholder(input.ty));
+
+        self.connect_node_value_input(region, loop_node, input_index);
     }
 
     pub fn remove_loop_input(&mut self, loop_node: Node, input: u32) {
@@ -1762,7 +1796,9 @@ impl Rvsdg {
         // result we're going to remove.
         let result_index = index + 1;
 
+        let region = self.nodes[loop_node].region();
         let node_data = self.nodes[loop_node].expect_loop_mut();
+        let input_origin = node_data.value_inputs[index].origin;
         let loop_region = node_data.loop_region;
 
         if !node_data.value_outputs[index].users.is_empty() {
@@ -1776,17 +1812,31 @@ impl Rvsdg {
             panic!("cannot remove an input if the corresponding region argument still has users");
         }
 
+        // Remove the input the corresponding output and correct their connections
         node_data.value_inputs.remove(index);
         node_data.value_outputs.remove(index);
-        self.regions[loop_region].value_arguments.remove(index);
-        self.regions[loop_region].value_results.remove(result_index);
-
-        // Correct the connections for any value inputs and outputs and region argument and results
-        // to the right of the input/output/argument/result that was removed
         self.correct_value_input_connections(loop_node, index, -1);
         self.correct_value_output_connections(loop_node, index);
+
+        // Remove the corresponding argument and correct its connections. Its important that we
+        // correct the argument's connections before we remove the result, because the argument may
+        // connect directly to results that succeed the result we're removing.
+        self.regions[loop_region].value_arguments.remove(index);
         self.correct_region_argument_connections(loop_region, index);
+
+        // Remove the corresponding result and correct its connections
+        self.regions[loop_region].value_results.remove(result_index);
         self.correct_region_result_connections(loop_region, result_index, -1);
+
+        // Remove the input as a user from its origin
+        self.remove_user(
+            region,
+            input_origin,
+            ValueUser::Input {
+                consumer: loop_node,
+                input,
+            },
+        );
     }
 
     add_const_methods! {
@@ -2530,27 +2580,31 @@ impl Rvsdg {
         let input_count = self.nodes[node].value_inputs().len();
 
         for input_index in 0..input_count {
-            let user = ValueUser::Input {
-                consumer: node,
-                input: input_index as u32,
-            };
+            self.connect_node_value_input(region, node, input_index);
+        }
+    }
 
-            match self.nodes[node].value_inputs()[input_index].origin {
-                ValueOrigin::Argument(arg_index) => {
-                    self.regions[region].value_arguments[arg_index as usize]
-                        .users
-                        .insert(user);
-                }
-                ValueOrigin::Output { producer, output } => {
-                    assert_ne!(
-                        producer, node,
-                        "cannot connect a node input to one of its own outputs"
-                    );
+    fn connect_node_value_input(&mut self, region: Region, node: Node, input_index: usize) {
+        let user = ValueUser::Input {
+            consumer: node,
+            input: input_index as u32,
+        };
 
-                    self.nodes[producer].value_outputs_mut()[output as usize]
-                        .users
-                        .insert(user);
-                }
+        match self.nodes[node].value_inputs()[input_index].origin {
+            ValueOrigin::Argument(arg_index) => {
+                self.regions[region].value_arguments[arg_index as usize]
+                    .users
+                    .insert(user);
+            }
+            ValueOrigin::Output { producer, output } => {
+                assert_ne!(
+                    producer, node,
+                    "cannot connect a node input to one of its own outputs"
+                );
+
+                self.nodes[producer].value_outputs_mut()[output as usize]
+                    .users
+                    .insert(user);
             }
         }
     }

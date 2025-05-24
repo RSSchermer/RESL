@@ -245,6 +245,9 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
         }
 
         self.visit_users(node, 0, &scalar_replacements);
+
+        // The OpAlloca node now should not have any users left, so we can remove it
+        self.rvsdg.remove_node(node);
     }
 
     fn visit_users(&mut self, node: Node, output: u32, split_inputs: &[ValueInput]) {
@@ -253,7 +256,9 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
             .users
             .len();
 
-        for i in 0..user_count {
+        // We iterate over users in reverse order, so that users may more themselves from the user
+        // set, without disrupting iteration
+        for i in (0..user_count).rev() {
             let user = self.rvsdg[node].value_outputs()[output as usize].users[i];
 
             self.visit_user(region, user, split_inputs);
@@ -294,6 +299,7 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
             Simple(OpStore(_)) => self.split_op_store(node, input, split_input),
             Simple(OpPtrElementPtr(_)) => self.visit_op_ptr_element_ptr(node, split_input),
             Simple(OpExtractElement(_)) => self.visit_op_extract_element(node, split_input),
+            Simple(ValueProxy(_)) => self.visit_value_proxy(node, split_input),
             _ => unreachable!("node king cannot take a pointer or aggregate value as input"),
         }
     }
@@ -1005,6 +1011,11 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
         self.rvsdg.remove_loop_input(owner, input_index);
     }
 
+    fn visit_value_proxy(&mut self, node: Node, split_input: &[ValueInput]) {
+        self.visit_users(node, 0, split_input);
+        self.rvsdg.remove_node(node);
+    }
+
     /// Redirects all users of the `region`'s given `argument` to the `split_input` nodes.
     ///
     /// Leaves the `argument` without any users.
@@ -1017,7 +1028,9 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
         let arg_index = argument as usize;
         let user_count = self.rvsdg[region].value_arguments()[arg_index].users.len();
 
-        for user_index in 0..user_count {
+        // We iterate over users in reverse order, so that users may more themselves from the user
+        // set, without disrupting iteration
+        for user_index in (0..user_count).rev() {
             let user = self.rvsdg[region].value_arguments()[arg_index].users[user_index];
 
             self.visit_user(region, user, split_input)
@@ -1185,5 +1198,1008 @@ impl ScalarReplacementTransform {
         for entry_point in entry_points {
             self.replace_in_fn(module, rvsdg, entry_point);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::iter;
+
+    use super::*;
+    use crate::ty::TY_DUMMY;
+    use crate::{thin_set, BinaryOperator, FnArg, FnSig, Symbol};
+
+    #[test]
+    fn test_scalar_replace_op_ptr_element_ptr() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let ty = module.ty.register(TypeKind::Array {
+            base: TY_U32,
+            stride: 4,
+            count: 2,
+        });
+        let ptr_ty = module.ty.register(TypeKind::Ptr(ty));
+        let element_ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
+
+        let op_alloca = rvsdg.add_op_alloca(&mut module.ty, region, ty);
+        let element_index = rvsdg.add_const_u32(region, 1);
+        let op_ptr_element_ptr = rvsdg.add_op_ptr_element_ptr(
+            &mut module.ty,
+            region,
+            TY_U32,
+            ValueInput::output(ptr_ty, op_alloca, 0),
+            [ValueInput::output(TY_U32, element_index, 0)],
+        );
+        let load = rvsdg.add_op_load(
+            region,
+            ValueInput::output(element_ptr_ty, op_ptr_element_ptr, 0),
+            TY_U32,
+            StateOrigin::Argument,
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: load,
+                output: 0,
+            },
+        );
+
+        let mut transform = ScalarReplacementTransform::new();
+
+        transform.replace_in_fn(&mut module, &mut rvsdg, function);
+
+        assert_eq!(
+            rvsdg[region].value_results()[0].origin,
+            ValueOrigin::Output {
+                producer: load,
+                output: 0
+            }
+        );
+
+        let load_origin = rvsdg[load].expect_op_load().ptr_input().origin;
+        let ValueOrigin::Output {
+            producer: load_origin_node,
+            output: 0,
+        } = load_origin
+        else {
+            panic!("load origin should be the first output of a node")
+        };
+        let element_alloca = rvsdg[load_origin_node].expect_op_alloca();
+
+        assert_eq!(element_alloca.ty(), TY_U32);
+        assert_eq!(
+            &element_alloca.value_output().users,
+            &thin_set![ValueUser::Input {
+                consumer: load,
+                input: 0
+            }]
+        );
+
+        assert!(!rvsdg.is_live_node(op_ptr_element_ptr));
+        assert!(!rvsdg.is_live_node(op_alloca));
+    }
+
+    #[test]
+    fn test_scalar_replace_op_ptr_element_ptr_dynamic_index() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![FnArg {
+                    ty: TY_U32,
+                    shader_io_binding: None,
+                }],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let ty = module.ty.register(TypeKind::Array {
+            base: TY_U32,
+            stride: 4,
+            count: 2,
+        });
+        let ptr_ty = module.ty.register(TypeKind::Ptr(ty));
+        let element_ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
+
+        let op_alloca = rvsdg.add_op_alloca(&mut module.ty, region, ty);
+        let op_ptr_element_ptr = rvsdg.add_op_ptr_element_ptr(
+            &mut module.ty,
+            region,
+            TY_U32,
+            ValueInput::output(ptr_ty, op_alloca, 0),
+            [ValueInput::argument(TY_U32, 0)],
+        );
+        let load = rvsdg.add_op_load(
+            region,
+            ValueInput::output(element_ptr_ty, op_ptr_element_ptr, 0),
+            TY_U32,
+            StateOrigin::Argument,
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: load,
+                output: 0,
+            },
+        );
+
+        let mut transform = ScalarReplacementTransform::new();
+
+        transform.replace_in_fn(&mut module, &mut rvsdg, function);
+
+        assert_eq!(
+            rvsdg[region].value_results()[0].origin,
+            ValueOrigin::Output {
+                producer: load,
+                output: 0
+            }
+        );
+
+        let load_origin = rvsdg[load].expect_op_load().ptr_input().origin;
+        let ValueOrigin::Output {
+            producer: switch_node,
+            output: 0,
+        } = load_origin
+        else {
+            panic!("load origin should be the first output of a node")
+        };
+
+        let switch = rvsdg[switch_node].expect_switch();
+
+        assert_eq!(switch.value_outputs().len(), 1);
+
+        let switch_output = &switch.value_outputs()[0];
+
+        assert_eq!(switch_output.ty, element_ptr_ty);
+        assert_eq!(
+            &switch_output.users,
+            &thin_set![ValueUser::Input {
+                consumer: load,
+                input: 0
+            }]
+        );
+
+        assert_eq!(switch.value_inputs().len(), 3);
+        assert_eq!(switch.branches().len(), 2);
+
+        let branch_0 = &rvsdg[switch.branches()[0]];
+
+        assert_eq!(
+            &branch_0.value_arguments()[0].users,
+            &thin_set![ValueUser::Result(0)]
+        );
+        assert_eq!(&branch_0.value_arguments()[1].users, &thin_set![]);
+        assert_eq!(branch_0.value_results()[0].origin, ValueOrigin::Argument(0));
+
+        let branch_1 = &rvsdg[switch.branches()[1]];
+
+        assert_eq!(&branch_1.value_arguments()[0].users, &thin_set![]);
+        assert_eq!(
+            &branch_1.value_arguments()[1].users,
+            &thin_set![ValueUser::Result(0)]
+        );
+        assert_eq!(branch_1.value_results()[0].origin, ValueOrigin::Argument(1));
+
+        assert_eq!(switch.value_inputs()[0].ty, TY_U32);
+        assert_eq!(switch.value_inputs()[0].origin, ValueOrigin::Argument(0));
+
+        assert_eq!(switch.value_inputs()[1].ty, element_ptr_ty);
+
+        let ValueOrigin::Output {
+            producer: element_0_alloca,
+            output: 0,
+        } = switch.value_inputs()[1].origin
+        else {
+            panic!("switch input 1's origin should be the first output of a node")
+        };
+
+        let element_0_alloca = rvsdg[element_0_alloca].expect_op_alloca();
+
+        assert_eq!(element_0_alloca.ty(), TY_U32);
+        assert_eq!(
+            &element_0_alloca.value_output().users,
+            &thin_set![ValueUser::Input {
+                consumer: switch_node,
+                input: 1
+            }]
+        );
+
+        assert_eq!(switch.value_inputs()[2].ty, element_ptr_ty);
+
+        let ValueOrigin::Output {
+            producer: element_1_alloca,
+            output: 0,
+        } = switch.value_inputs()[2].origin
+        else {
+            panic!("switch input 2's origin should be the first output of a node")
+        };
+
+        let element_1_alloca = rvsdg[element_1_alloca].expect_op_alloca();
+
+        assert_eq!(element_1_alloca.ty(), TY_U32);
+        assert_eq!(
+            &element_1_alloca.value_output().users,
+            &thin_set![ValueUser::Input {
+                consumer: switch_node,
+                input: 2
+            }]
+        );
+
+        assert!(!rvsdg.is_live_node(op_ptr_element_ptr));
+        assert!(!rvsdg.is_live_node(op_alloca));
+    }
+
+    #[test]
+    fn test_scalar_replace_op_extract_element() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let ty = module.ty.register(TypeKind::Array {
+            base: TY_U32,
+            stride: 4,
+            count: 2,
+        });
+        let ptr_ty = module.ty.register(TypeKind::Ptr(ty));
+        let element_ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
+
+        let op_alloca = rvsdg.add_op_alloca(&mut module.ty, region, ty);
+        let op_load = rvsdg.add_op_load(
+            region,
+            ValueInput::output(ptr_ty, op_alloca, 0),
+            ty,
+            StateOrigin::Argument,
+        );
+        let element_index = rvsdg.add_const_u32(region, 1);
+        let op_extract_element = rvsdg.add_op_extract_element(
+            region,
+            TY_U32,
+            ValueInput::output(ty, op_load, 0),
+            [ValueInput::output(TY_U32, element_index, 0)],
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: op_extract_element,
+                output: 0,
+            },
+        );
+
+        let mut transform = ScalarReplacementTransform::new();
+
+        transform.replace_in_fn(&mut module, &mut rvsdg, function);
+
+        let result_input = rvsdg[region].value_results()[0];
+
+        assert_eq!(result_input.ty, TY_U32);
+
+        let ValueOrigin::Output {
+            producer: element_load_node,
+            output: 0,
+        } = result_input.origin
+        else {
+            panic!("result origin should be the first output of a node")
+        };
+
+        let element_load = rvsdg[element_load_node].expect_op_load();
+
+        assert_eq!(element_load.ptr_input().ty, element_ptr_ty);
+        assert_eq!(element_load.value_output().ty, TY_U32);
+        assert_eq!(
+            &element_load.value_output().users,
+            &thin_set![ValueUser::Result(0)]
+        );
+
+        let element_load_input = element_load.ptr_input();
+
+        let ValueOrigin::Output {
+            producer: element_alloca_node,
+            output: element_alloca_output,
+        } = element_load_input.origin
+        else {
+            panic!("element load op origin should be the first output of a node")
+        };
+
+        assert_eq!(element_alloca_output, 0);
+
+        let element_alloca = rvsdg[element_alloca_node].expect_op_alloca();
+
+        assert_eq!(element_alloca.ty(), TY_U32);
+        assert_eq!(element_alloca.value_output().ty, element_ptr_ty);
+        assert_eq!(
+            &element_alloca.value_output().users,
+            &thin_set![ValueUser::Input {
+                consumer: element_load_node,
+                input: 0
+            }]
+        );
+
+        assert!(!rvsdg.is_live_node(op_alloca));
+        assert!(!rvsdg.is_live_node(op_load));
+        assert!(!rvsdg.is_live_node(op_extract_element));
+    }
+
+    #[test]
+    fn test_scalar_replace_op_store() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![],
+                ret_ty: None,
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let ty = module.ty.register(TypeKind::Array {
+            base: TY_U32,
+            stride: 4,
+            count: 2,
+        });
+        let ptr_ty = module.ty.register(TypeKind::Ptr(ty));
+        let element_ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
+
+        let op_alloca = rvsdg.add_op_alloca(&mut module.ty, region, ty);
+        let op_load = rvsdg.add_op_load(
+            region,
+            ValueInput::output(ptr_ty, op_alloca, 0),
+            ty,
+            StateOrigin::Argument,
+        );
+        let op_store = rvsdg.add_op_store(
+            region,
+            ValueInput::output(ptr_ty, op_alloca, 0),
+            ValueInput::output(ty, op_load, 0),
+            StateOrigin::Node(op_load),
+        );
+
+        let mut transform = ScalarReplacementTransform::new();
+
+        transform.replace_in_fn(&mut module, &mut rvsdg, function);
+
+        let StateOrigin::Node(store_element_1_node) = *rvsdg[region].state_result() else {
+            panic!("the state origin should be a node output")
+        };
+
+        let store_element_1 = rvsdg[store_element_1_node].expect_op_store();
+
+        let StateOrigin::Node(store_element_0_node) = store_element_1.state().unwrap().origin
+        else {
+            panic!("the state origin should be a node output")
+        };
+
+        let store_element_0 = rvsdg[store_element_0_node].expect_op_store();
+
+        let StateOrigin::Node(load_element_1_node) = store_element_0.state().unwrap().origin else {
+            panic!("the state origin should be a node output")
+        };
+
+        let load_element_1 = rvsdg[load_element_1_node].expect_op_load();
+
+        let StateOrigin::Node(load_element_0_node) = load_element_1.state().unwrap().origin else {
+            panic!("the state origin should be a node output")
+        };
+
+        let load_element_0 = rvsdg[load_element_0_node].expect_op_load();
+
+        let ValueOrigin::Output {
+            producer: alloca_element_0_node,
+            output: 0,
+        } = store_element_0.ptr_input().origin
+        else {
+            panic!("the pointer input to store_element_0 node should be the first output of a node")
+        };
+
+        let alloca_element_0 = rvsdg[alloca_element_0_node].expect_op_alloca();
+
+        let ValueOrigin::Output {
+            producer: alloca_element_1_node,
+            output: 0,
+        } = store_element_1.ptr_input().origin
+        else {
+            panic!("the pointer input to store_element_1 node should be the first output of a node")
+        };
+
+        let alloca_element_1 = rvsdg[alloca_element_1_node].expect_op_alloca();
+
+        assert_eq!(alloca_element_0.ty(), TY_U32);
+        assert_eq!(
+            &alloca_element_0.value_output().users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: store_element_0_node,
+                    input: 0
+                },
+                ValueUser::Input {
+                    consumer: load_element_0_node,
+                    input: 0
+                }
+            ]
+        );
+
+        assert_eq!(alloca_element_1.ty(), TY_U32);
+        assert_eq!(
+            &alloca_element_1.value_output().users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: store_element_1_node,
+                    input: 0
+                },
+                ValueUser::Input {
+                    consumer: load_element_1_node,
+                    input: 0
+                }
+            ]
+        );
+
+        assert_eq!(
+            load_element_0.ptr_input(),
+            &ValueInput {
+                ty: element_ptr_ty,
+                origin: ValueOrigin::Output {
+                    producer: alloca_element_0_node,
+                    output: 0,
+                },
+            }
+        );
+        assert_eq!(
+            &load_element_0.value_output().users,
+            &thin_set![ValueUser::Input {
+                consumer: store_element_0_node,
+                input: 1
+            }]
+        );
+
+        assert_eq!(
+            load_element_1.ptr_input(),
+            &ValueInput {
+                ty: element_ptr_ty,
+                origin: ValueOrigin::Output {
+                    producer: alloca_element_1_node,
+                    output: 0,
+                },
+            }
+        );
+        assert_eq!(
+            &load_element_1.value_output().users,
+            &thin_set![ValueUser::Input {
+                consumer: store_element_1_node,
+                input: 1
+            }]
+        );
+
+        assert_eq!(
+            store_element_0.ptr_input(),
+            &ValueInput {
+                ty: element_ptr_ty,
+                origin: ValueOrigin::Output {
+                    producer: alloca_element_0_node,
+                    output: 0,
+                },
+            }
+        );
+        assert_eq!(
+            store_element_0.value_input(),
+            &ValueInput {
+                ty: TY_U32,
+                origin: ValueOrigin::Output {
+                    producer: load_element_0_node,
+                    output: 0,
+                },
+            }
+        );
+
+        assert_eq!(
+            store_element_1.ptr_input(),
+            &ValueInput {
+                ty: element_ptr_ty,
+                origin: ValueOrigin::Output {
+                    producer: alloca_element_1_node,
+                    output: 0,
+                },
+            }
+        );
+        assert_eq!(
+            store_element_1.value_input(),
+            &ValueInput {
+                ty: TY_U32,
+                origin: ValueOrigin::Output {
+                    producer: load_element_1_node,
+                    output: 0,
+                },
+            }
+        );
+
+        assert!(!rvsdg.is_live_node(op_alloca));
+        assert!(!rvsdg.is_live_node(op_load));
+        assert!(!rvsdg.is_live_node(op_store));
+    }
+
+    #[test]
+    fn test_scalar_replace_switch_input() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![FnArg {
+                    ty: TY_U32,
+                    shader_io_binding: None,
+                }],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let ty = module.ty.register(TypeKind::Array {
+            base: TY_U32,
+            stride: 4,
+            count: 2,
+        });
+        let ptr_ty = module.ty.register(TypeKind::Ptr(ty));
+        let element_ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
+
+        let op_alloca = rvsdg.add_op_alloca(&mut module.ty, region, ty);
+        let switch_node = rvsdg.add_switch(
+            region,
+            vec![
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::output(ptr_ty, op_alloca, 0),
+            ],
+            vec![ValueOutput::new(TY_U32)],
+            Some(StateOrigin::Argument),
+        );
+
+        let branch_0 = rvsdg.add_switch_branch(switch_node);
+        let branch_0_index = rvsdg.add_const_u32(branch_0, 0);
+        let branch_0_op_ptr_element_ptr = rvsdg.add_op_ptr_element_ptr(
+            &mut module.ty,
+            branch_0,
+            TY_U32,
+            ValueInput::argument(ptr_ty, 0),
+            [ValueInput::output(TY_U32, branch_0_index, 0)],
+        );
+        let branch_0_load = rvsdg.add_op_load(
+            branch_0,
+            ValueInput::output(element_ptr_ty, branch_0_op_ptr_element_ptr, 0),
+            TY_U32,
+            StateOrigin::Argument,
+        );
+
+        rvsdg.reconnect_region_result(
+            branch_0,
+            0,
+            ValueOrigin::Output {
+                producer: branch_0_load,
+                output: 0,
+            },
+        );
+
+        let branch_1 = rvsdg.add_switch_branch(switch_node);
+        let branch_1_index = rvsdg.add_const_u32(branch_1, 1);
+        let branch_1_op_ptr_element_ptr = rvsdg.add_op_ptr_element_ptr(
+            &mut module.ty,
+            branch_1,
+            TY_U32,
+            ValueInput::argument(ptr_ty, 0),
+            [ValueInput::output(TY_U32, branch_1_index, 0)],
+        );
+        let branch_1_load = rvsdg.add_op_load(
+            branch_1,
+            ValueInput::output(element_ptr_ty, branch_1_op_ptr_element_ptr, 0),
+            TY_U32,
+            StateOrigin::Argument,
+        );
+
+        rvsdg.reconnect_region_result(
+            branch_1,
+            0,
+            ValueOrigin::Output {
+                producer: branch_1_load,
+                output: 0,
+            },
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: switch_node,
+                output: 0,
+            },
+        );
+
+        let mut transform = ScalarReplacementTransform::new();
+
+        transform.replace_in_fn(&mut module, &mut rvsdg, function);
+
+        let result_input = rvsdg[region].value_results()[0];
+
+        assert_eq!(result_input.ty, TY_U32);
+        assert_eq!(
+            result_input.origin,
+            ValueOrigin::Output {
+                producer: switch_node,
+                output: 0
+            }
+        );
+
+        let switch = rvsdg[switch_node].expect_switch();
+
+        assert_eq!(switch.value_inputs().len(), 3);
+
+        let branch_0 = &rvsdg[branch_0];
+
+        assert_eq!(
+            branch_0.value_results()[0].origin,
+            ValueOrigin::Output {
+                producer: branch_0_load,
+                output: 0
+            }
+        );
+
+        assert_eq!(
+            rvsdg[branch_0_load].expect_op_load().ptr_input().origin,
+            ValueOrigin::Argument(0)
+        );
+
+        assert_eq!(branch_0.value_arguments().len(), 2);
+        assert_eq!(branch_0.value_arguments()[0].ty, element_ptr_ty);
+        assert_eq!(branch_0.value_arguments()[1].ty, element_ptr_ty);
+        assert_eq!(
+            &branch_0.value_arguments()[0].users,
+            &thin_set![ValueUser::Input {
+                consumer: branch_0_load,
+                input: 0,
+            }]
+        );
+        assert_eq!(&branch_0.value_arguments()[1].users, &thin_set![]);
+
+        let branch_1 = &rvsdg[branch_1];
+
+        assert_eq!(
+            branch_1.value_results()[0].origin,
+            ValueOrigin::Output {
+                producer: branch_1_load,
+                output: 0
+            }
+        );
+
+        assert_eq!(
+            rvsdg[branch_1_load].expect_op_load().ptr_input().origin,
+            ValueOrigin::Argument(1)
+        );
+
+        assert_eq!(branch_1.value_arguments().len(), 2);
+        assert_eq!(branch_1.value_arguments()[0].ty, element_ptr_ty);
+        assert_eq!(branch_1.value_arguments()[1].ty, element_ptr_ty);
+        assert_eq!(&branch_1.value_arguments()[0].users, &thin_set![]);
+        assert_eq!(
+            &branch_1.value_arguments()[1].users,
+            &thin_set![ValueUser::Input {
+                consumer: branch_1_load,
+                input: 0,
+            }]
+        );
+
+        assert_eq!(switch.value_inputs()[0].origin, ValueOrigin::Argument(0));
+
+        let ValueOrigin::Output {
+            producer: element_0_alloca_node,
+            output: 0,
+        } = switch.value_inputs()[1].origin
+        else {
+            panic!("the second input to the switch node should be the first output of a node")
+        };
+
+        let element_0_alloca = rvsdg[element_0_alloca_node].expect_op_alloca();
+
+        assert_eq!(element_0_alloca.ty(), TY_U32);
+        assert_eq!(
+            &element_0_alloca.value_output().users,
+            &thin_set![ValueUser::Input {
+                consumer: switch_node,
+                input: 1,
+            }]
+        );
+
+        let ValueOrigin::Output {
+            producer: element_1_alloca_node,
+            output: 0,
+        } = switch.value_inputs()[2].origin
+        else {
+            panic!("the third input to the switch node should be the first output of a node")
+        };
+
+        let element_1_alloca = rvsdg[element_1_alloca_node].expect_op_alloca();
+
+        assert_eq!(element_1_alloca.ty(), TY_U32);
+        assert_eq!(
+            &element_1_alloca.value_output().users,
+            &thin_set![ValueUser::Input {
+                consumer: switch_node,
+                input: 2,
+            }]
+        );
+
+        assert!(!rvsdg.is_live_node(op_alloca));
+        assert!(!rvsdg.is_live_node(branch_0_op_ptr_element_ptr));
+        assert!(!rvsdg.is_live_node(branch_1_op_ptr_element_ptr));
+    }
+
+    #[test]
+    fn test_scalar_replace_loop_input() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![FnArg {
+                    ty: TY_U32,
+                    shader_io_binding: None,
+                }],
+                ret_ty: None,
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let ty = module.ty.register(TypeKind::Array {
+            base: TY_U32,
+            stride: 4,
+            count: 2,
+        });
+        let ptr_ty = module.ty.register(TypeKind::Ptr(ty));
+        let element_ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
+
+        let counter = rvsdg.add_const_u32(region, 0);
+        let op_alloca = rvsdg.add_op_alloca(&mut module.ty, region, ty);
+
+        let (loop_node, loop_region) = rvsdg.add_loop(
+            region,
+            vec![
+                ValueInput::output(TY_U32, counter, 0),
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::output(ptr_ty, op_alloca, 0),
+            ],
+            None,
+        );
+
+        let element_index = rvsdg.add_const_u32(loop_region, 0);
+        let op_ptr_element_ptr_node = rvsdg.add_op_ptr_element_ptr(
+            &mut module.ty,
+            loop_region,
+            TY_U32,
+            ValueInput::argument(ptr_ty, 2),
+            [ValueInput::output(TY_U32, element_index, 0)],
+        );
+        let load_node = rvsdg.add_op_load(
+            loop_region,
+            ValueInput::output(element_ptr_ty, op_ptr_element_ptr_node, 0),
+            TY_U32,
+            StateOrigin::Argument,
+        );
+
+        let increment_node = rvsdg.add_const_u32(loop_region, 1);
+        let add_one_node = rvsdg.add_op_binary(
+            loop_region,
+            BinaryOperator::Add,
+            ValueInput::output(TY_U32, load_node, 0),
+            ValueInput::output(TY_U32, increment_node, 0),
+        );
+        let store_node = rvsdg.add_op_store(
+            loop_region,
+            ValueInput::output(element_ptr_ty, op_ptr_element_ptr_node, 0),
+            ValueInput::output(TY_U32, add_one_node, 0),
+            StateOrigin::Node(load_node),
+        );
+
+        let counter_increment_node = rvsdg.add_op_binary(
+            loop_region,
+            BinaryOperator::Add,
+            ValueInput::argument(TY_U32, 0),
+            ValueInput::output(TY_U32, increment_node, 0),
+        );
+        let reentry_test_node = rvsdg.add_op_binary(
+            loop_region,
+            BinaryOperator::Lt,
+            ValueInput::output(TY_U32, counter_increment_node, 0),
+            ValueInput::argument(TY_U32, 1),
+        );
+
+        rvsdg.reconnect_region_result(
+            loop_region,
+            0,
+            ValueOrigin::Output {
+                producer: reentry_test_node,
+                output: 0,
+            },
+        );
+        rvsdg.reconnect_region_result(
+            loop_region,
+            1,
+            ValueOrigin::Output {
+                producer: counter_increment_node,
+                output: 0,
+            },
+        );
+        rvsdg.reconnect_region_result(loop_region, 2, ValueOrigin::Argument(1));
+        rvsdg.reconnect_region_result(loop_region, 3, ValueOrigin::Argument(2));
+
+        let mut transform = ScalarReplacementTransform::new();
+
+        transform.replace_in_fn(&mut module, &mut rvsdg, function);
+
+        let loop_data = rvsdg[loop_node].expect_loop();
+        let loop_region = loop_data.loop_region();
+
+        assert_eq!(loop_data.value_inputs().len(), 4);
+        assert_eq!(loop_data.value_inputs()[0].ty, TY_U32);
+        assert_eq!(loop_data.value_inputs()[1].ty, TY_U32);
+        assert_eq!(loop_data.value_inputs()[2].ty, element_ptr_ty);
+        assert_eq!(loop_data.value_inputs()[3].ty, element_ptr_ty);
+
+        let ValueOrigin::Output {
+            producer: element_0_alloca_node,
+            output: 0,
+        } = loop_data.value_inputs()[2].origin
+        else {
+            panic!("the third input to the switch node should be the first output of a node")
+        };
+
+        let element_0_alloca = rvsdg[element_0_alloca_node].expect_op_alloca();
+
+        assert_eq!(element_0_alloca.ty(), TY_U32);
+        assert_eq!(
+            &element_0_alloca.value_output().users,
+            &thin_set![ValueUser::Input {
+                consumer: loop_node,
+                input: 2,
+            }]
+        );
+
+        let ValueOrigin::Output {
+            producer: element_1_alloca_node,
+            output: 0,
+        } = loop_data.value_inputs()[3].origin
+        else {
+            panic!("the third input to the switch node should be the first output of a node")
+        };
+
+        let element_1_alloca = rvsdg[element_1_alloca_node].expect_op_alloca();
+
+        assert_eq!(element_1_alloca.ty(), TY_U32);
+        assert_eq!(
+            &element_1_alloca.value_output().users,
+            &thin_set![ValueUser::Input {
+                consumer: loop_node,
+                input: 3,
+            }]
+        );
+
+        let load = rvsdg[load_node].expect_op_load();
+
+        assert_eq!(load.ptr_input().origin, ValueOrigin::Argument(2));
+        assert_eq!(
+            &load.value_output().users,
+            &thin_set![ValueUser::Input {
+                consumer: add_one_node,
+                input: 0,
+            }]
+        );
+
+        let arguments = rvsdg[*loop_region].value_arguments();
+
+        assert_eq!(arguments.len(), 4);
+
+        assert_eq!(arguments[2].ty, element_ptr_ty);
+        assert_eq!(
+            &arguments[2].users,
+            &thin_set![
+                ValueUser::Result(3),
+                ValueUser::Input {
+                    consumer: store_node,
+                    input: 0,
+                },
+                ValueUser::Input {
+                    consumer: load_node,
+                    input: 0,
+                }
+            ]
+        );
+
+        assert_eq!(arguments[3].ty, element_ptr_ty);
+        assert_eq!(arguments[3].users, thin_set![ValueUser::Result(4)]);
+
+        let results = rvsdg[*loop_region].value_results();
+
+        assert_eq!(results.len(), 5);
+
+        assert_eq!(results[3].ty, element_ptr_ty);
+        assert_eq!(results[3].origin, ValueOrigin::Argument(2));
+
+        assert_eq!(results[4].ty, element_ptr_ty);
+        assert_eq!(results[4].origin, ValueOrigin::Argument(3));
+
+        assert!(!rvsdg.is_live_node(op_alloca));
+        assert!(!rvsdg.is_live_node(op_ptr_element_ptr_node));
     }
 }
