@@ -1384,40 +1384,68 @@ macro_rules! add_const_methods {
     };
 }
 
-#[derive(Clone, Default, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Rvsdg {
     regions: SlotMap<Region, RegionData>,
     nodes: SlotMap<Node, NodeData>,
+    global_region: Region,
     function_node: FxHashMap<Function, Node>,
 }
 
 impl Rvsdg {
     pub fn new() -> Self {
-        Default::default()
+        let mut regions = SlotMap::default();
+        let global_region = regions.insert(RegionData {
+            owner: None,
+            nodes: Default::default(),
+            value_arguments: vec![],
+            value_results: vec![],
+            state_argument: StateUser::Result,
+            state_result: StateOrigin::Argument,
+        });
+
+        Rvsdg {
+            regions,
+            nodes: Default::default(),
+            global_region,
+            function_node: Default::default(),
+        }
+    }
+
+    pub fn global_region(&self) -> Region {
+        self.global_region
     }
 
     pub fn register_uniform_binding(&mut self, module: &Module, binding: UniformBinding) -> Node {
         let ty = module.uniform_bindings[binding].ty;
 
-        self.nodes.insert(NodeData {
+        let node = self.nodes.insert(NodeData {
             kind: NodeKind::UniformBinding(UniformBindingNode {
                 binding,
                 output: ValueOutput::new(ty),
             }),
-            region: None,
-        })
+            region: Some(self.global_region),
+        });
+
+        self.regions[self.global_region].nodes.insert(node);
+
+        node
     }
 
     pub fn register_storage_binding(&mut self, module: &Module, binding: StorageBinding) -> Node {
         let ty = module.storage_bindings[binding].ty;
 
-        self.nodes.insert(NodeData {
+        let node = self.nodes.insert(NodeData {
             kind: NodeKind::StorageBinding(StorageBindingNode {
                 binding,
                 output: ValueOutput::new(ty),
             }),
-            region: None,
-        })
+            region: Some(self.global_region),
+        });
+
+        self.regions[self.global_region].nodes.insert(node);
+
+        node
     }
 
     pub fn register_workgroup_binding(
@@ -1427,13 +1455,17 @@ impl Rvsdg {
     ) -> Node {
         let ty = module.workgroup_bindings[binding].ty;
 
-        self.nodes.insert(NodeData {
+        let node = self.nodes.insert(NodeData {
             kind: NodeKind::WorkgroupBinding(WorkgroupBindingNode {
                 binding,
                 output: ValueOutput::new(ty),
             }),
-            region: None,
-        })
+            region: Some(self.global_region),
+        });
+
+        self.regions[self.global_region].nodes.insert(node);
+
+        node
     }
 
     pub fn register_function(
@@ -1488,11 +1520,12 @@ impl Rvsdg {
                 output: ValueOutput::new(sig.ty),
                 region,
             }),
-            region: None,
+            region: Some(self.global_region),
         });
 
         self.regions[region].owner = Some(node);
         self.function_node.insert(function, node);
+        self.regions[self.global_region].nodes.insert(node);
 
         for (i, dep) in dep_nodes.into_iter().enumerate() {
             self.nodes[dep].value_outputs_mut()[0]
