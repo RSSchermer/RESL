@@ -75,7 +75,7 @@ fn stratify_nodes(rvsdg: &Rvsdg, region: Region) -> Vec<IndexSet<Node>> {
     // to work with the strata in top-to-bottom order, so we reverse the order at the end of
     // stratification.
 
-    let mut unassigned_nodes = FxHashSet::from_iter(rvsdg[region].nodes());
+    let mut unassigned_nodes = FxHashSet::from_iter(rvsdg[region].nodes().iter().copied());
 
     let mut strata = vec![IndexSet::new()];
     let mut current_stratum = 0;
@@ -83,7 +83,7 @@ fn stratify_nodes(rvsdg: &Rvsdg, region: Region) -> Vec<IndexSet<Node>> {
     let mut assigned_lower = FxHashSet::default();
 
     // If a node does not have any outputs, then add to the bottom stratum
-    for node in rvsdg[region].nodes() {
+    for node in rvsdg[region].nodes().iter().copied() {
         let data = &rvsdg[node];
 
         if data.value_outputs().is_empty() && data.state().is_none() {
@@ -958,7 +958,7 @@ impl NodeLayout {
             }
             NodeKind::Loop(node) => {
                 let region_layout =
-                    RegionLayout::generate(config, module, rvsdg, *node.loop_region());
+                    RegionLayout::generate(config, module, rvsdg, node.loop_region());
 
                 NodeContent::Loop("loop".into(), region_layout)
             }

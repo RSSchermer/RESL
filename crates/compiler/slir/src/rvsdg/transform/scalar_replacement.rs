@@ -50,7 +50,7 @@ impl<'a, 'b> CandidateAllocaCollector<'a, 'b> {
 
     fn visit_region(&mut self, region: Region) {
         for node in self.rvsdg[region].nodes() {
-            self.visit_node(node);
+            self.visit_node(*node);
         }
     }
 
@@ -62,7 +62,7 @@ impl<'a, 'b> CandidateAllocaCollector<'a, 'b> {
                     self.visit_region(*branch)
                 }
             }
-            NodeKind::Loop(n) => self.visit_region(*n.loop_region()),
+            NodeKind::Loop(n) => self.visit_region(n.loop_region()),
             _ => {}
         }
     }
@@ -161,7 +161,7 @@ impl<'a, 'b> NonlocalUseAnalyzer<'a, 'b> {
                     }
                 }
                 NodeKind::Loop(n) => {
-                    if self.check_region_argument(*n.loop_region(), input) {
+                    if self.check_region_argument(n.loop_region(), input) {
                         return true;
                     }
                 }
@@ -786,7 +786,7 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
 
     fn split_loop_input(&mut self, node: Node, input: u32, split_input: &[ValueInput]) {
         let node_data = self.rvsdg[node].expect_loop();
-        let loop_region = *node_data.loop_region();
+        let loop_region = node_data.loop_region();
         let prior_input_count = node_data.value_inputs().len();
         let prior_result_count = prior_input_count + 1;
 
@@ -2166,7 +2166,7 @@ mod tests {
             }]
         );
 
-        let arguments = rvsdg[*loop_region].value_arguments();
+        let arguments = rvsdg[loop_region].value_arguments();
 
         assert_eq!(arguments.len(), 4);
 
@@ -2189,7 +2189,7 @@ mod tests {
         assert_eq!(arguments[3].ty, element_ptr_ty);
         assert_eq!(arguments[3].users, thin_set![ValueUser::Result(4)]);
 
-        let results = rvsdg[*loop_region].value_results();
+        let results = rvsdg[loop_region].value_results();
 
         assert_eq!(results.len(), 5);
 

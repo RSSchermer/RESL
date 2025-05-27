@@ -21,8 +21,8 @@ pub fn inline_entry_points_exhaustive(module: &mut Module, rvsdg: &mut Rvsdg) {
             let body_region = rvsdg[function_node].expect_function().body_region();
 
             for node in rvsdg[body_region].nodes() {
-                if rvsdg[node].is_op_apply() {
-                    apply_node_queue.push_back(node);
+                if rvsdg[*node].is_op_apply() {
+                    apply_node_queue.push_back(*node);
                 }
             }
 
@@ -39,8 +39,8 @@ pub fn inline_entry_points_exhaustive(module: &mut Module, rvsdg: &mut Rvsdg) {
                 // not sure if this search contributes significantly to the overall compile time, so
                 // we'd have to measure whether that's worth it.
                 for node in rvsdg[body_region].nodes() {
-                    if rvsdg[node].is_op_apply() {
-                        apply_node_queue.push_back(node);
+                    if rvsdg[*node].is_op_apply() {
+                        apply_node_queue.push_back(*node);
                     }
                 }
             }
@@ -195,13 +195,12 @@ mod tests {
 
         inline_entry_points_exhaustive(&mut module, &mut rvsdg);
 
-        let nodes = rvsdg[entry_point_region].nodes().collect::<Vec<_>>();
-
         // The entry_point function should no longer contain any apply nodes.
         assert_eq!(
             rvsdg[entry_point_region]
                 .nodes()
-                .filter(|n| rvsdg[*n].is_op_apply())
+                .into_iter()
+                .filter(|n| rvsdg[**n].is_op_apply())
                 .count(),
             0
         );

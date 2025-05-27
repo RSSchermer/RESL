@@ -1,6 +1,7 @@
 use std::ops::Index;
 use std::slice;
 
+use indexmap::IndexSet;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
@@ -188,7 +189,7 @@ pub struct State {
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct RegionData {
     owner: Option<Node>,
-    nodes: FxHashSet<Node>,
+    nodes: IndexSet<Node>,
     value_arguments: Vec<ValueOutput>,
     value_results: Vec<ValueInput>,
     state_argument: StateUser,
@@ -200,8 +201,8 @@ impl RegionData {
         self.owner.expect("region not correctly initialized")
     }
 
-    pub fn nodes(&self) -> impl Iterator<Item = Node> + use<'_> {
-        self.nodes.iter().copied()
+    pub fn nodes(&self) -> &IndexSet<Node> {
+        &self.nodes
     }
 
     pub fn value_arguments(&self) -> &[ValueOutput] {
@@ -746,8 +747,8 @@ pub struct LoopNode {
 }
 
 impl LoopNode {
-    pub fn loop_region(&self) -> &Region {
-        &self.loop_region
+    pub fn loop_region(&self) -> Region {
+        self.loop_region
     }
 }
 
@@ -2315,7 +2316,26 @@ impl Rvsdg {
         }
 
         self.unlink_state(node);
-        self.regions[region].nodes.remove(&node);
+        self.regions[region].nodes.shift_remove(&node);
+
+        match self.nodes[node].kind() {
+            NodeKind::Switch(switch_node) => {
+                let branch_count = switch_node.branches().len();
+
+                for i in 0..branch_count {
+                    let branch = self.nodes[node].expect_switch().branches()[i];
+
+                    self.remove_region_with_nodes(branch);
+                }
+            }
+            NodeKind::Loop(loop_node) => {
+                let loop_region = loop_node.loop_region();
+
+                self.remove_region_with_nodes(loop_region);
+            }
+            _ => {}
+        }
+
         self.nodes.remove(node);
     }
 
@@ -2540,6 +2560,40 @@ impl Rvsdg {
                 }
             }
         }
+    }
+
+    fn remove_region_with_nodes(&mut self, region: Region) {
+        let node_count = self.regions[region].nodes().len();
+
+        for i in (0..node_count).rev() {
+            let node = self.regions[region].nodes()[i];
+
+            // Note that we don't need to worry about removing/correcting any connections: nodes
+            // can only connect to nodes inside the region or region arguments and results, all of
+            // which are getting removed as well.
+
+            match self.nodes[node].kind() {
+                NodeKind::Switch(switch_node) => {
+                    let branch_count = switch_node.branches().len();
+
+                    for b in 0..branch_count {
+                        let branch = self.nodes[node].expect_switch().branches()[b];
+
+                        self.remove_region_with_nodes(branch);
+                    }
+                }
+                NodeKind::Loop(loop_node) => {
+                    let loop_region = loop_node.loop_region();
+
+                    self.remove_region_with_nodes(loop_region);
+                }
+                _ => {}
+            }
+
+            self.nodes.remove(node);
+        }
+
+        self.regions.remove(region);
     }
 
     /// Helper function that inserts an argument of the given `ty` into the given `region` at the

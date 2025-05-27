@@ -210,7 +210,7 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
         let state_origin = data
             .state()
             .map(|state| self.mapped_state_origin(&state.origin));
-        let src_region = *data.loop_region();
+        let src_region = data.loop_region();
 
         let (replicate_node, replicate_region) =
             self.rvsdg
@@ -734,6 +734,7 @@ mod tests {
         assert!(!rvsdg[dst_region]
             .nodes()
             .into_iter()
+            .copied()
             .any(|n| rvsdg[n].is_op_apply()));
     }
 
