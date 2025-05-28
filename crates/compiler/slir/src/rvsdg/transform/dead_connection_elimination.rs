@@ -1,9 +1,10 @@
 use std::mem;
 
 use rustc_hash::FxHashSet;
-use crate::Module;
-use crate::rvsdg::{Connectivity, Node, NodeKind, Region, Rvsdg, StateUser, ValueOrigin};
+
 use crate::rvsdg::transform::proxy_node_elimination::region_eliminate_proxy_nodes;
+use crate::rvsdg::{Connectivity, Node, NodeKind, Region, Rvsdg, StateUser, ValueOrigin};
+use crate::Module;
 
 pub struct DeadConnectionEliminator {
     current_candidates: FxHashSet<Node>,
@@ -289,7 +290,7 @@ pub fn entry_points_eliminate_dead_connections(module: &mut Module, rvsdg: &mut 
 
     for entry_point in entry_points {
         let body_region = rvsdg[entry_point].expect_function().body_region();
-        
+
         dce.process_region(rvsdg, body_region);
     }
 }

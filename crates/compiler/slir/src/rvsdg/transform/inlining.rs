@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+
 use rustc_hash::FxHashMap;
 
 use crate::rvsdg::{
@@ -539,7 +540,7 @@ pub fn inline_function(module: &mut Module, rvsdg: &mut Rvsdg, apply_node: Node)
 /// For all entry points in the given `module`, finds all "apply" nodes and inlines the
 /// corresponding function, iteratively inlining any new "apply" amongst the inlined nodes until
 /// the entry points no longer contain any apply operations for user-defined functions.
-pub fn inline_entry_points_exhaustive(module: &mut Module, rvsdg: &mut Rvsdg) {
+pub fn entry_points_inline_exhaustive(module: &mut Module, rvsdg: &mut Rvsdg) {
     let entry_points = module
         .entry_points
         .iter()
@@ -1002,7 +1003,7 @@ mod tests {
             },
         );
 
-        inline_entry_points_exhaustive(&mut module, &mut rvsdg);
+        entry_points_inline_exhaustive(&mut module, &mut rvsdg);
 
         // The entry_point function should no longer contain any apply nodes.
         assert_eq!(

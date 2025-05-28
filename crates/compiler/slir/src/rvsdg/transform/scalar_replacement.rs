@@ -1191,7 +1191,7 @@ impl ScalarReplacer {
 
 pub fn entry_points_scalar_replacement(module: &mut Module, rvsdg: &mut Rvsdg) {
     let mut replacer = ScalarReplacer::new();
-    
+
     let entry_points = module
         .entry_points
         .iter()
