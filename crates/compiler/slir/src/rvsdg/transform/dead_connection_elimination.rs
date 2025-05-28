@@ -1,8 +1,9 @@
 use std::mem;
 
 use rustc_hash::FxHashSet;
-
+use crate::Module;
 use crate::rvsdg::{Connectivity, Node, NodeKind, Region, Rvsdg, StateUser, ValueOrigin};
+use crate::rvsdg::transform::proxy_node_elimination::region_eliminate_proxy_nodes;
 
 pub struct DeadConnectionEliminator {
     current_candidates: FxHashSet<Node>,
@@ -275,6 +276,22 @@ fn process_simple_node(rvsdg: &mut Rvsdg, node: Node, candidates: &mut FxHashSet
     }
 
     remove_node(rvsdg, node, candidates);
+}
+
+pub fn entry_points_eliminate_dead_connections(module: &mut Module, rvsdg: &mut Rvsdg) {
+    let mut dce = DeadConnectionEliminator::new();
+
+    let entry_points = module
+        .entry_points
+        .iter()
+        .map(|(f, _)| rvsdg.get_function_node(f).unwrap())
+        .collect::<Vec<_>>();
+
+    for entry_point in entry_points {
+        let body_region = rvsdg[entry_point].expect_function().body_region();
+        
+        dce.process_region(rvsdg, body_region);
+    }
 }
 
 #[cfg(test)]

@@ -1153,14 +1153,14 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
     }
 }
 
-pub struct ScalarReplacementTransform {
+pub struct ScalarReplacer {
     candidate_queue: VecDeque<Node>,
     analyzer: Analyzer,
 }
 
-impl ScalarReplacementTransform {
+impl ScalarReplacer {
     pub fn new() -> Self {
-        ScalarReplacementTransform {
+        ScalarReplacer {
             candidate_queue: Default::default(),
             analyzer: Analyzer {
                 visited: Default::default(),
@@ -1187,17 +1187,19 @@ impl ScalarReplacementTransform {
             }
         }
     }
+}
 
-    pub fn replace_in_entry_points(&mut self, module: &mut Module, rvsdg: &mut Rvsdg) {
-        let entry_points = module
-            .entry_points
-            .iter()
-            .map(|(f, _)| f)
-            .collect::<Vec<_>>();
+pub fn entry_points_scalar_replacement(module: &mut Module, rvsdg: &mut Rvsdg) {
+    let mut replacer = ScalarReplacer::new();
+    
+    let entry_points = module
+        .entry_points
+        .iter()
+        .map(|(f, _)| f)
+        .collect::<Vec<_>>();
 
-        for entry_point in entry_points {
-            self.replace_in_fn(module, rvsdg, entry_point);
-        }
+    for entry_point in entry_points {
+        replacer.replace_in_fn(module, rvsdg, entry_point);
     }
 }
 
@@ -1264,7 +1266,7 @@ mod tests {
             },
         );
 
-        let mut transform = ScalarReplacementTransform::new();
+        let mut transform = ScalarReplacer::new();
 
         transform.replace_in_fn(&mut module, &mut rvsdg, function);
 
@@ -1356,7 +1358,7 @@ mod tests {
             },
         );
 
-        let mut transform = ScalarReplacementTransform::new();
+        let mut transform = ScalarReplacer::new();
 
         transform.replace_in_fn(&mut module, &mut rvsdg, function);
 
@@ -1516,7 +1518,7 @@ mod tests {
             },
         );
 
-        let mut transform = ScalarReplacementTransform::new();
+        let mut transform = ScalarReplacer::new();
 
         transform.replace_in_fn(&mut module, &mut rvsdg, function);
 
@@ -1614,7 +1616,7 @@ mod tests {
             StateOrigin::Node(op_load),
         );
 
-        let mut transform = ScalarReplacementTransform::new();
+        let mut transform = ScalarReplacer::new();
 
         transform.replace_in_fn(&mut module, &mut rvsdg, function);
 
@@ -1879,7 +1881,7 @@ mod tests {
             },
         );
 
-        let mut transform = ScalarReplacementTransform::new();
+        let mut transform = ScalarReplacer::new();
 
         transform.replace_in_fn(&mut module, &mut rvsdg, function);
 
@@ -2104,7 +2106,7 @@ mod tests {
         rvsdg.reconnect_region_result(loop_region, 2, ValueOrigin::Argument(1));
         rvsdg.reconnect_region_result(loop_region, 3, ValueOrigin::Argument(2));
 
-        let mut transform = ScalarReplacementTransform::new();
+        let mut transform = ScalarReplacer::new();
 
         transform.replace_in_fn(&mut module, &mut rvsdg, function);
 
