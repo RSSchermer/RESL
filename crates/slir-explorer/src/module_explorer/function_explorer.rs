@@ -3,7 +3,7 @@ use leptos::prelude::*;
 use thaw::*;
 
 use crate::module_explorer::cfg_explorer::CfgExplorer;
-use crate::module_explorer::rvsdg_explorer::RvsdgExplorer;
+use crate::module_explorer::rvsdg_explorer::{RvsdgExplorer, RvsdgStage};
 use crate::module_explorer::tpe::Type;
 use crate::module_explorer::ModuleData;
 
@@ -44,8 +44,11 @@ pub fn FunctionExplorer(
                     <Tab value="cfg">
                         "Control-flow Graph"
                     </Tab>
-                    <Tab value="rvsdg">
-                        "RVSDG"
+                    <Tab value="rvsdg-initial">
+                        "RVSDG-initial"
+                    </Tab>
+                    <Tab value="rvsdg-transformed">
+                        "RVSDG-transformed"
                     </Tab>
                     <Tab value="scf">
                         "Structured Control-flow"
@@ -55,8 +58,10 @@ pub fn FunctionExplorer(
                     {move || {
                         if mode.read().as_str() == "cfg" {
                             view! {<CfgExplorer module function/>}.into_any()
-                        } else if mode.read().as_str() == "rvsdg" {
-                            view! {<RvsdgExplorer module function/>}.into_any()
+                        } else if mode.read().as_str() == "rvsdg-initial" {
+                            view! {<RvsdgExplorer module function stage=RvsdgStage::Initial/>}.into_any()
+                        } else if mode.read().as_str() == "rvsdg-transformed" {
+                            view! {<RvsdgExplorer module function stage=RvsdgStage::Transformed/>}.into_any()
                         } else {
                             view! {}.into_any()
                         }

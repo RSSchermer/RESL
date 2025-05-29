@@ -42,7 +42,8 @@ struct ModuleExplorerParams {
 struct ModuleData {
     pub module: slir::Module,
     pub cfg: slir::cfg::Cfg,
-    pub rvsdg: Option<slir::rvsdg::Rvsdg>,
+    pub rvsdg_initial: Option<slir::rvsdg::Rvsdg>,
+    pub rvsdg_transformed: Option<slir::rvsdg::Rvsdg>,
 }
 
 /// Renders the home page of your application.
@@ -84,7 +85,8 @@ pub fn ModuleExplorer() -> impl IntoView {
 
                     let mut module = None;
                     let mut cfg = None;
-                    let mut rvsdg = None;
+                    let mut rvsdg_initial = None;
+                    let mut rvsdg_transformed = None;
 
                     while let Some(entry_result) = archive.next_entry() {
                         let mut entry = entry_result.unwrap();
@@ -109,14 +111,24 @@ pub fn ModuleExplorer() -> impl IntoView {
                             cfg = Some(decoded);
                         }
 
-                        if entry.header().identifier() == "rvsdg".as_bytes() {
+                        if entry.header().identifier() == "rvsdg_initial".as_bytes() {
                             let decoded: slir::rvsdg::Rvsdg = bincode::serde::decode_from_std_read(
                                 &mut entry,
                                 bincode::config::standard(),
                             )
-                            .expect("RSVDG encoding was invalid");
+                            .expect("RSVDG-initial encoding was invalid");
 
-                            rvsdg = Some(decoded);
+                            rvsdg_initial = Some(decoded);
+                        }
+
+                        if entry.header().identifier() == "rvsdg_transformed".as_bytes() {
+                            let decoded: slir::rvsdg::Rvsdg = bincode::serde::decode_from_std_read(
+                                &mut entry,
+                                bincode::config::standard(),
+                            )
+                            .expect("RSVDG-transformed encoding was invalid");
+
+                            rvsdg_transformed = Some(decoded);
                         }
                     }
 
@@ -124,7 +136,12 @@ pub fn ModuleExplorer() -> impl IntoView {
                         module.expect("SLIR arfifact should always contain a `module` entry");
                     let cfg = cfg.expect("SLIR arfifact should always contain a `cfg` entry");
 
-                    ModuleData { module, cfg, rvsdg }
+                    ModuleData {
+                        module,
+                        cfg,
+                        rvsdg_initial,
+                        rvsdg_transformed,
+                    }
                 })
                 .map_err(|err| err.clone())
         })

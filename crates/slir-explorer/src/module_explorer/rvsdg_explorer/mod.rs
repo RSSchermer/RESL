@@ -9,12 +9,26 @@ mod layout;
 mod node;
 mod region;
 
+pub enum RvsdgStage {
+    Initial,
+    Transformed,
+}
+
 #[component]
-pub fn RvsdgExplorer(module: StoredValue<ModuleData>, function: slir::Function) -> impl IntoView {
+pub fn RvsdgExplorer(
+    module: StoredValue<ModuleData>,
+    function: slir::Function,
+    stage: RvsdgStage,
+) -> impl IntoView {
     let region_layout = Memo::new(move |_| {
         let module = module.read_value();
 
-        module.rvsdg.as_ref().and_then(|rvsdg| {
+        let rvsdg = match stage {
+            RvsdgStage::Initial => module.rvsdg_initial.as_ref(),
+            RvsdgStage::Transformed => module.rvsdg_transformed.as_ref(),
+        };
+
+        rvsdg.and_then(|rvsdg| {
             rvsdg.get_function_node(function).map(|node| {
                 let region = rvsdg[node].expect_function().body_region();
 
