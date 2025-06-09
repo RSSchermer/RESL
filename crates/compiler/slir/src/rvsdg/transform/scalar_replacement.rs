@@ -3,32 +3,13 @@ use std::ops::Range;
 
 use rustc_hash::FxHashSet;
 
+use crate::rvsdg::analyse::element_index::ElementIndex;
 use crate::rvsdg::{
     Connectivity, LoopNode, Node, NodeKind, OpAlloca, OpLoad, Region, Rvsdg, SimpleNode,
     StateOrigin, SwitchNode, ValueInput, ValueOrigin, ValueOutput, ValueUser,
 };
 use crate::ty::{Type, TypeKind, TY_U32};
 use crate::{Function, Module};
-
-enum ElementIndex {
-    Static(u32),
-    Dynamic(ValueOrigin),
-}
-
-impl ElementIndex {
-    fn from_origin(rvsdg: &Rvsdg, origin: ValueOrigin) -> Self {
-        match origin {
-            ValueOrigin::Argument(_) => ElementIndex::Dynamic(origin),
-            ValueOrigin::Output { producer, .. } => {
-                if let NodeKind::Simple(SimpleNode::ConstU32(n)) = rvsdg[producer].kind() {
-                    ElementIndex::Static(n.value())
-                } else {
-                    ElementIndex::Dynamic(origin)
-                }
-            }
-        }
-    }
-}
 
 /// Collects all [OpAlloca] nodes of aggregate types in a region and all sub-regions (e.g. a switch
 /// node branch region) into a queue of candidates for scalar replacement.

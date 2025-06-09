@@ -2562,6 +2562,15 @@ impl Rvsdg {
         }
     }
 
+    pub fn value_origin_ty(&self, region: Region, origin: ValueOrigin) -> Type {
+        match origin {
+            ValueOrigin::Argument(arg) => self.regions[region].value_arguments[arg as usize].ty,
+            ValueOrigin::Output { producer, output } => {
+                self.nodes[producer].value_outputs()[output as usize].ty
+            }
+        }
+    }
+
     fn remove_region_with_nodes(&mut self, region: Region) {
         let node_count = self.regions[region].nodes().len();
 

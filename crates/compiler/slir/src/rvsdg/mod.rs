@@ -1,4 +1,4 @@
-// pub mod analyse;
+pub mod analyse;
 pub mod transform;
 pub mod visit;
 

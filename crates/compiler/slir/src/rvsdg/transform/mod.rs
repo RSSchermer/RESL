@@ -1,7 +1,9 @@
 pub mod dead_connection_elimination;
 pub mod inlining;
+mod memory_to_value_promotion;
 pub mod proxy_node_elimination;
 pub mod scalar_replacement;
+mod variable_pointer_emulation;
 
 use crate::rvsdg::transform::dead_connection_elimination::entry_points_eliminate_dead_connections;
 use crate::rvsdg::transform::inlining::entry_points_inline_exhaustive;
