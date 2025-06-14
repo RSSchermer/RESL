@@ -79,7 +79,11 @@ impl EmulationTreeNode {
                 }
 
                 for branch in &mut node.branches {
-                    branch.visit_value_origins_mut(visitor);
+                    branch.visit_value_origins_mut_internal(
+                        visitor,
+                        visit_non_ptr_origins,
+                        visit_ptr_origins,
+                    );
                 }
             }
             EmulationTreeNode::Leaf(node) => {
@@ -823,12 +827,35 @@ where
 
         let mut value_inputs = Vec::with_capacity(branching_node.child_inputs.len() + 1);
 
+        // Connect the first input to the branch selector predicate.
         value_inputs.push(resolve_input(branching_node.branch_selector, TY_U32));
 
+        // Connect inputs for the emulation values required by the branching node's child nodes.
         for child_input in branching_node.child_inputs.iter().copied() {
             let ty = self.rvsdg.value_origin_ty(self.outer_region, child_input);
 
             value_inputs.push(resolve_input(child_input, ty));
+        }
+
+        // Connect inputs for any non-pointer additional values passed in for the operation (e.g.
+        // the value to be stored by an OpStore).
+        if let Some(input_mapping) = input_mapping {
+            // We're inside a branching node, the additional inputs will be available as
+            // arguments after the emulation arguments represented in the input_mapping.
+            let base_index = input_mapping.len();
+
+            for (i, additional_value) in self.additional_values.iter().enumerate() {
+                let argument_index = base_index + i;
+
+                value_inputs.push(ValueInput::argument(
+                    additional_value.ty,
+                    argument_index as u32,
+                ));
+            }
+        } else {
+            // We're processing the root node, the additional inputs should be available
+            // directly
+            value_inputs.extend(self.additional_values.iter().copied());
         }
 
         let value_outputs = if let Some(output_ty) = self.output_ty {
@@ -918,7 +945,7 @@ where
 
                         ValueInput::output(TY_U32, index_node, 0)
                     }
-                    ElementIndex::Dynamic(origin) => resolve_input(origin, ptr_ty),
+                    ElementIndex::Dynamic(origin) => resolve_input(origin, TY_U32),
                 })
                 .collect::<Vec<_>>();
 
@@ -948,7 +975,7 @@ where
                 .iter()
                 .enumerate()
                 .map(|(i, v)| {
-                    let argument_index = base_index + 1;
+                    let argument_index = base_index + i;
 
                     ValueInput::argument(v.ty, argument_index as u32)
                 })
@@ -972,5 +999,1988 @@ where
                 self.state_origin,
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::iter;
+
+    use super::*;
+    use crate::rvsdg::ValueUser;
+    use crate::ty::TY_DUMMY;
+    use crate::{thin_set, BinaryOperator, FnArg, FnSig, Function, Module, Symbol};
+
+    #[test]
+    fn test_emulate_single_switch_output_load() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![FnArg {
+                    ty: TY_U32,
+                    shader_io_binding: None,
+                }],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let ptr_0 = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let ptr_1 = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+
+        let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
+
+        let switch_node = rvsdg.add_switch(
+            region,
+            vec![
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::output(ptr_ty, ptr_0, 0),
+                ValueInput::output(ptr_ty, ptr_1, 0),
+            ],
+            vec![ValueOutput::new(ptr_ty)],
+            None,
+        );
+
+        let branch_0 = rvsdg.add_switch_branch(switch_node);
+
+        rvsdg.reconnect_region_result(branch_0, 0, ValueOrigin::Argument(0));
+
+        let branch_1 = rvsdg.add_switch_branch(switch_node);
+
+        rvsdg.reconnect_region_result(branch_1, 0, ValueOrigin::Argument(1));
+
+        let load_op = rvsdg.add_op_load(
+            region,
+            ValueInput::output(ptr_ty, switch_node, 0),
+            TY_U32,
+            StateOrigin::Argument,
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: load_op,
+                output: 0,
+            },
+        );
+
+        let mut emulation_context = EmulationContext::new();
+
+        emulation_context.emulate_op_load(&mut module.ty, &mut rvsdg, load_op);
+
+        let ValueOrigin::Output {
+            producer: emulation_switch_node,
+            output: 0,
+        } = rvsdg[region].value_results()[0].origin
+        else {
+            panic!("the function result should connect to the first output of a node")
+        };
+
+        let emulation_switch_data = rvsdg[emulation_switch_node].expect_switch();
+
+        assert_eq!(
+            emulation_switch_data.value_inputs(),
+            &[
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::output(ptr_ty, ptr_0, 0),
+                ValueInput::output(ptr_ty, ptr_1, 0),
+            ]
+        );
+        assert_eq!(
+            emulation_switch_data.value_outputs(),
+            &[ValueOutput {
+                ty: TY_U32,
+                users: thin_set![ValueUser::Result(0)]
+            }]
+        );
+        assert_eq!(emulation_switch_data.branches().len(), 2);
+
+        let emulation_branch_0 = emulation_switch_data.branches()[0];
+
+        let ValueOrigin::Output {
+            producer: emulation_load_0_node,
+            output: 0,
+        } = rvsdg[emulation_branch_0].value_results()[0].origin
+        else {
+            panic!("the branch result should connect to the first output of a node")
+        };
+
+        let emulation_load_0_data = rvsdg[emulation_load_0_node].expect_op_load();
+
+        assert_eq!(
+            emulation_load_0_data.value_inputs(),
+            &[ValueInput::argument(ptr_ty, 0)]
+        );
+
+        let emulation_branch_1 = emulation_switch_data.branches()[1];
+
+        let ValueOrigin::Output {
+            producer: emulation_load_1_node,
+            output: 0,
+        } = rvsdg[emulation_branch_1].value_results()[0].origin
+        else {
+            panic!("the branch result should connect to the first output of a node")
+        };
+
+        let emulation_load_1_data = rvsdg[emulation_load_1_node].expect_op_load();
+
+        assert_eq!(
+            emulation_load_1_data.value_inputs(),
+            &[ValueInput::argument(ptr_ty, 1)]
+        );
+
+        assert_eq!(
+            &rvsdg[ptr_0].expect_op_alloca().value_output().users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: switch_node,
+                    input: 1,
+                },
+                ValueUser::Input {
+                    consumer: emulation_switch_node,
+                    input: 1,
+                }
+            ],
+            "the emulation node should have been added as a user to the first alloca node"
+        );
+
+        assert_eq!(
+            &rvsdg[ptr_1].expect_op_alloca().value_output().users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: switch_node,
+                    input: 2,
+                },
+                ValueUser::Input {
+                    consumer: emulation_switch_node,
+                    input: 2,
+                }
+            ],
+            "the emulation node should have been added as a user to the second alloca node"
+        );
+
+        assert!(
+            rvsdg[switch_node].value_outputs()[0].users.is_empty(),
+            "original switch node should no longer have any users"
+        );
+    }
+
+    #[test]
+    fn test_emulate_single_static_access_single_switch_output_load() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![FnArg {
+                    ty: TY_U32,
+                    shader_io_binding: None,
+                }],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let array_ty = module.ty.register(TypeKind::Array {
+            base: TY_U32,
+            stride: 4,
+            count: 2,
+        });
+        let array_ptr_ty = module.ty.register(TypeKind::Ptr(array_ty));
+        let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
+
+        let array_alloca_node = rvsdg.add_op_alloca(&mut module.ty, region, array_ty);
+        let index_node = rvsdg.add_const_u32(region, 1);
+
+        let ptr_0_node = rvsdg.add_op_ptr_element_ptr(
+            &mut module.ty,
+            region,
+            TY_U32,
+            ValueInput::output(array_ptr_ty, array_alloca_node, 0),
+            [ValueInput::output(TY_U32, index_node, 0)],
+        );
+        let ptr_1_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+
+        let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
+
+        let switch_node = rvsdg.add_switch(
+            region,
+            vec![
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::output(ptr_ty, ptr_0_node, 0),
+                ValueInput::output(ptr_ty, ptr_1_node, 0),
+            ],
+            vec![ValueOutput::new(ptr_ty)],
+            None,
+        );
+
+        let branch_0 = rvsdg.add_switch_branch(switch_node);
+
+        rvsdg.reconnect_region_result(branch_0, 0, ValueOrigin::Argument(0));
+
+        let branch_1 = rvsdg.add_switch_branch(switch_node);
+
+        rvsdg.reconnect_region_result(branch_1, 0, ValueOrigin::Argument(1));
+
+        let load_op = rvsdg.add_op_load(
+            region,
+            ValueInput::output(ptr_ty, switch_node, 0),
+            TY_U32,
+            StateOrigin::Argument,
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: load_op,
+                output: 0,
+            },
+        );
+
+        let mut emulation_context = EmulationContext::new();
+
+        emulation_context.emulate_op_load(&mut module.ty, &mut rvsdg, load_op);
+
+        let ValueOrigin::Output {
+            producer: emulation_switch_node,
+            output: 0,
+        } = rvsdg[region].value_results()[0].origin
+        else {
+            panic!("the function result should connect to the first output of a node")
+        };
+
+        let emulation_switch_data = rvsdg[emulation_switch_node].expect_switch();
+
+        assert_eq!(
+            emulation_switch_data.value_inputs(),
+            &[
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::output(array_ptr_ty, array_alloca_node, 0),
+                ValueInput::output(ptr_ty, ptr_1_node, 0),
+            ]
+        );
+        assert_eq!(
+            emulation_switch_data.value_outputs(),
+            &[ValueOutput {
+                ty: TY_U32,
+                users: thin_set![ValueUser::Result(0)]
+            }]
+        );
+        assert_eq!(emulation_switch_data.branches().len(), 2);
+
+        let emulation_branch_0 = emulation_switch_data.branches()[0];
+
+        let ValueOrigin::Output {
+            producer: emulation_0_load_node,
+            output: 0,
+        } = rvsdg[emulation_branch_0].value_results()[0].origin
+        else {
+            panic!("the branch result should connect to the first output of a node")
+        };
+
+        let emulation_0_load_data = rvsdg[emulation_0_load_node].expect_op_load();
+
+        let ValueOrigin::Output {
+            producer: emulation_0_pep_node,
+            output: 0,
+        } = rvsdg[emulation_0_load_node].value_inputs()[0].origin
+        else {
+            panic!("the load node in branch `0` should connect to the first output of a node")
+        };
+
+        let emulation_pep_data = rvsdg[emulation_0_pep_node].expect_op_ptr_element_ptr();
+
+        assert_eq!(emulation_pep_data.value_inputs().len(), 2);
+        assert_eq!(
+            emulation_pep_data.value_inputs()[0],
+            ValueInput::argument(array_ptr_ty, 0)
+        );
+
+        let ValueOrigin::Output {
+            producer: emulation_0_index_node,
+            output: 0,
+        } = emulation_pep_data.value_inputs()[1].origin
+        else {
+            panic!("the second PEP node input should connect to the first output of a node")
+        };
+
+        let emulation_0_index_data = rvsdg[emulation_0_index_node].expect_const_u32();
+
+        assert_eq!(emulation_0_index_data.value(), 1);
+
+        let emulation_branch_1 = emulation_switch_data.branches()[1];
+
+        let ValueOrigin::Output {
+            producer: emulation_1_load_node,
+            output: 0,
+        } = rvsdg[emulation_branch_1].value_results()[0].origin
+        else {
+            panic!("the branch result should connect to the first output of a node")
+        };
+
+        let emulation_1_load_data = rvsdg[emulation_1_load_node].expect_op_load();
+
+        assert_eq!(
+            emulation_1_load_data.value_inputs(),
+            &[ValueInput::argument(ptr_ty, 1)]
+        );
+
+        assert_eq!(
+            &rvsdg[array_alloca_node]
+                .expect_op_alloca()
+                .value_output()
+                .users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: ptr_0_node,
+                    input: 0,
+                },
+                ValueUser::Input {
+                    consumer: switch_node,
+                    input: 3,
+                },
+                ValueUser::Input {
+                    consumer: emulation_switch_node,
+                    input: 1,
+                }
+            ],
+            "the switch node and the emulation node should have been added as a user to the first \
+            alloca node"
+        );
+
+        assert!(
+            rvsdg[branch_0].value_arguments()[2].users.is_empty(),
+            "the array pointer should have been made available inside the first branch of the \
+            switch node, but should not be used"
+        );
+        assert!(
+            rvsdg[branch_1].value_arguments()[2].users.is_empty(),
+            "the array pointer should have been made available inside the second branch of the \
+            switch node, but should not be used"
+        );
+
+        assert_eq!(
+            &rvsdg[ptr_1_node].expect_op_alloca().value_output().users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: switch_node,
+                    input: 2,
+                },
+                ValueUser::Input {
+                    consumer: emulation_switch_node,
+                    input: 2,
+                }
+            ],
+            "the emulation node should have been added as a user to the second alloca node"
+        );
+
+        assert!(
+            rvsdg[switch_node].value_outputs()[0].users.is_empty(),
+            "original switch node should no longer have any users"
+        );
+    }
+
+    #[test]
+    fn test_emulate_single_dynamic_access_single_switch_output_load() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let array_ty = module.ty.register(TypeKind::Array {
+            base: TY_U32,
+            stride: 4,
+            count: 2,
+        });
+        let array_ptr_ty = module.ty.register(TypeKind::Ptr(array_ty));
+        let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
+
+        let array_alloca_node = rvsdg.add_op_alloca(&mut module.ty, region, array_ty);
+
+        let ptr_0_node = rvsdg.add_op_ptr_element_ptr(
+            &mut module.ty,
+            region,
+            TY_U32,
+            ValueInput::output(array_ptr_ty, array_alloca_node, 0),
+            [ValueInput::argument(TY_U32, 1)],
+        );
+        let ptr_1_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+
+        let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
+
+        let switch_node = rvsdg.add_switch(
+            region,
+            vec![
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::output(ptr_ty, ptr_0_node, 0),
+                ValueInput::output(ptr_ty, ptr_1_node, 0),
+            ],
+            vec![ValueOutput::new(ptr_ty)],
+            None,
+        );
+
+        let branch_0 = rvsdg.add_switch_branch(switch_node);
+
+        rvsdg.reconnect_region_result(branch_0, 0, ValueOrigin::Argument(0));
+
+        let branch_1 = rvsdg.add_switch_branch(switch_node);
+
+        rvsdg.reconnect_region_result(branch_1, 0, ValueOrigin::Argument(1));
+
+        let load_op = rvsdg.add_op_load(
+            region,
+            ValueInput::output(ptr_ty, switch_node, 0),
+            TY_U32,
+            StateOrigin::Argument,
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: load_op,
+                output: 0,
+            },
+        );
+
+        let mut emulation_context = EmulationContext::new();
+
+        emulation_context.emulate_op_load(&mut module.ty, &mut rvsdg, load_op);
+
+        let ValueOrigin::Output {
+            producer: emulation_switch_node,
+            output: 0,
+        } = rvsdg[region].value_results()[0].origin
+        else {
+            panic!("the function result should connect to the first output of a node")
+        };
+
+        let emulation_switch_data = rvsdg[emulation_switch_node].expect_switch();
+
+        assert_eq!(
+            emulation_switch_data.value_inputs(),
+            &[
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::output(array_ptr_ty, array_alloca_node, 0),
+                ValueInput::argument(TY_U32, 1),
+                ValueInput::output(ptr_ty, ptr_1_node, 0),
+            ]
+        );
+        assert_eq!(
+            emulation_switch_data.value_outputs(),
+            &[ValueOutput {
+                ty: TY_U32,
+                users: thin_set![ValueUser::Result(0)]
+            }]
+        );
+        assert_eq!(emulation_switch_data.branches().len(), 2);
+
+        let emulation_branch_0 = emulation_switch_data.branches()[0];
+
+        let ValueOrigin::Output {
+            producer: emulation_0_load_node,
+            output: 0,
+        } = rvsdg[emulation_branch_0].value_results()[0].origin
+        else {
+            panic!("the branch result should connect to the first output of a node")
+        };
+
+        let emulation_0_load_data = rvsdg[emulation_0_load_node].expect_op_load();
+
+        let ValueOrigin::Output {
+            producer: emulation_0_pep_node,
+            output: 0,
+        } = rvsdg[emulation_0_load_node].value_inputs()[0].origin
+        else {
+            panic!("the load node in branch `0` should connect to the first output of a node")
+        };
+
+        let emulation_pep_data = rvsdg[emulation_0_pep_node].expect_op_ptr_element_ptr();
+
+        assert_eq!(
+            emulation_pep_data.value_inputs(),
+            &[
+                ValueInput::argument(array_ptr_ty, 0),
+                ValueInput::argument(TY_U32, 1),
+            ]
+        );
+
+        let emulation_branch_1 = emulation_switch_data.branches()[1];
+
+        let ValueOrigin::Output {
+            producer: emulation_1_load_node,
+            output: 0,
+        } = rvsdg[emulation_branch_1].value_results()[0].origin
+        else {
+            panic!("the branch result should connect to the first output of a node")
+        };
+
+        let emulation_1_load_data = rvsdg[emulation_1_load_node].expect_op_load();
+
+        assert_eq!(
+            emulation_1_load_data.value_inputs(),
+            &[ValueInput::argument(ptr_ty, 2)]
+        );
+
+        assert_eq!(
+            &rvsdg[array_alloca_node]
+                .expect_op_alloca()
+                .value_output()
+                .users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: ptr_0_node,
+                    input: 0,
+                },
+                ValueUser::Input {
+                    consumer: switch_node,
+                    input: 3,
+                },
+                ValueUser::Input {
+                    consumer: emulation_switch_node,
+                    input: 1,
+                }
+            ],
+            "the switch node and the emulation node should have been added as a user to the first \
+            alloca node"
+        );
+
+        assert!(
+            rvsdg[branch_0].value_arguments()[2].users.is_empty(),
+            "the array pointer should have been made available inside the first branch of the \
+            switch node, but should not be used"
+        );
+        assert!(
+            rvsdg[branch_0].value_arguments()[3].users.is_empty(),
+            "the dynamic index should have been made available inside the first branch of the \
+            switch node, but should not be used"
+        );
+        assert!(
+            rvsdg[branch_1].value_arguments()[2].users.is_empty(),
+            "the array pointer should have been made available inside the second branch of the \
+            switch node, but should not be used"
+        );
+        assert!(
+            rvsdg[branch_1].value_arguments()[3].users.is_empty(),
+            "the dynamic index should have been made available inside the second branch of the \
+            switch node, but should not be used"
+        );
+
+        assert_eq!(
+            &rvsdg[ptr_1_node].expect_op_alloca().value_output().users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: switch_node,
+                    input: 2,
+                },
+                ValueUser::Input {
+                    consumer: emulation_switch_node,
+                    input: 3,
+                }
+            ],
+            "the emulation node should have been added as a user to the second alloca node"
+        );
+
+        assert_eq!(
+            &rvsdg[region].value_arguments()[1].users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: ptr_0_node,
+                    input: 1,
+                },
+                ValueUser::Input {
+                    consumer: switch_node,
+                    input: 4,
+                },
+                ValueUser::Input {
+                    consumer: emulation_switch_node,
+                    input: 2,
+                }
+            ],
+            "the switch node and the emulation node should have been added as a user to the \
+            dynamic index argument"
+        );
+
+        assert!(
+            rvsdg[switch_node].value_outputs()[0].users.is_empty(),
+            "original switch node should no longer have any users"
+        );
+    }
+
+    #[test]
+    fn test_emulate_double_static_access_single_switch_output_load() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![FnArg {
+                    ty: TY_U32,
+                    shader_io_binding: None,
+                }],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let array_ty = module.ty.register(TypeKind::Array {
+            base: TY_U32,
+            stride: 4,
+            count: 2,
+        });
+        let array_of_array_ty = module.ty.register(TypeKind::Array {
+            base: array_ty,
+            stride: 4,
+            count: 2,
+        });
+        let array_ptr_ty = module.ty.register(TypeKind::Ptr(array_ty));
+        let array_of_array_ptr_ty = module.ty.register(TypeKind::Ptr(array_of_array_ty));
+        let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
+
+        let array_alloca_node = rvsdg.add_op_alloca(&mut module.ty, region, array_of_array_ty);
+        let index_node = rvsdg.add_const_u32(region, 1);
+
+        let ptr_0_node = rvsdg.add_op_ptr_element_ptr(
+            &mut module.ty,
+            region,
+            array_ty,
+            ValueInput::output(array_of_array_ptr_ty, array_alloca_node, 0),
+            [ValueInput::output(TY_U32, index_node, 0)],
+        );
+        let ptr_1_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+
+        let switch_node = rvsdg.add_switch(
+            region,
+            vec![
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::output(array_ptr_ty, ptr_0_node, 0),
+                ValueInput::output(ptr_ty, ptr_1_node, 0),
+            ],
+            vec![ValueOutput::new(ptr_ty)],
+            None,
+        );
+
+        let branch_0 = rvsdg.add_switch_branch(switch_node);
+
+        let branch_0_index_node = rvsdg.add_const_u32(branch_0, 0);
+        let branch_0_ptr_node = rvsdg.add_op_ptr_element_ptr(
+            &mut module.ty,
+            branch_0,
+            TY_U32,
+            ValueInput::argument(array_ptr_ty, 0),
+            [ValueInput::output(TY_U32, branch_0_index_node, 0)],
+        );
+
+        rvsdg.reconnect_region_result(
+            branch_0,
+            0,
+            ValueOrigin::Output {
+                producer: branch_0_ptr_node,
+                output: 0,
+            },
+        );
+
+        let branch_1 = rvsdg.add_switch_branch(switch_node);
+
+        rvsdg.reconnect_region_result(branch_1, 0, ValueOrigin::Argument(1));
+
+        let load_op = rvsdg.add_op_load(
+            region,
+            ValueInput::output(ptr_ty, switch_node, 0),
+            TY_U32,
+            StateOrigin::Argument,
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: load_op,
+                output: 0,
+            },
+        );
+
+        let mut emulation_context = EmulationContext::new();
+
+        emulation_context.emulate_op_load(&mut module.ty, &mut rvsdg, load_op);
+
+        let ValueOrigin::Output {
+            producer: emulation_switch_node,
+            output: 0,
+        } = rvsdg[region].value_results()[0].origin
+        else {
+            panic!("the function result should connect to the first output of a node")
+        };
+
+        let emulation_switch_data = rvsdg[emulation_switch_node].expect_switch();
+
+        assert_eq!(
+            emulation_switch_data.value_inputs(),
+            &[
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::output(array_of_array_ptr_ty, array_alloca_node, 0),
+                ValueInput::output(ptr_ty, ptr_1_node, 0),
+            ]
+        );
+        assert_eq!(
+            emulation_switch_data.value_outputs(),
+            &[ValueOutput {
+                ty: TY_U32,
+                users: thin_set![ValueUser::Result(0)]
+            }]
+        );
+        assert_eq!(emulation_switch_data.branches().len(), 2);
+
+        let emulation_branch_0 = emulation_switch_data.branches()[0];
+
+        let ValueOrigin::Output {
+            producer: emulation_0_load_node,
+            output: 0,
+        } = rvsdg[emulation_branch_0].value_results()[0].origin
+        else {
+            panic!("the branch result should connect to the first output of a node")
+        };
+
+        let emulation_0_load_data = rvsdg[emulation_0_load_node].expect_op_load();
+
+        let ValueOrigin::Output {
+            producer: emulation_0_pep_node,
+            output: 0,
+        } = rvsdg[emulation_0_load_node].value_inputs()[0].origin
+        else {
+            panic!("the load node in branch `0` should connect to the first output of a node")
+        };
+
+        let emulation_pep_data = rvsdg[emulation_0_pep_node].expect_op_ptr_element_ptr();
+
+        assert_eq!(emulation_pep_data.value_inputs().len(), 3);
+        assert_eq!(
+            emulation_pep_data.value_inputs()[0],
+            ValueInput::argument(array_of_array_ptr_ty, 0)
+        );
+
+        let ValueOrigin::Output {
+            producer: emulation_0_index_0_node,
+            output: 0,
+        } = emulation_pep_data.value_inputs()[1].origin
+        else {
+            panic!("the second PEP node input should connect to the first output of a node")
+        };
+
+        let emulation_0_index_0_data = rvsdg[emulation_0_index_0_node].expect_const_u32();
+
+        assert_eq!(emulation_0_index_0_data.value(), 1);
+
+        let ValueOrigin::Output {
+            producer: emulation_0_index_1_node,
+            output: 0,
+        } = emulation_pep_data.value_inputs()[2].origin
+        else {
+            panic!("the second PEP node input should connect to the first output of a node")
+        };
+
+        let emulation_0_index_1_data = rvsdg[emulation_0_index_1_node].expect_const_u32();
+
+        assert_eq!(emulation_0_index_1_data.value(), 0);
+
+        let emulation_branch_1 = emulation_switch_data.branches()[1];
+
+        let ValueOrigin::Output {
+            producer: emulation_1_load_node,
+            output: 0,
+        } = rvsdg[emulation_branch_1].value_results()[0].origin
+        else {
+            panic!("the branch result should connect to the first output of a node")
+        };
+
+        let emulation_1_load_data = rvsdg[emulation_1_load_node].expect_op_load();
+
+        assert_eq!(
+            emulation_1_load_data.value_inputs(),
+            &[ValueInput::argument(ptr_ty, 1)]
+        );
+
+        assert_eq!(
+            &rvsdg[array_alloca_node]
+                .expect_op_alloca()
+                .value_output()
+                .users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: ptr_0_node,
+                    input: 0,
+                },
+                ValueUser::Input {
+                    consumer: switch_node,
+                    input: 3,
+                },
+                ValueUser::Input {
+                    consumer: emulation_switch_node,
+                    input: 1,
+                }
+            ],
+            "the switch node and the emulation node should have been added as a user to the first \
+            alloca node"
+        );
+
+        assert!(
+            rvsdg[branch_0].value_arguments()[2].users.is_empty(),
+            "the array pointer should have been made available inside the first branch of the \
+            switch node, but should not be used"
+        );
+        assert!(
+            rvsdg[branch_1].value_arguments()[2].users.is_empty(),
+            "the array pointer should have been made available inside the second branch of the \
+            switch node, but should not be used"
+        );
+
+        assert_eq!(
+            &rvsdg[ptr_1_node].expect_op_alloca().value_output().users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: switch_node,
+                    input: 2,
+                },
+                ValueUser::Input {
+                    consumer: emulation_switch_node,
+                    input: 2,
+                }
+            ],
+            "the emulation node should have been added as a user to the second alloca node"
+        );
+
+        assert!(
+            rvsdg[switch_node].value_outputs()[0].users.is_empty(),
+            "original switch node should no longer have any users"
+        );
+    }
+
+    #[test]
+    fn test_emulate_double_switch_output_load() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
+
+        let ptr_0_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let ptr_1_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let ptr_2_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+
+        let first_switch_node = rvsdg.add_switch(
+            region,
+            vec![
+                ValueInput::argument(TY_U32, 1),
+                ValueInput::output(ptr_ty, ptr_0_node, 0),
+                ValueInput::output(ptr_ty, ptr_1_node, 0),
+            ],
+            vec![ValueOutput::new(ptr_ty)],
+            None,
+        );
+
+        let first_switch_branch_0 = rvsdg.add_switch_branch(first_switch_node);
+
+        rvsdg.reconnect_region_result(first_switch_branch_0, 0, ValueOrigin::Argument(0));
+
+        let first_switch_branch_1 = rvsdg.add_switch_branch(first_switch_node);
+
+        rvsdg.reconnect_region_result(first_switch_branch_1, 0, ValueOrigin::Argument(1));
+
+        let second_switch_node = rvsdg.add_switch(
+            region,
+            vec![
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::output(ptr_ty, first_switch_node, 0),
+                ValueInput::output(ptr_ty, ptr_2_node, 0),
+            ],
+            vec![ValueOutput::new(ptr_ty)],
+            None,
+        );
+
+        let second_switch_branch_0 = rvsdg.add_switch_branch(second_switch_node);
+
+        rvsdg.reconnect_region_result(second_switch_branch_0, 0, ValueOrigin::Argument(0));
+
+        let second_switch_branch_1 = rvsdg.add_switch_branch(second_switch_node);
+
+        rvsdg.reconnect_region_result(second_switch_branch_1, 0, ValueOrigin::Argument(1));
+
+        let load_op = rvsdg.add_op_load(
+            region,
+            ValueInput::output(ptr_ty, second_switch_node, 0),
+            TY_U32,
+            StateOrigin::Argument,
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: load_op,
+                output: 0,
+            },
+        );
+
+        let mut emulation_context = EmulationContext::new();
+
+        emulation_context.emulate_op_load(&mut module.ty, &mut rvsdg, load_op);
+
+        let ValueOrigin::Output {
+            producer: emulation_switch_node,
+            output: 0,
+        } = rvsdg[region].value_results()[0].origin
+        else {
+            panic!("the function result should connect to the first output of a node")
+        };
+
+        let emulation_switch_data = rvsdg[emulation_switch_node].expect_switch();
+
+        assert_eq!(
+            emulation_switch_data.value_inputs(),
+            &[
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::argument(TY_U32, 1),
+                ValueInput::output(ptr_ty, ptr_0_node, 0),
+                ValueInput::output(ptr_ty, ptr_1_node, 0),
+                ValueInput::output(ptr_ty, ptr_2_node, 0),
+            ]
+        );
+        assert_eq!(
+            emulation_switch_data.value_outputs(),
+            &[ValueOutput {
+                ty: TY_U32,
+                users: thin_set![ValueUser::Result(0)]
+            }]
+        );
+        assert_eq!(emulation_switch_data.branches().len(), 2);
+
+        let emulation_branch_0 = emulation_switch_data.branches()[0];
+
+        let ValueOrigin::Output {
+            producer: emulation_0_switch_node,
+            output: 0,
+        } = rvsdg[emulation_branch_0].value_results()[0].origin
+        else {
+            panic!("the branch result should connect to the first output of a node")
+        };
+
+        let emulation_0_switch_data = rvsdg[emulation_0_switch_node].expect_switch();
+
+        assert_eq!(
+            emulation_0_switch_data.value_inputs(),
+            &[
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::argument(ptr_ty, 1),
+                ValueInput::argument(ptr_ty, 2),
+            ]
+        );
+        assert_eq!(
+            emulation_0_switch_data.value_outputs(),
+            &[ValueOutput {
+                ty: TY_U32,
+                users: thin_set![ValueUser::Result(0)]
+            }]
+        );
+        assert_eq!(emulation_0_switch_data.branches().len(), 2);
+
+        let emulation_branch_0_0 = emulation_0_switch_data.branches()[0];
+
+        let ValueOrigin::Output {
+            producer: emulation_0_0_load_node,
+            output: 0,
+        } = rvsdg[emulation_branch_0_0].value_results()[0].origin
+        else {
+            panic!("the branch result should connect to the first output of a node")
+        };
+
+        let emulation_0_0_load_data = rvsdg[emulation_0_0_load_node].expect_op_load();
+
+        assert_eq!(
+            emulation_0_0_load_data.value_inputs(),
+            &[ValueInput::argument(ptr_ty, 0)]
+        );
+
+        let emulation_branch_0_1 = emulation_0_switch_data.branches()[1];
+
+        let ValueOrigin::Output {
+            producer: emulation_0_1_load_node,
+            output: 0,
+        } = rvsdg[emulation_branch_0_1].value_results()[0].origin
+        else {
+            panic!("the branch result should connect to the first output of a node")
+        };
+
+        let emulation_0_1_load_data = rvsdg[emulation_0_1_load_node].expect_op_load();
+
+        assert_eq!(
+            emulation_0_1_load_data.value_inputs(),
+            &[ValueInput::argument(ptr_ty, 1)]
+        );
+
+        let emulation_branch_1 = emulation_switch_data.branches()[1];
+
+        let ValueOrigin::Output {
+            producer: emulation_1_load_node,
+            output: 0,
+        } = rvsdg[emulation_branch_1].value_results()[0].origin
+        else {
+            panic!("the branch result should connect to the first output of a node")
+        };
+
+        let emulation_1_load_data = rvsdg[emulation_1_load_node].expect_op_load();
+
+        assert_eq!(
+            emulation_1_load_data.value_inputs(),
+            &[ValueInput::argument(ptr_ty, 3)]
+        );
+
+        assert_eq!(
+            &rvsdg[ptr_0_node].expect_op_alloca().value_output().users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: first_switch_node,
+                    input: 1,
+                },
+                ValueUser::Input {
+                    consumer: second_switch_node,
+                    input: 4,
+                },
+                ValueUser::Input {
+                    consumer: emulation_switch_node,
+                    input: 2,
+                }
+            ],
+            "the second switch node and the emulation should have been added as a user to the \
+            first alloca node"
+        );
+
+        assert_eq!(
+            &rvsdg[ptr_1_node].expect_op_alloca().value_output().users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: first_switch_node,
+                    input: 2,
+                },
+                ValueUser::Input {
+                    consumer: second_switch_node,
+                    input: 5,
+                },
+                ValueUser::Input {
+                    consumer: emulation_switch_node,
+                    input: 3,
+                }
+            ],
+            "the second switch node and the emulation should have been added as a user to the \
+            second alloca node"
+        );
+
+        assert_eq!(
+            &rvsdg[ptr_2_node].expect_op_alloca().value_output().users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: second_switch_node,
+                    input: 2,
+                },
+                ValueUser::Input {
+                    consumer: emulation_switch_node,
+                    input: 4,
+                }
+            ],
+            "the emulation node should have been added as a user to the third alloca node"
+        );
+
+        assert!(
+            rvsdg[second_switch_node].value_outputs()[0]
+                .users
+                .is_empty(),
+            "the second switch node should no longer have any users"
+        );
+    }
+
+    #[test]
+    fn test_emulate_nested_switch_output_load() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
+
+        let ptr_0_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let ptr_1_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let ptr_2_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+
+        let outer_switch_node = rvsdg.add_switch(
+            region,
+            vec![
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::argument(TY_U32, 1),
+                ValueInput::output(ptr_ty, ptr_0_node, 0),
+                ValueInput::output(ptr_ty, ptr_1_node, 0),
+                ValueInput::output(ptr_ty, ptr_2_node, 0),
+            ],
+            vec![ValueOutput::new(ptr_ty)],
+            None,
+        );
+
+        let branch_0 = rvsdg.add_switch_branch(outer_switch_node);
+
+        let inner_switch_node = rvsdg.add_switch(
+            branch_0,
+            vec![
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::argument(ptr_ty, 1),
+                ValueInput::argument(ptr_ty, 2),
+            ],
+            vec![ValueOutput::new(ptr_ty)],
+            None,
+        );
+
+        let branch_0_branch_0 = rvsdg.add_switch_branch(inner_switch_node);
+
+        rvsdg.reconnect_region_result(branch_0_branch_0, 0, ValueOrigin::Argument(0));
+
+        let branch_0_branch_1 = rvsdg.add_switch_branch(inner_switch_node);
+
+        rvsdg.reconnect_region_result(branch_0_branch_1, 0, ValueOrigin::Argument(1));
+
+        rvsdg.reconnect_region_result(
+            branch_0,
+            0,
+            ValueOrigin::Output {
+                producer: inner_switch_node,
+                output: 0,
+            },
+        );
+
+        let branch_1 = rvsdg.add_switch_branch(outer_switch_node);
+
+        rvsdg.reconnect_region_result(branch_1, 0, ValueOrigin::Argument(3));
+
+        let load_op = rvsdg.add_op_load(
+            region,
+            ValueInput::output(ptr_ty, outer_switch_node, 0),
+            TY_U32,
+            StateOrigin::Argument,
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: load_op,
+                output: 0,
+            },
+        );
+
+        let mut emulation_context = EmulationContext::new();
+
+        emulation_context.emulate_op_load(&mut module.ty, &mut rvsdg, load_op);
+
+        let ValueOrigin::Output {
+            producer: emulation_switch_node,
+            output: 0,
+        } = rvsdg[region].value_results()[0].origin
+        else {
+            panic!("the function result should connect to the first output of a node")
+        };
+
+        let emulation_switch_data = rvsdg[emulation_switch_node].expect_switch();
+
+        assert_eq!(
+            emulation_switch_data.value_inputs(),
+            &[
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::argument(TY_U32, 1),
+                ValueInput::output(ptr_ty, ptr_0_node, 0),
+                ValueInput::output(ptr_ty, ptr_1_node, 0),
+                ValueInput::output(ptr_ty, ptr_2_node, 0),
+            ]
+        );
+        assert_eq!(
+            emulation_switch_data.value_outputs(),
+            &[ValueOutput {
+                ty: TY_U32,
+                users: thin_set![ValueUser::Result(0)]
+            }]
+        );
+        assert_eq!(emulation_switch_data.branches().len(), 2);
+
+        let emulation_branch_0 = emulation_switch_data.branches()[0];
+
+        let ValueOrigin::Output {
+            producer: emulation_0_switch_node,
+            output: 0,
+        } = rvsdg[emulation_branch_0].value_results()[0].origin
+        else {
+            panic!("the branch result should connect to the first output of a node")
+        };
+
+        let emulation_0_switch_data = rvsdg[emulation_0_switch_node].expect_switch();
+
+        assert_eq!(
+            emulation_0_switch_data.value_inputs(),
+            &[
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::argument(ptr_ty, 1),
+                ValueInput::argument(ptr_ty, 2),
+            ]
+        );
+        assert_eq!(
+            emulation_0_switch_data.value_outputs(),
+            &[ValueOutput {
+                ty: TY_U32,
+                users: thin_set![ValueUser::Result(0)]
+            }]
+        );
+        assert_eq!(emulation_0_switch_data.branches().len(), 2);
+
+        let emulation_branch_0_0 = emulation_0_switch_data.branches()[0];
+
+        let ValueOrigin::Output {
+            producer: emulation_0_0_load_node,
+            output: 0,
+        } = rvsdg[emulation_branch_0_0].value_results()[0].origin
+        else {
+            panic!("the branch result should connect to the first output of a node")
+        };
+
+        let emulation_0_0_load_data = rvsdg[emulation_0_0_load_node].expect_op_load();
+
+        assert_eq!(
+            emulation_0_0_load_data.value_inputs(),
+            &[ValueInput::argument(ptr_ty, 0)]
+        );
+
+        let emulation_branch_0_1 = emulation_0_switch_data.branches()[1];
+
+        let ValueOrigin::Output {
+            producer: emulation_0_1_load_node,
+            output: 0,
+        } = rvsdg[emulation_branch_0_1].value_results()[0].origin
+        else {
+            panic!("the branch result should connect to the first output of a node")
+        };
+
+        let emulation_0_1_load_data = rvsdg[emulation_0_1_load_node].expect_op_load();
+
+        assert_eq!(
+            emulation_0_1_load_data.value_inputs(),
+            &[ValueInput::argument(ptr_ty, 1)]
+        );
+
+        let emulation_branch_1 = emulation_switch_data.branches()[1];
+
+        let ValueOrigin::Output {
+            producer: emulation_1_load_node,
+            output: 0,
+        } = rvsdg[emulation_branch_1].value_results()[0].origin
+        else {
+            panic!("the branch result should connect to the first output of a node")
+        };
+
+        let emulation_1_load_data = rvsdg[emulation_1_load_node].expect_op_load();
+
+        assert_eq!(
+            emulation_1_load_data.value_inputs(),
+            &[ValueInput::argument(ptr_ty, 3)]
+        );
+
+        assert_eq!(
+            &rvsdg[ptr_0_node].expect_op_alloca().value_output().users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: outer_switch_node,
+                    input: 2,
+                },
+                ValueUser::Input {
+                    consumer: emulation_switch_node,
+                    input: 2,
+                }
+            ],
+            "the emulation node should have been added as a user to the first alloca node"
+        );
+
+        assert_eq!(
+            &rvsdg[ptr_1_node].expect_op_alloca().value_output().users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: outer_switch_node,
+                    input: 3,
+                },
+                ValueUser::Input {
+                    consumer: emulation_switch_node,
+                    input: 3,
+                }
+            ],
+            "the emulation node should have been added as a user to the second alloca node"
+        );
+
+        assert_eq!(
+            &rvsdg[ptr_2_node].expect_op_alloca().value_output().users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: outer_switch_node,
+                    input: 4,
+                },
+                ValueUser::Input {
+                    consumer: emulation_switch_node,
+                    input: 4,
+                }
+            ],
+            "the emulation node should have been added as a user to the third alloca node"
+        );
+
+        assert!(
+            rvsdg[outer_switch_node].value_outputs()[0].users.is_empty(),
+            "original switch node should no longer have any users"
+        );
+    }
+
+    #[test]
+    fn test_emulate_single_switch_output_store() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: None,
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let ptr_0 = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let ptr_1 = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+
+        let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
+
+        let switch_node = rvsdg.add_switch(
+            region,
+            vec![
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::output(ptr_ty, ptr_0, 0),
+                ValueInput::output(ptr_ty, ptr_1, 0),
+            ],
+            vec![ValueOutput::new(ptr_ty)],
+            None,
+        );
+
+        let branch_0 = rvsdg.add_switch_branch(switch_node);
+
+        rvsdg.reconnect_region_result(branch_0, 0, ValueOrigin::Argument(0));
+
+        let branch_1 = rvsdg.add_switch_branch(switch_node);
+
+        rvsdg.reconnect_region_result(branch_1, 0, ValueOrigin::Argument(1));
+
+        let store_op = rvsdg.add_op_store(
+            region,
+            ValueInput::output(ptr_ty, switch_node, 0),
+            ValueInput::argument(TY_U32, 1),
+            StateOrigin::Argument,
+        );
+
+        let mut emulation_context = EmulationContext::new();
+
+        emulation_context.emulate_op_store(&mut module.ty, &mut rvsdg, store_op);
+
+        assert_eq!(rvsdg[region].value_arguments()[0].users.len(), 2);
+        assert_eq!(
+            rvsdg[region].value_arguments()[0].users[0],
+            ValueUser::Input {
+                consumer: switch_node,
+                input: 0,
+            }
+        );
+
+        let ValueUser::Input {
+            consumer: emulation_switch_node,
+            input: 0,
+        } = rvsdg[region].value_arguments()[0].users[1]
+        else {
+            panic!(
+                "the second user of the first argument should connect to the first input of a node"
+            )
+        };
+
+        let emulation_switch_data = rvsdg[emulation_switch_node].expect_switch();
+
+        assert_eq!(
+            emulation_switch_data.value_inputs(),
+            &[
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::output(ptr_ty, ptr_0, 0),
+                ValueInput::output(ptr_ty, ptr_1, 0),
+                ValueInput::argument(TY_U32, 1),
+            ]
+        );
+        assert!(emulation_switch_data.value_outputs().is_empty());
+        assert_eq!(emulation_switch_data.branches().len(), 2);
+
+        let emulation_branch_0 = emulation_switch_data.branches()[0];
+
+        assert_eq!(
+            rvsdg[emulation_branch_0].value_arguments()[0].users.len(),
+            1
+        );
+        assert_eq!(
+            rvsdg[emulation_branch_0].value_arguments()[1].users.len(),
+            0
+        );
+        assert_eq!(
+            rvsdg[emulation_branch_0].value_arguments()[2].users.len(),
+            1
+        );
+
+        let ValueUser::Input {
+            consumer: emulation_0_store_node,
+            input: 0,
+        } = rvsdg[emulation_branch_0].value_arguments()[0].users[0]
+        else {
+            panic!(
+                "the first user of the first argument should connect to the first input of a node"
+            )
+        };
+
+        let emulation_0_store_data = rvsdg[emulation_0_store_node].expect_op_store();
+
+        assert_eq!(
+            emulation_0_store_data.value_input(),
+            &ValueInput::argument(TY_U32, 2)
+        );
+        assert_eq!(
+            rvsdg[emulation_branch_0].value_arguments()[2].users[0],
+            ValueUser::Input {
+                consumer: emulation_0_store_node,
+                input: 1,
+            }
+        );
+
+        let emulation_branch_1 = emulation_switch_data.branches()[1];
+
+        assert_eq!(
+            rvsdg[emulation_branch_1].value_arguments()[0].users.len(),
+            0
+        );
+        assert_eq!(
+            rvsdg[emulation_branch_1].value_arguments()[1].users.len(),
+            1
+        );
+        assert_eq!(
+            rvsdg[emulation_branch_1].value_arguments()[2].users.len(),
+            1
+        );
+
+        let ValueUser::Input {
+            consumer: emulation_1_store_node,
+            input: 0,
+        } = rvsdg[emulation_branch_1].value_arguments()[1].users[0]
+        else {
+            panic!(
+                "the first user of the first argument should connect to the first input of a node"
+            )
+        };
+
+        let emulation_1_store_data = rvsdg[emulation_1_store_node].expect_op_store();
+
+        assert_eq!(
+            emulation_1_store_data.value_input(),
+            &ValueInput::argument(TY_U32, 2)
+        );
+        assert_eq!(
+            rvsdg[emulation_branch_1].value_arguments()[2].users[0],
+            ValueUser::Input {
+                consumer: emulation_1_store_node,
+                input: 1,
+            }
+        );
+
+        assert_eq!(
+            &rvsdg[region].value_arguments()[0].users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: switch_node,
+                    input: 0,
+                },
+                ValueUser::Input {
+                    consumer: emulation_switch_node,
+                    input: 0,
+                }
+            ],
+            "the emulation node should have been added as a user to the first function argument"
+        );
+
+        assert_eq!(
+            &rvsdg[region].value_arguments()[1].users,
+            &thin_set![ValueUser::Input {
+                consumer: emulation_switch_node,
+                input: 3,
+            }],
+            "the store node should have been replaced with the emulation node as a user of the \
+            second function argument"
+        );
+
+        assert_eq!(
+            &rvsdg[ptr_0].expect_op_alloca().value_output().users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: switch_node,
+                    input: 1,
+                },
+                ValueUser::Input {
+                    consumer: emulation_switch_node,
+                    input: 1,
+                }
+            ],
+            "the emulation node should have been added as a user to the first alloca node"
+        );
+
+        assert_eq!(
+            &rvsdg[ptr_1].expect_op_alloca().value_output().users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: switch_node,
+                    input: 2,
+                },
+                ValueUser::Input {
+                    consumer: emulation_switch_node,
+                    input: 2,
+                }
+            ],
+            "the emulation node should have been added as a user to the second alloca node"
+        );
+
+        assert!(
+            rvsdg[switch_node].value_outputs()[0].users.is_empty(),
+            "original switch node should no longer have any users"
+        );
+    }
+
+    #[test]
+    fn test_emulate_load_switch_output_reuse() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let array_ty = module.ty.register(TypeKind::Array {
+            base: TY_U32,
+            stride: 4,
+            count: 2,
+        });
+        let array_of_array_ty = module.ty.register(TypeKind::Array {
+            base: array_ty,
+            stride: 4,
+            count: 2,
+        });
+        let array_ptr_ty = module.ty.register(TypeKind::Ptr(array_ty));
+        let array_of_array_ptr_ty = module.ty.register(TypeKind::Ptr(array_of_array_ty));
+        let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
+
+        let array_alloca_node = rvsdg.add_op_alloca(&mut module.ty, region, array_of_array_ty);
+
+        let switch_node = rvsdg.add_switch(
+            region,
+            vec![
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::output(array_of_array_ptr_ty, array_alloca_node, 0),
+                ValueInput::argument(TY_U32, 1),
+                ValueInput::argument(TY_U32, 2),
+            ],
+            vec![ValueOutput::new(ptr_ty)],
+            None,
+        );
+
+        let branch_0 = rvsdg.add_switch_branch(switch_node);
+
+        let branch_0_const_node = rvsdg.add_const_u32(branch_0, 1);
+
+        // Both index values are dynamic and originate inside the switch node for the first branch
+        let branch_0_index_0 = rvsdg.add_op_binary(
+            branch_0,
+            BinaryOperator::Add,
+            ValueInput::argument(TY_U32, 1),
+            ValueInput::output(TY_U32, branch_0_const_node, 0),
+        );
+        let branch_0_index_1 = rvsdg.add_op_binary(
+            branch_0,
+            BinaryOperator::Add,
+            ValueInput::argument(TY_U32, 2),
+            ValueInput::output(TY_U32, branch_0_const_node, 0),
+        );
+
+        let branch_0_ptr_node = rvsdg.add_op_ptr_element_ptr(
+            &mut module.ty,
+            branch_0,
+            TY_U32,
+            ValueInput::argument(array_of_array_ptr_ty, 0),
+            [
+                ValueInput::output(TY_U32, branch_0_index_0, 0),
+                ValueInput::output(TY_U32, branch_0_index_1, 0),
+            ],
+        );
+
+        rvsdg.reconnect_region_result(
+            branch_0,
+            0,
+            ValueOrigin::Output {
+                producer: branch_0_ptr_node,
+                output: 0,
+            },
+        );
+
+        let branch_1 = rvsdg.add_switch_branch(switch_node);
+
+        let branch_1_const_node = rvsdg.add_const_u32(branch_1, 1);
+
+        // For the second branch, the first index is a dynamic value that originates inside the
+        // switch node, the second index is a static value
+        let branch_1_index_0 = rvsdg.add_op_binary(
+            branch_1,
+            BinaryOperator::Add,
+            ValueInput::argument(TY_U32, 1),
+            ValueInput::output(TY_U32, branch_1_const_node, 0),
+        );
+        let branch_1_index_1 = rvsdg.add_const_u32(branch_1, 0);
+
+        let branch_1_ptr_node = rvsdg.add_op_ptr_element_ptr(
+            &mut module.ty,
+            branch_1,
+            TY_U32,
+            ValueInput::argument(array_of_array_ptr_ty, 0),
+            [
+                ValueInput::output(TY_U32, branch_1_index_0, 0),
+                ValueInput::output(TY_U32, branch_1_index_1, 0),
+            ],
+        );
+
+        rvsdg.reconnect_region_result(
+            branch_1,
+            0,
+            ValueOrigin::Output {
+                producer: branch_1_ptr_node,
+                output: 0,
+            },
+        );
+
+        let load_op = rvsdg.add_op_load(
+            region,
+            ValueInput::output(ptr_ty, switch_node, 0),
+            TY_U32,
+            StateOrigin::Argument,
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: load_op,
+                output: 0,
+            },
+        );
+
+        let mut emulation_context = EmulationContext::new();
+
+        emulation_context.emulate_op_load(&mut module.ty, &mut rvsdg, load_op);
+
+        let ValueOrigin::Output {
+            producer: emulation_switch_node,
+            output: 0,
+        } = rvsdg[region].value_results()[0].origin
+        else {
+            panic!("the function result should connect to the first output of a node")
+        };
+
+        let emulation_switch_data = rvsdg[emulation_switch_node].expect_switch();
+
+        assert_eq!(
+            emulation_switch_data.value_inputs(),
+            &[
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::output(array_of_array_ptr_ty, array_alloca_node, 0),
+                ValueInput::output(TY_U32, switch_node, 1),
+                ValueInput::output(TY_U32, switch_node, 2),
+            ]
+        );
+        assert_eq!(
+            emulation_switch_data.value_outputs(),
+            &[ValueOutput {
+                ty: TY_U32,
+                users: thin_set![ValueUser::Result(0)]
+            }]
+        );
+        assert_eq!(emulation_switch_data.branches().len(), 2);
+
+        let emulation_branch_0 = emulation_switch_data.branches()[0];
+
+        let ValueOrigin::Output {
+            producer: emulation_0_load_node,
+            output: 0,
+        } = rvsdg[emulation_branch_0].value_results()[0].origin
+        else {
+            panic!("the branch result should connect to the first output of a node")
+        };
+
+        let emulation_0_load_data = rvsdg[emulation_0_load_node].expect_op_load();
+
+        let ValueOrigin::Output {
+            producer: emulation_0_pep_node,
+            output: 0,
+        } = rvsdg[emulation_0_load_node].value_inputs()[0].origin
+        else {
+            panic!("the load node in branch `0` should connect to the first output of a node")
+        };
+
+        let emulation_0_pep_data = rvsdg[emulation_0_pep_node].expect_op_ptr_element_ptr();
+
+        assert_eq!(emulation_0_pep_data.value_inputs().len(), 3);
+        assert_eq!(
+            emulation_0_pep_data.value_inputs(),
+            &[
+                ValueInput::argument(array_of_array_ptr_ty, 0),
+                ValueInput::argument(TY_U32, 1),
+                ValueInput::argument(TY_U32, 2),
+            ]
+        );
+
+        let emulation_branch_1 = emulation_switch_data.branches()[1];
+
+        let ValueOrigin::Output {
+            producer: emulation_1_load_node,
+            output: 0,
+        } = rvsdg[emulation_branch_1].value_results()[0].origin
+        else {
+            panic!("the branch result should connect to the first output of a node")
+        };
+
+        let emulation_1_load_data = rvsdg[emulation_1_load_node].expect_op_load();
+
+        let ValueOrigin::Output {
+            producer: emulation_1_pep_node,
+            output: 0,
+        } = emulation_1_load_data.value_inputs()[0].origin
+        else {
+            panic!("the load node in branch `0` should connect to the first output of a node")
+        };
+
+        let emulation_1_pep_data = rvsdg[emulation_1_pep_node].expect_op_ptr_element_ptr();
+
+        assert_eq!(emulation_1_pep_data.value_inputs().len(), 3);
+        assert_eq!(
+            emulation_1_pep_data.value_inputs()[0],
+            ValueInput::argument(array_of_array_ptr_ty, 0)
+        );
+        assert_eq!(
+            emulation_1_pep_data.value_inputs()[1],
+            ValueInput::argument(TY_U32, 1)
+        );
+
+        let ValueOrigin::Output {
+            producer: emulation_1_index_node,
+            output: 0,
+        } = emulation_1_pep_data.value_inputs()[2].origin
+        else {
+            panic!("the third PEP node input should connect to the first output of a node")
+        };
+
+        let emulation_1_index_data = rvsdg[emulation_1_index_node].expect_const_u32();
+
+        assert_eq!(emulation_1_index_data.value(), 0);
+
+        assert_eq!(
+            &rvsdg[array_alloca_node]
+                .expect_op_alloca()
+                .value_output()
+                .users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: switch_node,
+                    input: 1,
+                },
+                ValueUser::Input {
+                    consumer: emulation_switch_node,
+                    input: 1,
+                }
+            ],
+            "the emulation node should have been added as a user to the alloca node"
+        );
+
+        assert!(
+            rvsdg[switch_node].value_outputs()[0].users.is_empty(),
+            "original switch node pointer output should no longer have any users"
+        );
+
+        assert_eq!(
+            rvsdg[switch_node].value_outputs().len(),
+            3,
+            "two additional outputs should have been added to the original switch node"
+        );
+        assert_eq!(
+            &rvsdg[switch_node].value_outputs()[1].users,
+            &thin_set![ValueUser::Input {
+                consumer: emulation_switch_node,
+                input: 2
+            }],
+            "the first new switch output should connect to the third input of the emulation node"
+        );
+        assert_eq!(
+            &rvsdg[switch_node].value_outputs()[2].users,
+            &thin_set![ValueUser::Input {
+                consumer: emulation_switch_node,
+                input: 3
+            }],
+            "the second new switch output should connect to the fourth input of the emulation node"
+        );
     }
 }
