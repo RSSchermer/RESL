@@ -1,6 +1,6 @@
 pub mod dead_connection_elimination;
 pub mod inlining;
-mod memory_to_value_promotion;
+mod memory_promotion_and_legalization;
 pub mod proxy_node_elimination;
 pub mod scalar_replacement;
 mod variable_pointer_emulation;

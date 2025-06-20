@@ -238,6 +238,16 @@ impl NodeData {
             .expect("should have a region after initialization")
     }
 
+    pub fn value_input_for_origin(&self, origin: ValueOrigin) -> Option<u32> {
+        for (i, input) in self.value_inputs().iter().enumerate() {
+            if input.origin == origin {
+                return Some(i as u32);
+            }
+        }
+
+        None
+    }
+
     pub fn is_function(&self) -> bool {
         matches!(self.kind, NodeKind::Function(_))
     }
@@ -1640,7 +1650,7 @@ impl Rvsdg {
         region
     }
 
-    pub fn add_switch_input(&mut self, switch_node: Node, input: ValueInput) {
+    pub fn add_switch_input(&mut self, switch_node: Node, input: ValueInput) -> u32 {
         let region = self.nodes[switch_node].region();
 
         self.validate_node_value_input(region, &input);
@@ -1657,6 +1667,8 @@ impl Rvsdg {
         }
 
         self.connect_node_value_input(region, switch_node, input_index);
+
+        input_index as u32
     }
 
     pub fn remove_switch_input(&mut self, switch_node: Node, input: u32) {
@@ -1700,8 +1712,9 @@ impl Rvsdg {
         );
     }
 
-    pub fn add_switch_output(&mut self, switch_node: Node, ty: Type) {
+    pub fn add_switch_output(&mut self, switch_node: Node, ty: Type) -> u32 {
         let node_data = self.nodes[switch_node].expect_switch_mut();
+        let index = node_data.value_outputs.len();
 
         node_data.value_outputs.push(ValueOutput::new(ty));
 
@@ -1710,6 +1723,8 @@ impl Rvsdg {
                 .value_results
                 .push(ValueInput::placeholder(ty));
         }
+
+        index as u32
     }
 
     pub fn remove_switch_output(&mut self, switch_node: Node, output: u32) {
@@ -1801,7 +1816,7 @@ impl Rvsdg {
         (node, loop_region)
     }
 
-    pub fn add_loop_input(&mut self, loop_node: Node, input: ValueInput) {
+    pub fn add_loop_input(&mut self, loop_node: Node, input: ValueInput) -> u32 {
         let region = self.nodes[loop_node].region();
 
         self.validate_node_value_input(region, &input);
@@ -1820,6 +1835,8 @@ impl Rvsdg {
             .push(ValueInput::placeholder(input.ty));
 
         self.connect_node_value_input(region, loop_node, input_index);
+
+        input_index as u32
     }
 
     pub fn remove_loop_input(&mut self, loop_node: Node, input: u32) {
