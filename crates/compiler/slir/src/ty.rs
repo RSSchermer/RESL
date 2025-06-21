@@ -66,7 +66,6 @@ pub enum TypeKind {
     },
     Array {
         base: Type,
-        stride: u64,
         count: u64,
     },
     Struct(Struct),

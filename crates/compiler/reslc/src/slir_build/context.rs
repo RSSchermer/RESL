@@ -139,16 +139,11 @@ fn ty_and_layout_register(cx: &CodegenContext, layout: TyAndLayout) -> slir::ty:
         }
         ValueAbi::Vector { element, count } => {
             let base = scalar_ty(cx, element, layout.field(0));
-            let stride = element.size(&MachineInfo::target()).bytes() as u64;
             let ty = cx
                 .module
                 .borrow_mut()
                 .ty
-                .register(slir::ty::TypeKind::Array {
-                    base,
-                    stride,
-                    count,
-                });
+                .register(slir::ty::TypeKind::Array { base, count });
 
             cx.ty_to_slir.borrow_mut().insert(layout, ty);
 
@@ -163,18 +158,14 @@ fn ty_and_layout_register(cx: &CodegenContext, layout: TyAndLayout) -> slir::ty:
 
     match shape.fields {
         FieldsShape::Primitive => panic!("primitive should have been handled earlier"),
-        FieldsShape::Array { stride, count } => {
+        FieldsShape::Array { count, .. } => {
             let element_layout = layout.field(0);
             let base = ty_and_layout_resolve(cx, element_layout);
             let ty = cx
                 .module
                 .borrow_mut()
                 .ty
-                .register(slir::ty::TypeKind::Array {
-                    base,
-                    stride: stride.bytes() as u64,
-                    count,
-                });
+                .register(slir::ty::TypeKind::Array { base, count });
 
             cx.ty_to_slir.borrow_mut().insert(layout, ty);
 

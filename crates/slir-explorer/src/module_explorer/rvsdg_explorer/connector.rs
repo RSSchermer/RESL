@@ -48,11 +48,7 @@ fn ty_str(module: &Module, ty: Type) -> String {
                 format!("mat{}x{}<bool>", columns.to_u32(), rows.to_u32())
             }
         },
-        TypeKind::Array {
-            base,
-            stride,
-            count,
-        } => format!("array<{}, count>", ty_str(module, *base)),
+        TypeKind::Array { base, count } => format!("array<{}, count>", ty_str(module, *base)),
         TypeKind::Struct(s) => {
             format!("S_{}", s.to_usize())
         }
