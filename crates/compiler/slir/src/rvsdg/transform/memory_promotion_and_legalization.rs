@@ -526,3 +526,415 @@ impl MemoryPromoterLegalizer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::iter;
+
+    use super::*;
+    use crate::rvsdg::ValueOutput;
+    use crate::ty::{TypeKind, TY_DUMMY, TY_U32};
+    use crate::{thin_set, BinaryOperator, FnArg, FnSig, Function, Module, Symbol};
+
+    #[test]
+    fn test_promote_store_then_load_then_store_then_load() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
+
+        let alloca_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let store_0_node = rvsdg.add_op_store(
+            region,
+            ValueInput::output(ptr_ty, alloca_node, 0),
+            ValueInput::argument(TY_U32, 0),
+            StateOrigin::Argument,
+        );
+        let load_0_node = rvsdg.add_op_load(
+            region,
+            ValueInput::output(ptr_ty, alloca_node, 0),
+            TY_U32,
+            StateOrigin::Node(store_0_node),
+        );
+        let store_1_node = rvsdg.add_op_store(
+            region,
+            ValueInput::output(ptr_ty, alloca_node, 0),
+            ValueInput::argument(TY_U32, 1),
+            StateOrigin::Node(load_0_node),
+        );
+        let load_1_node = rvsdg.add_op_load(
+            region,
+            ValueInput::output(ptr_ty, alloca_node, 0),
+            TY_U32,
+            StateOrigin::Node(store_1_node),
+        );
+        let add_node = rvsdg.add_op_binary(
+            region,
+            BinaryOperator::Add,
+            ValueInput::output(TY_U32, load_0_node, 0),
+            ValueInput::output(TY_U32, load_1_node, 0),
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: add_node,
+                output: 0,
+            },
+        );
+
+        let mut promoter_legalizer = MemoryPromoterLegalizer::new(region);
+
+        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg);
+
+        assert_eq!(
+            &rvsdg[region].value_arguments()[0].users,
+            &thin_set![ValueUser::Input {
+                consumer: add_node,
+                input: 0,
+            }]
+        );
+        assert_eq!(
+            &rvsdg[region].value_arguments()[1].users,
+            &thin_set![ValueUser::Input {
+                consumer: add_node,
+                input: 1,
+            }]
+        );
+        assert!(rvsdg[alloca_node]
+            .expect_op_alloca()
+            .value_output()
+            .users
+            .is_empty());
+        assert!(!rvsdg.is_live_node(store_0_node));
+        assert!(!rvsdg.is_live_node(load_0_node));
+        assert!(!rvsdg.is_live_node(store_1_node));
+        assert!(!rvsdg.is_live_node(load_1_node));
+    }
+
+    #[test]
+    fn test_promote_store_then_load_inside_switch() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
+
+        let alloca_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let store_node = rvsdg.add_op_store(
+            region,
+            ValueInput::output(ptr_ty, alloca_node, 0),
+            ValueInput::argument(TY_U32, 0),
+            StateOrigin::Argument,
+        );
+        let switch_node = rvsdg.add_switch(
+            region,
+            vec![
+                ValueInput::argument(TY_U32, 1),
+                ValueInput::output(ptr_ty, alloca_node, 0),
+            ],
+            vec![ValueOutput::new(TY_U32)],
+            Some(StateOrigin::Node(store_node)),
+        );
+
+        let branch_0 = rvsdg.add_switch_branch(switch_node);
+
+        let load_node = rvsdg.add_op_load(
+            branch_0,
+            ValueInput::argument(ptr_ty, 0),
+            TY_U32,
+            StateOrigin::Argument,
+        );
+
+        rvsdg.reconnect_region_result(
+            branch_0,
+            0,
+            ValueOrigin::Output {
+                producer: load_node,
+                output: 0,
+            },
+        );
+
+        let branch_1 = rvsdg.add_switch_branch(switch_node);
+
+        let other_value_node = rvsdg.add_const_u32(branch_1, 0);
+
+        rvsdg.reconnect_region_result(
+            branch_1,
+            0,
+            ValueOrigin::Output {
+                producer: other_value_node,
+                output: 0,
+            },
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: switch_node,
+                output: 0,
+            },
+        );
+
+        let mut promoter_legalizer = MemoryPromoterLegalizer::new(region);
+
+        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg);
+
+        assert_eq!(
+            &rvsdg[region].value_arguments()[0].users,
+            &thin_set![ValueUser::Input {
+                consumer: switch_node,
+                input: 2,
+            }]
+        );
+        assert_eq!(
+            rvsdg[switch_node].expect_switch().value_inputs(),
+            &[
+                ValueInput::argument(TY_U32, 1),
+                ValueInput::output(ptr_ty, alloca_node, 0),
+                ValueInput::argument(TY_U32, 0),
+            ]
+        );
+        assert!(rvsdg[branch_0].value_arguments()[0].users.is_empty());
+        assert_eq!(
+            &rvsdg[branch_0].value_arguments()[1].users,
+            &thin_set![ValueUser::Result(0)]
+        );
+        assert_eq!(
+            rvsdg[branch_0].value_results()[0].origin,
+            ValueOrigin::Argument(1)
+        );
+        assert!(!rvsdg.is_live_node(store_node));
+        assert!(!rvsdg.is_live_node(load_node));
+    }
+
+    #[test]
+    fn test_store_then_store_argument_inside_switch_then_load_outside_switch() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
+
+        let alloca_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let store_node = rvsdg.add_op_store(
+            region,
+            ValueInput::output(ptr_ty, alloca_node, 0),
+            ValueInput::argument(TY_U32, 1),
+            StateOrigin::Argument,
+        );
+        let switch_node = rvsdg.add_switch(
+            region,
+            vec![
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::output(ptr_ty, alloca_node, 0),
+                ValueInput::argument(TY_U32, 2),
+            ],
+            vec![],
+            Some(StateOrigin::Node(store_node)),
+        );
+
+        let branch_0 = rvsdg.add_switch_branch(switch_node);
+
+        let switch_store_node = rvsdg.add_op_store(
+            branch_0,
+            ValueInput::argument(ptr_ty, 0),
+            ValueInput::argument(TY_U32, 1),
+            StateOrigin::Argument,
+        );
+
+        // The second branch does nothing
+        let branch_1 = rvsdg.add_switch_branch(switch_node);
+
+        let load_node = rvsdg.add_op_load(
+            region,
+            ValueInput::output(ptr_ty, alloca_node, 0),
+            TY_U32,
+            StateOrigin::Node(switch_node),
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: load_node,
+                output: 0,
+            },
+        );
+
+        let mut promoter_legalizer = MemoryPromoterLegalizer::new(region);
+
+        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg);
+
+        assert_eq!(
+            &rvsdg[region].value_arguments()[1].users,
+            &thin_set![ValueUser::Input {
+                consumer: switch_node,
+                input: 3,
+            }],
+            "the second function argument should now be used as the fourth input to the switch node"
+        );
+        assert_eq!(
+            &rvsdg[region].value_arguments()[2].users,
+            &thin_set![ValueUser::Input {
+                consumer: switch_node,
+                input: 2,
+            }],
+            "the third function argument should now be used as the third input to the switch node"
+        );
+        assert_eq!(
+            rvsdg[switch_node].expect_switch().value_inputs(),
+            &[
+                ValueInput::argument(TY_U32, 0),
+                ValueInput::output(ptr_ty, alloca_node, 0),
+                ValueInput::argument(TY_U32, 2),
+                ValueInput::argument(TY_U32, 1),
+            ],
+            "in addition to the branch selector and the original pointer, the switch should now \
+            use the third and second function arguments as inputs"
+        );
+
+        assert!(
+            rvsdg[branch_0].value_arguments()[0].users.is_empty(),
+            "the original pointer argument should no longer have any users"
+        );
+        assert_eq!(
+            &rvsdg[branch_0].value_arguments()[1].users,
+            &thin_set![ValueUser::Result(0)],
+            "the second region argument of the first branch should now connect to the first result \
+            of the branch region"
+        );
+        assert!(
+            rvsdg[branch_0].value_arguments()[2].users.is_empty(),
+            "the first branch should not use the third region argument"
+        );
+        assert_eq!(
+            rvsdg[branch_0].value_results()[0].origin,
+            ValueOrigin::Argument(1),
+            "the result of the first branch should connect to the second region argument"
+        );
+
+        assert!(
+            rvsdg[branch_1].value_arguments()[0].users.is_empty(),
+            "the original pointer argument should still not have any users"
+        );
+        assert!(
+            rvsdg[branch_1].value_arguments()[1].users.is_empty(),
+            "the second branch should not use the second region argument"
+        );
+        assert_eq!(
+            &rvsdg[branch_1].value_arguments()[2].users,
+            &thin_set![ValueUser::Result(0)],
+            "the third region argument of the second branch should now connect to the first result \
+            of the branch region"
+        );
+        assert_eq!(
+            rvsdg[branch_1].value_results()[0].origin,
+            ValueOrigin::Argument(2),
+            "the result of the second branch should connect to the third region argument"
+        );
+
+        assert_eq!(
+            rvsdg[switch_node].value_outputs(),
+            &[ValueOutput {
+                ty: TY_U32,
+                users: thin_set![ValueUser::Result(0)],
+            }],
+            "the switch node's output should be used by the function region's result"
+        );
+        assert_eq!(
+            rvsdg[region].value_results()[0].origin,
+            ValueOrigin::Output {
+                producer: switch_node,
+                output: 0,
+            },
+            "the function region's result should connect to the switch node's output"
+        );
+
+        assert!(!rvsdg.is_live_node(store_node));
+        assert!(!rvsdg.is_live_node(switch_store_node));
+        assert!(!rvsdg.is_live_node(load_node));
+    }
+}
