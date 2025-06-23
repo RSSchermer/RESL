@@ -8,7 +8,7 @@ use thin_vec::ThinVec;
 ///
 /// Intended for very small sets only (where linear searching the entire set is cheap), e.g. RVSDG
 /// output-value users.
-#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct ThinSet<T> {
     inner: ThinVec<T>,
 }
@@ -82,6 +82,25 @@ impl<T> Default for ThinSet<T> {
         ThinSet {
             inner: Default::default(),
         }
+    }
+}
+
+impl<T> PartialEq for ThinSet<T>
+where
+    T: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+
+        for element in self.iter() {
+            if !other.contains(element) {
+                return false;
+            }
+        }
+
+        true
     }
 }
 
