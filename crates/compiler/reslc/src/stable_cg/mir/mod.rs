@@ -1,20 +1,21 @@
 use core::fmt;
 use std::fmt::Formatter;
-use std::iter;
+use std::io::Stdout;
+use std::{io, iter};
 
 use bit_set::BitSet;
 use bit_vec::BitVec;
 use index_vec::{index_vec, IndexVec};
 use rustc_middle::{bug, span_bug};
 use smallvec::SmallVec;
-use stable_mir::abi::{FnAbi, PassMode, TyAndLayout};
+use stable_mir::abi::{FnAbi, PassMode};
 use stable_mir::mir;
 use stable_mir::mir::mono::Instance;
 use stable_mir::mir::{BasicBlockIdx, Body, Local, LocalDecl};
 use stable_mir::ty::{RigidTy, TyKind};
 use tracing::{debug, instrument};
 
-use crate::stable_cg::layout::TyAndLayoutExt;
+use crate::stable_cg::layout::TyAndLayout;
 use crate::stable_cg::mir::traversal::reachable_reverse_postorder;
 use crate::stable_cg::traits::*;
 
@@ -287,7 +288,13 @@ fn arg_local_refs<'a, Bx: BuilderMethods<'a>>(
                     bug!("\"rust-call\" ABI does not support unsized params",);
                 }
 
-                let place = PlaceRef::alloca(bx, TyAndLayout { ty: arg_ty, layout });
+                let place = PlaceRef::alloca(
+                    bx,
+                    TyAndLayout {
+                        ty: arg_ty,
+                        layout: layout.into(),
+                    },
+                );
 
                 for i in 0..tupled_arg_tys.len() {
                     let arg = &fx.fn_abi.args[idx];
@@ -323,7 +330,7 @@ fn arg_local_refs<'a, Bx: BuilderMethods<'a>>(
                     PassMode::Ignore => {
                         return local(OperandRef::zero_sized(TyAndLayout {
                             ty: arg_ty,
-                            layout: arg.layout,
+                            layout: arg.layout.into(),
                         }));
                     }
                     PassMode::Direct(_) => {
@@ -336,7 +343,7 @@ fn arg_local_refs<'a, Bx: BuilderMethods<'a>>(
                             llarg,
                             TyAndLayout {
                                 ty: arg_ty,
-                                layout: arg.layout,
+                                layout: arg.layout.into(),
                             },
                         ));
                     }
@@ -349,7 +356,7 @@ fn arg_local_refs<'a, Bx: BuilderMethods<'a>>(
                             val: OperandValue::Pair(a, b),
                             layout: TyAndLayout {
                                 ty: arg_ty,
-                                layout: arg.layout,
+                                layout: arg.layout.into(),
                             },
                         });
                     }
@@ -375,7 +382,7 @@ fn arg_local_refs<'a, Bx: BuilderMethods<'a>>(
                         bx,
                         TyAndLayout {
                             ty: arg.ty,
-                            layout: arg.layout,
+                            layout: arg.layout.into(),
                         },
                     );
 
@@ -393,7 +400,7 @@ fn arg_local_refs<'a, Bx: BuilderMethods<'a>>(
                         llarg,
                         TyAndLayout {
                             ty: arg.ty,
-                            layout: arg.layout,
+                            layout: arg.layout.into(),
                         },
                     ))
                 }
@@ -403,7 +410,7 @@ fn arg_local_refs<'a, Bx: BuilderMethods<'a>>(
                         bx,
                         TyAndLayout {
                             ty: arg.ty,
-                            layout: arg.layout,
+                            layout: arg.layout.into(),
                         },
                     );
 

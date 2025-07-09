@@ -1,16 +1,17 @@
 use std::ops::{Deref, Range};
 
 use rustc_middle::bug;
-use slir::cfg::LocalValueData;
-use smallvec::smallvec;
+use rustc_middle::ty::inherent::SliceLike;
+use slir::cfg::{LocalValueData, Statement};
+use smallvec::{smallvec, SmallVec};
 use stable_mir::abi;
-use stable_mir::abi::{ArgAbi, FnAbi, PassMode, TyAndLayout, ValueAbi};
+use stable_mir::abi::{ArgAbi, FnAbi, PassMode, ValueAbi};
 use stable_mir::mir::mono::{Instance, StaticDef};
 use stable_mir::target::MachineSize;
-use stable_mir::ty::{Align, Span};
+use stable_mir::ty::{Align, IndexedVal, Span, VariantIdx};
 use thin_vec::thin_vec;
 
-use crate::slir_build::context::{ty_and_layout_resolve, CodegenContext as Cx};
+use crate::slir_build::context::CodegenContext as Cx;
 use crate::slir_build::ty::Type;
 use crate::slir_build::value::Value;
 use crate::stable_cg::traits::{
@@ -19,7 +20,7 @@ use crate::stable_cg::traits::{
 };
 use crate::stable_cg::{
     AtomicOrdering, AtomicRmwBinOp, IntPredicate, OperandRef, OperandValue, PlaceRef, PlaceValue,
-    RealPredicate, Scalar, SynchronizationScope,
+    RealPredicate, Scalar, SynchronizationScope, TyAndLayout, TypeKind,
 };
 
 pub struct Builder<'a, 'tcx> {
@@ -103,7 +104,7 @@ impl<'a, 'tcx> ArgAbiBuilderMethods for Builder<'a, 'tcx> {
                     val,
                     TyAndLayout {
                         ty: arg_abi.ty,
-                        layout: arg_abi.layout,
+                        layout: arg_abi.layout.into(),
                     },
                 )
                 .val
@@ -307,9 +308,24 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         then_llbb: Self::BasicBlock,
         else_llbb: Self::BasicBlock,
     ) {
-        self.cfg.borrow_mut().function_body[self.function].basic_blocks[self.basic_block]
-            .terminator = slir::cfg::Terminator::Branch(slir::cfg::Branch {
-            selector: Some(cond.expect_value().expect_local()),
+        let mut cfg = self.cfg.borrow_mut();
+        let body = &mut cfg.function_body[self.function];
+        let bb = &mut body.basic_blocks[self.basic_block];
+
+        let predicate = body
+            .local_values
+            .insert(slir::cfg::LocalValueData::predicate());
+
+        bb.statements.push(
+            slir::cfg::OpBoolToBranchPredicate {
+                value: cond.expect_value(),
+                result: predicate,
+            }
+            .into(),
+        );
+
+        bb.terminator = slir::cfg::Terminator::Branch(slir::cfg::Branch {
+            selector: Some(predicate),
             branches: smallvec![then_llbb.1, else_llbb.1],
         })
     }
@@ -320,11 +336,71 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         else_llbb: Self::BasicBlock,
         cases: impl IntoIterator<Item = (u128, Self::BasicBlock)>,
     ) {
-        todo!()
+        let mut predicate_cases = vec![];
+        let mut branches = smallvec![];
+
+        // Note: this loop has to run before we borrow the `cfg` below, as the `cases` iterator will
+        // actually call [Builder::append_block], which will also want to borrow the `cfg`, leading
+        // to an "already borrowed" error.
+        for (case, (_, branch)) in cases {
+            let Ok(case) = u32::try_from(case) else {
+                bug!("validation should not have allowed a case that does not fit a `u32`");
+            };
+
+            predicate_cases.push(case);
+            branches.push(branch);
+        }
+
+        let mut cfg = self.cfg.borrow_mut();
+        let body = &mut cfg.function_body[self.function];
+        let bb = &mut body.basic_blocks[self.basic_block];
+
+        let predicate = body
+            .local_values
+            .insert(slir::cfg::LocalValueData::predicate());
+
+        bb.statements.push(
+            slir::cfg::OpCaseToBranchPredicate {
+                value: v.expect_value(),
+                cases: predicate_cases,
+                result: predicate,
+            }
+            .into(),
+        );
+
+        bb.terminator = slir::cfg::Terminator::Branch(slir::cfg::Branch {
+            selector: Some(predicate),
+            branches,
+        })
     }
 
-    fn unreachable(&mut self) {
-        todo!()
+    fn unreachable(&mut self) {}
+
+    fn get_discriminant(&mut self, ptr: Self::Value) -> Self::Value {
+        let ptr = ptr.expect_value();
+
+        let mut cfg = self.cfg.borrow_mut();
+        let mut body = &mut cfg.function_body[self.function];
+        let mut bb = &mut body.basic_blocks[self.basic_block];
+
+        let result = body.local_values.insert(slir::cfg::LocalValueData::u32());
+
+        bb.statements
+            .push(slir::cfg::OpGetDiscriminant { ptr, result }.into());
+
+        result.into()
+    }
+
+    fn set_discriminant(&mut self, ptr: Self::Value, variant_index: VariantIdx) {
+        let ptr = ptr.expect_value();
+        let variant_index = variant_index.to_index() as u32;
+
+        let mut cfg = self.cfg.borrow_mut();
+        let mut body = &mut cfg.function_body[self.function];
+        let mut bb = &mut body.basic_blocks[self.basic_block];
+
+        bb.statements
+            .push(slir::cfg::OpSetDiscriminant { ptr, variant_index }.into());
     }
 
     unary_builder_methods! {
@@ -453,7 +529,7 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
     }
 
     fn alloca(&mut self, layout: TyAndLayout) -> Self::Value {
-        let ty = ty_and_layout_resolve(self.cx, layout);
+        let ty = self.cx.ty_and_layout_resolve(layout);
         let ptr_ty = self
             .module
             .borrow_mut()
@@ -530,7 +606,7 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
             OperandValue::Ref(place.val)
         } else if self.is_backend_immediate(place.layout) {
             let llval = self.load(
-                ty_and_layout_resolve(self.cx, place.layout).into(),
+                self.cx.ty_and_layout_resolve(place.layout).into(),
                 place.val.llval,
                 place.val.align,
             );
@@ -625,11 +701,7 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         todo!()
     }
 
-    fn gep(&mut self, ty: Self::Type, ptr: Self::Value, indices: &[Self::Value]) -> Self::Value {
-        self.inbounds_gep(ty, ptr, indices)
-    }
-
-    fn inbounds_gep(
+    fn ptr_element_ptr(
         &mut self,
         ty: Self::Type,
         ptr: Self::Value,
@@ -656,6 +728,44 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
                 element_ty: elem_ty,
                 ptr: ptr.expect_value(),
                 indices,
+                result,
+            }
+            .into(),
+        );
+
+        result.into()
+    }
+
+    fn ptr_variant_ptr(&mut self, ptr: Self::Value, variant_idx: VariantIdx) -> Self::Value {
+        let variant_index = variant_idx.to_index();
+
+        let mut module = self.module.borrow_mut();
+        let mut cfg = self.cfg.borrow_mut();
+        let mut body = &mut cfg.function_body[self.function];
+
+        let ptr = ptr.expect_value();
+        let ptr_ty = body.value_ty(&module, &ptr).unwrap();
+
+        let slir::ty::TypeKind::Ptr(pointee_ty) = module.ty[ptr_ty] else {
+            bug!("pointer value should have pointer type")
+        };
+        let slir::ty::TypeKind::Enum(enum_ty) = module.ty[pointee_ty] else {
+            bug!("pointer-variant-pointer should only be called on a pointer to an enum type");
+        };
+        let Some(variant) = module.enums[enum_ty].variants.get(variant_index).copied() else {
+            bug!("variant index out of bounds");
+        };
+        let variant_ty = module.ty.register(slir::ty::TypeKind::Struct(variant));
+        let variant_ptr_ty = module.ty.register(slir::ty::TypeKind::Ptr(variant_ty));
+
+        let result = body.local_values.insert(slir::cfg::LocalValueData {
+            ty: Some(variant_ptr_ty),
+        });
+
+        body.basic_blocks[self.basic_block].statements.push(
+            slir::cfg::OpPtrVariantPtr {
+                ptr,
+                variant_index: variant_index as u32,
                 result,
             }
             .into(),
@@ -705,7 +815,42 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
     }
 
     fn icmp(&mut self, op: IntPredicate, lhs: Self::Value, rhs: Self::Value) -> Self::Value {
-        todo!()
+        let operator = match op {
+            IntPredicate::IntEQ => slir::BinaryOperator::Eq,
+            IntPredicate::IntNE => slir::BinaryOperator::NotEq,
+            IntPredicate::IntUGT => slir::BinaryOperator::Gt,
+            IntPredicate::IntUGE => slir::BinaryOperator::GtEq,
+            IntPredicate::IntULT => slir::BinaryOperator::Lt,
+            IntPredicate::IntULE => slir::BinaryOperator::LtEq,
+            IntPredicate::IntSGT => slir::BinaryOperator::Gt,
+            IntPredicate::IntSGE => slir::BinaryOperator::GtEq,
+            IntPredicate::IntSLT => slir::BinaryOperator::Lt,
+            IntPredicate::IntSLE => slir::BinaryOperator::LtEq,
+        };
+
+        let lhs = lhs.expect_value();
+        let rhs = rhs.expect_value();
+
+        let module = self.module.borrow();
+        let mut cfg = self.cfg.borrow_mut();
+
+        let body = &mut cfg.function_body[self.function];
+
+        let result = body.local_values.insert(slir::cfg::LocalValueData {
+            ty: Some(slir::ty::TY_BOOL),
+        });
+
+        body.basic_blocks[self.basic_block].statements.push(
+            slir::cfg::OpBinary {
+                operator,
+                lhs,
+                rhs,
+                result,
+            }
+            .into(),
+        );
+
+        result.into()
     }
 
     fn fcmp(&mut self, op: RealPredicate, lhs: Self::Value, rhs: Self::Value) -> Self::Value {

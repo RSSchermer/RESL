@@ -3,7 +3,7 @@ use std::cmp;
 use index_vec::{index_vec, IndexVec};
 use rustc_middle::bug;
 use smallvec::SmallVec;
-use stable_mir::abi::{ArgAbi, FnAbi, PassMode, TyAndLayout, ValueAbi};
+use stable_mir::abi::{ArgAbi, FnAbi, PassMode, ValueAbi};
 use stable_mir::mir;
 use stable_mir::mir::mono::{Instance, InstanceKind};
 use stable_mir::mir::{BasicBlockIdx, SwitchTargets, TerminatorKind};
@@ -15,7 +15,7 @@ use super::operand::OperandValue::{Immediate, Pair, Ref, ZeroSized};
 use super::place::{PlaceRef, PlaceValue};
 use super::{CachedLlbb, FunctionCx, LocalRef};
 use crate::stable_cg::common::IntPredicate;
-use crate::stable_cg::layout::TyAndLayoutExt;
+use crate::stable_cg::layout::TyAndLayout;
 use crate::stable_cg::traits::*;
 
 const RETURN_PLACE_REF: mir::visit::PlaceRef = mir::visit::PlaceRef {
@@ -536,7 +536,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                         bx,
                         scratch.with_type(TyAndLayout {
                             ty: arg.ty,
-                            layout: arg.layout,
+                            layout: arg.layout.into(),
                         }),
                     );
 
@@ -571,7 +571,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
             llval = bx.load(
                 bx.backend_type(TyAndLayout {
                     ty: arg.ty,
-                    layout: arg.layout,
+                    layout: arg.layout.into(),
                 }),
                 llval,
                 align,
@@ -700,7 +700,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                             bx,
                             TyAndLayout {
                                 ty: fn_ret.ty,
-                                layout: fn_ret.layout,
+                                layout: fn_ret.layout.into(),
                             },
                         );
                         tmp.storage_live(bx);
@@ -714,7 +714,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                             bx,
                             TyAndLayout {
                                 ty: fn_ret.ty,
-                                layout: fn_ret.layout,
+                                layout: fn_ret.layout.into(),
                             },
                         );
                         tmp.storage_live(bx);
@@ -785,7 +785,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                     llval,
                     TyAndLayout {
                         ty: ret_abi.ty,
-                        layout: ret_abi.layout,
+                        layout: ret_abi.layout.into(),
                     },
                 );
 

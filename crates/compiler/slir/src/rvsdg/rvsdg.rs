@@ -6,11 +6,12 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
 
-use crate::ty::{Type, TypeKind, TypeRegistry, TY_BOOL, TY_F32, TY_I32, TY_U32};
+use crate::cfg::OpCaseToBranchPredicate;
+use crate::ty::{Type, TypeKind, TypeRegistry, TY_BOOL, TY_F32, TY_I32, TY_PREDICATE, TY_U32};
 use crate::util::thin_set::ThinSet;
 use crate::{
-    thin_set, BinaryOperator, Function, Module, StorageBinding, UnaryOperator, UniformBinding,
-    WorkgroupBinding,
+    thin_set, BinaryOperator, EnumRegistry, Function, Module, StorageBinding, UnaryOperator,
+    UniformBinding, WorkgroupBinding,
 };
 
 pub trait Connectivity {
@@ -452,6 +453,18 @@ impl NodeData {
         }
     }
 
+    pub fn is_op_ptr_variant_ptr(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::OpPtrVariantPtr(_)))
+    }
+
+    pub fn expect_op_ptr_variant_ptr(&self) -> &OpPtrVariantPtr {
+        if let NodeKind::Simple(SimpleNode::OpPtrVariantPtr(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be a `pointer-variant-pointer` operation")
+        }
+    }
+
     pub fn is_op_extract_element(&self) -> bool {
         matches!(self.kind, NodeKind::Simple(SimpleNode::OpExtractElement(_)))
     }
@@ -461,6 +474,36 @@ impl NodeData {
             op
         } else {
             panic!("expected node to be an `extract-element` operation")
+        }
+    }
+
+    pub fn is_op_get_discriminant(&self) -> bool {
+        matches!(
+            self.kind,
+            NodeKind::Simple(SimpleNode::OpGetDiscriminant(_))
+        )
+    }
+
+    pub fn expect_op_get_discriminant(&self) -> &OpGetDiscriminant {
+        if let NodeKind::Simple(SimpleNode::OpGetDiscriminant(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be a `get-discriminant` operation")
+        }
+    }
+
+    pub fn is_op_set_discriminant(&self) -> bool {
+        matches!(
+            self.kind,
+            NodeKind::Simple(SimpleNode::OpSetDiscriminant(_))
+        )
+    }
+
+    pub fn expect_op_set_discriminant(&self) -> &OpSetDiscriminant {
+        if let NodeKind::Simple(SimpleNode::OpSetDiscriminant(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be a `set-discriminant` operation")
         }
     }
 
@@ -497,6 +540,51 @@ impl NodeData {
             op
         } else {
             panic!("expected node to be a `binary` operation")
+        }
+    }
+
+    pub fn is_op_case_to_switch_predicate(&self) -> bool {
+        matches!(
+            self.kind,
+            NodeKind::Simple(SimpleNode::OpCaseToSwitchPredicate(_))
+        )
+    }
+
+    pub fn expect_op_case_to_switch_predicate(&self) -> &OpCaseToSwitchPredicate {
+        if let NodeKind::Simple(SimpleNode::OpCaseToSwitchPredicate(proxy)) = &self.kind {
+            proxy
+        } else {
+            panic!("expected node to be an op-case-to-switch-predicate node")
+        }
+    }
+
+    pub fn is_op_bool_to_switch_predicate(&self) -> bool {
+        matches!(
+            self.kind,
+            NodeKind::Simple(SimpleNode::OpBoolToSwitchPredicate(_))
+        )
+    }
+
+    pub fn expect_op_bool_to_switch_predicate(&self) -> &OpBoolToSwitchPredicate {
+        if let NodeKind::Simple(SimpleNode::OpBoolToSwitchPredicate(proxy)) = &self.kind {
+            proxy
+        } else {
+            panic!("expected node to be an op-bool-to-switch-predicate node")
+        }
+    }
+
+    pub fn is_op_u32_to_switch_predicate(&self) -> bool {
+        matches!(
+            self.kind,
+            NodeKind::Simple(SimpleNode::OpU32ToSwitchPredicate(_))
+        )
+    }
+
+    pub fn expect_op_u32_to_switch_predicate(&self) -> &OpU32ToSwitchPredicate {
+        if let NodeKind::Simple(SimpleNode::OpU32ToSwitchPredicate(proxy)) = &self.kind {
+            proxy
+        } else {
+            panic!("expected node to be an op-u32-to-switch-predicate node")
         }
     }
 
@@ -927,11 +1015,11 @@ impl OpPtrElementPtr {
         self.element_ty
     }
 
-    pub fn ptr(&self) -> &ValueInput {
+    pub fn ptr_input(&self) -> &ValueInput {
         &self.inputs[0]
     }
 
-    pub fn indices(&self) -> &[ValueInput] {
+    pub fn index_inputs(&self) -> &[ValueInput] {
         &self.inputs[1..]
     }
 
@@ -947,6 +1035,53 @@ impl Connectivity for OpPtrElementPtr {
 
     fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
         &mut self.inputs
+    }
+
+    fn value_outputs(&self) -> &[ValueOutput] {
+        slice::from_ref(&self.output)
+    }
+
+    fn value_outputs_mut(&mut self) -> &mut [ValueOutput] {
+        slice::from_mut(&mut self.output)
+    }
+
+    fn state(&self) -> Option<&State> {
+        None
+    }
+
+    fn state_mut(&mut self) -> Option<&mut State> {
+        None
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OpPtrVariantPtr {
+    variant_index: u32,
+    input: ValueInput,
+    output: ValueOutput,
+}
+
+impl OpPtrVariantPtr {
+    pub fn variant_index(&self) -> u32 {
+        self.variant_index
+    }
+
+    pub fn input(&self) -> &ValueInput {
+        &self.input
+    }
+
+    pub fn output(&self) -> &ValueOutput {
+        &self.output
+    }
+}
+
+impl Connectivity for OpPtrVariantPtr {
+    fn value_inputs(&self) -> &[ValueInput] {
+        slice::from_ref(&self.input)
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        slice::from_mut(&mut self.input)
     }
 
     fn value_outputs(&self) -> &[ValueOutput] {
@@ -1014,6 +1149,92 @@ impl Connectivity for OpExtractElement {
 
     fn state_mut(&mut self) -> Option<&mut State> {
         None
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OpGetDiscriminant {
+    ptr_input: ValueInput,
+    value_output: ValueOutput,
+    state: State,
+}
+
+impl OpGetDiscriminant {
+    pub fn ptr_input(&self) -> &ValueInput {
+        &self.ptr_input
+    }
+
+    pub fn value_output(&self) -> &ValueOutput {
+        &self.value_output
+    }
+}
+
+impl Connectivity for OpGetDiscriminant {
+    fn value_inputs(&self) -> &[ValueInput] {
+        slice::from_ref(&self.ptr_input)
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        slice::from_mut(&mut self.ptr_input)
+    }
+
+    fn value_outputs(&self) -> &[ValueOutput] {
+        slice::from_ref(&self.value_output)
+    }
+
+    fn value_outputs_mut(&mut self) -> &mut [ValueOutput] {
+        slice::from_mut(&mut self.value_output)
+    }
+
+    fn state(&self) -> Option<&State> {
+        Some(&self.state)
+    }
+
+    fn state_mut(&mut self) -> Option<&mut State> {
+        Some(&mut self.state)
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OpSetDiscriminant {
+    variant_index: u32,
+    ptr_input: ValueInput,
+    state: State,
+}
+
+impl OpSetDiscriminant {
+    pub fn ptr_input(&self) -> &ValueInput {
+        &self.ptr_input
+    }
+
+    pub fn variant_index(&self) -> u32 {
+        self.variant_index
+    }
+}
+
+impl Connectivity for OpSetDiscriminant {
+    fn value_inputs(&self) -> &[ValueInput] {
+        slice::from_ref(&self.ptr_input)
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        slice::from_mut(&mut self.ptr_input)
+    }
+
+    fn value_outputs(&self) -> &[ValueOutput] {
+        &[]
+    }
+
+    fn value_outputs_mut(&mut self) -> &mut [ValueOutput] {
+        &mut []
+    }
+
+    fn state(&self) -> Option<&State> {
+        Some(&self.state)
+    }
+
+    fn state_mut(&mut self) -> Option<&mut State> {
+        Some(&mut self.state)
     }
 }
 
@@ -1261,6 +1482,142 @@ impl Connectivity for ConstPtr {
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OpCaseToSwitchPredicate {
+    cases: Vec<u32>,
+    input: ValueInput,
+    output: ValueOutput,
+}
+
+impl OpCaseToSwitchPredicate {
+    pub fn cases(&self) -> &[u32] {
+        &self.cases
+    }
+
+    pub fn input(&self) -> &ValueInput {
+        &self.input
+    }
+
+    pub fn output(&self) -> &ValueOutput {
+        &self.output
+    }
+}
+
+impl Connectivity for OpCaseToSwitchPredicate {
+    fn value_inputs(&self) -> &[ValueInput] {
+        slice::from_ref(&self.input)
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        slice::from_mut(&mut self.input)
+    }
+
+    fn value_outputs(&self) -> &[ValueOutput] {
+        slice::from_ref(&self.output)
+    }
+
+    fn value_outputs_mut(&mut self) -> &mut [ValueOutput] {
+        slice::from_mut(&mut self.output)
+    }
+
+    fn state(&self) -> Option<&State> {
+        None
+    }
+
+    fn state_mut(&mut self) -> Option<&mut State> {
+        None
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OpBoolToSwitchPredicate {
+    input: ValueInput,
+    output: ValueOutput,
+}
+
+impl OpBoolToSwitchPredicate {
+    pub fn input(&self) -> &ValueInput {
+        &self.input
+    }
+
+    pub fn output(&self) -> &ValueOutput {
+        &self.output
+    }
+}
+
+impl Connectivity for OpBoolToSwitchPredicate {
+    fn value_inputs(&self) -> &[ValueInput] {
+        slice::from_ref(&self.input)
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        slice::from_mut(&mut self.input)
+    }
+
+    fn value_outputs(&self) -> &[ValueOutput] {
+        slice::from_ref(&self.output)
+    }
+
+    fn value_outputs_mut(&mut self) -> &mut [ValueOutput] {
+        slice::from_mut(&mut self.output)
+    }
+
+    fn state(&self) -> Option<&State> {
+        None
+    }
+
+    fn state_mut(&mut self) -> Option<&mut State> {
+        None
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OpU32ToSwitchPredicate {
+    branch_count: u32,
+    input: ValueInput,
+    output: ValueOutput,
+}
+
+impl OpU32ToSwitchPredicate {
+    pub fn branch_count(&self) -> u32 {
+        self.branch_count
+    }
+
+    pub fn input(&self) -> &ValueInput {
+        &self.input
+    }
+
+    pub fn output(&self) -> &ValueOutput {
+        &self.output
+    }
+}
+
+impl Connectivity for OpU32ToSwitchPredicate {
+    fn value_inputs(&self) -> &[ValueInput] {
+        slice::from_ref(&self.input)
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        slice::from_mut(&mut self.input)
+    }
+
+    fn value_outputs(&self) -> &[ValueOutput] {
+        slice::from_ref(&self.output)
+    }
+
+    fn value_outputs_mut(&mut self) -> &mut [ValueOutput] {
+        slice::from_mut(&mut self.output)
+    }
+
+    fn state(&self) -> Option<&State> {
+        None
+    }
+
+    fn state_mut(&mut self) -> Option<&mut State> {
+        None
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct ValueProxy {
     input: ValueInput,
     output: ValueOutput,
@@ -1365,10 +1722,16 @@ gen_simple_node! {
     OpLoad,
     OpStore,
     OpPtrElementPtr,
+    OpPtrVariantPtr,
     OpExtractElement,
+    OpGetDiscriminant,
+    OpSetDiscriminant,
     OpApply,
     OpUnary,
     OpBinary,
+    OpCaseToSwitchPredicate,
+    OpBoolToSwitchPredicate,
+    OpU32ToSwitchPredicate,
     ValueProxy,
 }
 
@@ -1586,6 +1949,10 @@ impl Rvsdg {
             value_inputs.len() > 0,
             "a switch node must specify at least 1 value input that acts as the branch selector \
             predicate"
+        );
+        assert_eq!(
+            value_inputs[0].ty, TY_PREDICATE,
+            "first input must be a `predicate` type value"
         );
 
         for input in &value_inputs {
@@ -2049,6 +2416,58 @@ impl Rvsdg {
         node
     }
 
+    pub fn add_op_ptr_variant_ptr(
+        &mut self,
+        type_registry: &mut TypeRegistry,
+        enum_registry: &EnumRegistry,
+        region: Region,
+        input: ValueInput,
+        variant_index: u32,
+    ) -> Node {
+        self.validate_node_value_input(region, &input);
+
+        let TypeKind::Ptr(pointee_ty) = type_registry[input.ty] else {
+            panic!("`ptr_input` must be of a pointer type")
+        };
+        let TypeKind::Enum(enum_handle) = type_registry[pointee_ty] else {
+            panic!("`ptr_input` must point to an enum type")
+        };
+
+        let variants = &enum_registry[enum_handle].variants;
+
+        let Some(variant) = enum_registry[enum_handle]
+            .variants
+            .get(variant_index as usize)
+            .copied()
+        else {
+            panic!(
+                "tried to select variant `{}` on an enum that only has {} variants",
+                variant_index,
+                variants.len()
+            )
+        };
+
+        let variant_ty = type_registry.register(TypeKind::Struct(variant));
+        let output_ty = type_registry.register(TypeKind::Ptr(variant_ty));
+
+        let node = self.nodes.insert(NodeData {
+            kind: NodeKind::Simple(
+                OpPtrVariantPtr {
+                    variant_index,
+                    input,
+                    output: ValueOutput::new(output_ty),
+                }
+                .into(),
+            ),
+            region: Some(region),
+        });
+
+        self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
+
+        node
+    }
+
     pub fn add_op_extract_element(
         &mut self,
         region: Region,
@@ -2078,6 +2497,67 @@ impl Rvsdg {
             region: Some(region),
         });
 
+        self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
+
+        node
+    }
+
+    pub fn add_op_get_discriminant(
+        &mut self,
+        region: Region,
+        ptr_input: ValueInput,
+        state_origin: StateOrigin,
+    ) -> Node {
+        self.validate_node_value_input(region, &ptr_input);
+
+        let node = self.nodes.insert(NodeData {
+            kind: NodeKind::Simple(
+                OpGetDiscriminant {
+                    ptr_input,
+                    value_output: ValueOutput::new(TY_U32),
+                    state: State {
+                        origin: state_origin,
+                        user: StateUser::Result, // Temp value
+                    },
+                }
+                .into(),
+            ),
+            region: Some(region),
+        });
+
+        self.link_state(region, node, state_origin);
+        self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
+
+        node
+    }
+
+    pub fn add_op_set_discriminant(
+        &mut self,
+        region: Region,
+        ptr_input: ValueInput,
+        variant_index: u32,
+        state_origin: StateOrigin,
+    ) -> Node {
+        self.validate_node_value_input(region, &ptr_input);
+
+        let node = self.nodes.insert(NodeData {
+            kind: NodeKind::Simple(
+                OpSetDiscriminant {
+                    ptr_input,
+                    variant_index,
+                    state: State {
+                        origin: state_origin,
+                        user: StateUser::Result, // Temp value
+                    },
+                }
+                .into(),
+            ),
+            region: Some(region),
+        });
+
+        self.link_state(region, node, state_origin);
         self.regions[region].nodes.insert(node);
         self.connect_node_value_inputs(node);
 
@@ -2185,12 +2665,105 @@ impl Rvsdg {
 
         assert_eq!(lhs_input.ty, rhs_input.ty);
 
+        let output_ty = match operator {
+            BinaryOperator::And
+            | BinaryOperator::Or
+            | BinaryOperator::Add
+            | BinaryOperator::Sub
+            | BinaryOperator::Mul
+            | BinaryOperator::Div
+            | BinaryOperator::Mod
+            | BinaryOperator::Shl
+            | BinaryOperator::Shr => lhs_input.ty,
+            BinaryOperator::Eq
+            | BinaryOperator::NotEq
+            | BinaryOperator::Gt
+            | BinaryOperator::GtEq
+            | BinaryOperator::Lt
+            | BinaryOperator::LtEq => TY_BOOL,
+        };
+
         let node = self.nodes.insert(NodeData {
             kind: NodeKind::Simple(
                 OpBinary {
                     operator,
                     inputs: [lhs_input, rhs_input],
-                    output: ValueOutput::new(lhs_input.ty),
+                    output: ValueOutput::new(output_ty),
+                }
+                .into(),
+            ),
+            region: Some(region),
+        });
+
+        self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
+
+        node
+    }
+
+    pub fn add_op_case_to_switch_predicate(
+        &mut self,
+        region: Region,
+        input: ValueInput,
+        cases: impl IntoIterator<Item = u32>,
+    ) -> Node {
+        self.validate_node_value_input(region, &input);
+        assert_eq!(input.ty, TY_U32, "input must by a `u32` value");
+
+        let node = self.nodes.insert(NodeData {
+            kind: NodeKind::Simple(
+                OpCaseToSwitchPredicate {
+                    cases: cases.into_iter().collect(),
+                    input,
+                    output: ValueOutput::new(TY_PREDICATE),
+                }
+                .into(),
+            ),
+            region: Some(region),
+        });
+
+        self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
+
+        node
+    }
+
+    pub fn add_op_bool_to_switch_predicate(&mut self, region: Region, input: ValueInput) -> Node {
+        self.validate_node_value_input(region, &input);
+        assert_eq!(input.ty, TY_BOOL, "input must by a `bool` value");
+
+        let node = self.nodes.insert(NodeData {
+            kind: NodeKind::Simple(
+                OpBoolToSwitchPredicate {
+                    input,
+                    output: ValueOutput::new(TY_PREDICATE),
+                }
+                .into(),
+            ),
+            region: Some(region),
+        });
+
+        self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
+
+        node
+    }
+
+    pub fn add_op_u32_to_switch_predicate(
+        &mut self,
+        region: Region,
+        branch_count: u32,
+        input: ValueInput,
+    ) -> Node {
+        self.validate_node_value_input(region, &input);
+        assert_eq!(input.ty, TY_U32, "input must by a `u32` value");
+
+        let node = self.nodes.insert(NodeData {
+            kind: NodeKind::Simple(
+                OpU32ToSwitchPredicate {
+                    branch_count,
+                    input,
+                    output: ValueOutput::new(TY_PREDICATE),
                 }
                 .into(),
             ),
@@ -3274,7 +3847,7 @@ mod tests {
                 ty: TY_DUMMY,
                 args: vec![
                     FnArg {
-                        ty: TY_U32,
+                        ty: TY_PREDICATE,
                         shader_io_binding: None,
                     },
                     FnArg {
@@ -3293,7 +3866,7 @@ mod tests {
         let switch_node = rvsdg.add_switch(
             region,
             vec![
-                ValueInput::argument(TY_U32, 0),
+                ValueInput::argument(TY_PREDICATE, 0),
                 ValueInput::argument(TY_U32, 1),
             ],
             vec![ValueOutput::new(TY_U32)],
@@ -3345,7 +3918,7 @@ mod tests {
         assert_eq!(
             rvsdg[region].value_arguments()[0],
             ValueOutput {
-                ty: TY_U32,
+                ty: TY_PREDICATE,
                 users: thin_set![ValueUser::Input {
                     consumer: switch_node,
                     input: 0,
@@ -3366,7 +3939,7 @@ mod tests {
         // Check the switch node inputs and outputs
         assert_eq!(
             rvsdg[switch_node].value_inputs()[0],
-            ValueInput::argument(TY_U32, 0),
+            ValueInput::argument(TY_PREDICATE, 0),
         );
         assert_eq!(
             rvsdg[switch_node].value_inputs()[1],

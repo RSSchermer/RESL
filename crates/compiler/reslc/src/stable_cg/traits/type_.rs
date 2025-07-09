@@ -1,9 +1,11 @@
 use rustc_abi::{Float, Integer};
-use stable_mir::abi::{ArgAbi, FnAbi, TyAndLayout};
+use stable_mir::abi::{ArgAbi, FnAbi};
+use stable_mir::ty::VariantIdx;
 
 use super::{BackendTypes, MiscCodegenMethods};
 use crate::stable_cg::common::TypeKind;
 use crate::stable_cg::mir::place::PlaceRef;
+use crate::stable_cg::TyAndLayout;
 
 pub trait BaseTypeCodegenMethods: BackendTypes {
     fn type_i8(&self) -> Self::Type;
@@ -70,7 +72,9 @@ pub trait LayoutTypeCodegenMethods: BackendTypes {
     /// The backend type used for a rust type when it's in memory,
     /// such as when it's stack-allocated or when it's being loaded or stored.
     fn backend_type(&self, layout: TyAndLayout) -> Self::Type;
+
     fn fn_decl_backend_type(&self, fn_abi: &FnAbi) -> Self::Type;
+
     /// The backend type used for a rust type when it's in an SSA register.
     ///
     /// For nearly all types this is the same as the [`Self::backend_type`], however
@@ -81,8 +85,11 @@ pub trait LayoutTypeCodegenMethods: BackendTypes {
     /// [`from_immediate`](super::BuilderMethods::from_immediate) and
     /// [`to_immediate_scalar`](super::BuilderMethods::to_immediate_scalar).
     fn immediate_backend_type(&self, layout: TyAndLayout) -> Self::Type;
+
     fn is_backend_immediate(&self, layout: TyAndLayout) -> bool;
+
     fn is_backend_scalar_pair(&self, layout: TyAndLayout) -> bool;
+
     fn scalar_pair_element_backend_type(
         &self,
         layout: TyAndLayout,

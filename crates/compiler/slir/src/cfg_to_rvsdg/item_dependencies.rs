@@ -2,8 +2,9 @@ use indexmap::IndexSet;
 use rustc_hash::FxHashMap;
 
 use crate::cfg::{
-    BasicBlockData, Body, Cfg, InlineConst, OpAlloca, OpAssign, OpBinary, OpCall, OpLoad,
-    OpPtrElementPtr, OpStore, OpUnary, RootIdentifier, Statement, Value,
+    BasicBlockData, Body, Cfg, InlineConst, OpAlloca, OpAssign, OpBinary, OpBoolToBranchPredicate,
+    OpCall, OpCaseToBranchPredicate, OpGetDiscriminant, OpLoad, OpPtrElementPtr, OpPtrVariantPtr,
+    OpSetDiscriminant, OpStore, OpUnary, RootIdentifier, Statement, Value,
 };
 use crate::ty::Type;
 use crate::{Function, Module, StorageBinding, UniformBinding, WorkgroupBinding};
@@ -110,6 +111,33 @@ impl WithItemDependencies for OpPtrElementPtr {
     }
 }
 
+impl WithItemDependencies for OpPtrVariantPtr {
+    fn with_item_dependencies<F>(&self, mut f: F)
+    where
+        F: FnMut(Item),
+    {
+        self.ptr.with_item_dependencies(&mut f);
+    }
+}
+
+impl WithItemDependencies for OpGetDiscriminant {
+    fn with_item_dependencies<F>(&self, mut f: F)
+    where
+        F: FnMut(Item),
+    {
+        self.ptr.with_item_dependencies(&mut f);
+    }
+}
+
+impl WithItemDependencies for OpSetDiscriminant {
+    fn with_item_dependencies<F>(&self, mut f: F)
+    where
+        F: FnMut(Item),
+    {
+        self.ptr.with_item_dependencies(&mut f);
+    }
+}
+
 impl WithItemDependencies for OpUnary {
     fn with_item_dependencies<F>(&self, mut f: F)
     where
@@ -142,6 +170,24 @@ impl WithItemDependencies for OpCall {
     }
 }
 
+impl WithItemDependencies for OpCaseToBranchPredicate {
+    fn with_item_dependencies<F>(&self, mut f: F)
+    where
+        F: FnMut(Item),
+    {
+        self.value.with_item_dependencies(&mut f);
+    }
+}
+
+impl WithItemDependencies for OpBoolToBranchPredicate {
+    fn with_item_dependencies<F>(&self, mut f: F)
+    where
+        F: FnMut(Item),
+    {
+        self.value.with_item_dependencies(&mut f);
+    }
+}
+
 macro_rules! impl_collect_dependencies_statement {
     ($($op:ident,)*) => {
         impl WithItemDependencies for Statement {
@@ -160,9 +206,14 @@ impl_collect_dependencies_statement! {
     OpLoad,
     OpStore,
     OpPtrElementPtr,
+    OpPtrVariantPtr,
+    OpGetDiscriminant,
+    OpSetDiscriminant,
     OpUnary,
     OpBinary,
     OpCall,
+    OpCaseToBranchPredicate,
+    OpBoolToBranchPredicate,
 }
 
 impl WithItemDependencies for BasicBlockData {

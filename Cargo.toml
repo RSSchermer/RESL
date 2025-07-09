@@ -6,6 +6,7 @@ members = [
     "crates/resl_cli",
     "crates/slir-explorer",
     "tests/examples/hello_world",
+    "tests/examples/simple_enum",
     "tests/examples/simple_lib",
     "tests/examples/variable_pointers",
     "tests/examples/workgroup_binding",
@@ -34,6 +35,7 @@ index_vec = "0.1"
 internment = "0.8"
 itertools = "0.14"
 ordered-float = "4.6"
+regex = "1.11"
 rustc-hash = "2.1"
 serde = "1.0"
 slir = { path = "./crates/compiler/slir", version = "0.1.0" }

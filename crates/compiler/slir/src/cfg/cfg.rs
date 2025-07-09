@@ -9,7 +9,7 @@ use slotmap::SlotMap;
 use smallvec::{smallvec, SmallVec};
 use thin_vec::ThinVec;
 
-use crate::ty::{Type, TY_BOOL, TY_F32, TY_I32, TY_U32};
+use crate::ty::{Type, TY_BOOL, TY_F32, TY_I32, TY_PREDICATE, TY_U32};
 use crate::{
     BinaryOperator, FnSig, Function, Module, StorageBinding, UnaryOperator, UniformBinding,
     WorkgroupBinding,
@@ -77,6 +77,18 @@ impl IndexMut<Function> for FunctionBodyRegistry {
 #[derive(Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize, Debug)]
 pub struct LocalValueData {
     pub ty: Option<Type>,
+}
+
+impl LocalValueData {
+    pub fn u32() -> Self {
+        LocalValueData { ty: Some(TY_U32) }
+    }
+
+    pub fn predicate() -> Self {
+        LocalValueData {
+            ty: Some(TY_PREDICATE),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
@@ -237,6 +249,25 @@ pub struct OpPtrElementPtr {
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OpPtrVariantPtr {
+    pub ptr: Value,
+    pub variant_index: u32,
+    pub result: LocalValue,
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OpGetDiscriminant {
+    pub ptr: Value,
+    pub result: LocalValue,
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OpSetDiscriminant {
+    pub ptr: Value,
+    pub variant_index: u32,
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct OpUnary {
     pub operator: UnaryOperator,
     pub value: Value,
@@ -256,6 +287,30 @@ pub struct OpCall {
     pub function: Function,
     pub args: ThinVec<Value>,
     pub result: Option<LocalValue>,
+}
+
+/// Converts an integer [value] into a branch selector predicate by comparing it against a list of
+/// cases.
+///
+/// If it matches one case at index `n` in the [cases] list, then the predicate produced will select
+/// branch `n`. If it matches multiple cases, then `n` will be the index of the first case matched
+/// in list-order. If it matches none of the cases, then the predicate will select branch
+/// [cases.len()].
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OpCaseToBranchPredicate {
+    pub value: Value,
+    pub cases: Vec<u32>,
+    pub result: LocalValue,
+}
+
+/// Converts a boolean [value] into a branch selector predicate.
+///
+/// If [value] is [true], then the predicate will select branch `0`. If [value] is [false] then the
+/// predicate will select branch `1`.
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OpBoolToBranchPredicate {
+    pub value: Value,
+    pub result: LocalValue,
 }
 
 macro_rules! gen_statement {
@@ -279,9 +334,14 @@ gen_statement! {
     OpLoad,
     OpStore,
     OpPtrElementPtr,
+    OpPtrVariantPtr,
+    OpGetDiscriminant,
+    OpSetDiscriminant,
     OpUnary,
     OpBinary,
     OpCall,
+    OpCaseToBranchPredicate,
+    OpBoolToBranchPredicate,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize, Debug)]

@@ -971,7 +971,14 @@ impl NodeLayout {
                 SimpleNode::OpAlloca(_) => NodeContent::PlainText("alloca".into()),
                 SimpleNode::OpLoad(_) => NodeContent::PlainText("load".into()),
                 SimpleNode::OpStore(_) => NodeContent::PlainText("store".into()),
-                SimpleNode::OpPtrElementPtr(_) => NodeContent::PlainText("pep".into()),
+                SimpleNode::OpPtrElementPtr(_) => NodeContent::PlainText("el-ptr".into()),
+                SimpleNode::OpPtrVariantPtr(op) => {
+                    NodeContent::PlainText(format!("vrnt-ptr:{}", op.variant_index()).into())
+                }
+                SimpleNode::OpGetDiscriminant(_) => NodeContent::PlainText("get-discr".into()),
+                SimpleNode::OpSetDiscriminant(op) => {
+                    NodeContent::PlainText(format!("set-discr:{}", op.variant_index()).into())
+                }
                 SimpleNode::OpExtractElement(_) => NodeContent::PlainText("extract".into()),
                 SimpleNode::OpApply(op) => {
                     NodeContent::FnApply("apply".into(), op.resolve_fn(module))
@@ -980,6 +987,13 @@ impl NodeLayout {
                 SimpleNode::OpBinary(op) => {
                     NodeContent::PlainText(op.operator().to_string().into())
                 }
+                SimpleNode::OpCaseToSwitchPredicate(_) => {
+                    NodeContent::PlainText("pred-case".into())
+                }
+                SimpleNode::OpBoolToSwitchPredicate(_) => {
+                    NodeContent::PlainText("pred-bool".into())
+                }
+                SimpleNode::OpU32ToSwitchPredicate(_) => NodeContent::PlainText("pred-u32".into()),
                 SimpleNode::ValueProxy(_) => NodeContent::PlainText("proxy".into()),
             },
             _ => panic!("node kind not allowed inside a region"),

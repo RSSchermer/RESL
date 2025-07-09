@@ -182,7 +182,7 @@ impl TouchedAllocaStack {
 /// operations in state chain order, then it is guaranteed that we will have been able to emulate
 /// all variable pointers into legal WGSL.
 ///
-/// Because of this inter-dependence between memory to value-flow promotion and variable pointer 
+/// Because of this inter-dependence between memory to value-flow promotion and variable pointer
 /// emulation, these transforms are combined into a single pass.
 pub struct MemoryPromoterLegalizer {
     emulation_context: EmulationContext,
@@ -580,7 +580,7 @@ mod tests {
 
     use super::*;
     use crate::rvsdg::ValueOutput;
-    use crate::ty::{TypeKind, TY_DUMMY, TY_U32};
+    use crate::ty::{TypeKind, TY_DUMMY, TY_PREDICATE, TY_U32};
     use crate::{thin_set, BinaryOperator, FnArg, FnSig, Function, Module, Symbol};
 
     #[test]
@@ -819,7 +819,7 @@ mod tests {
                         shader_io_binding: None,
                     },
                     FnArg {
-                        ty: TY_U32,
+                        ty: TY_PREDICATE,
                         shader_io_binding: None,
                     },
                 ],
@@ -843,7 +843,7 @@ mod tests {
         let switch_node = rvsdg.add_switch(
             region,
             vec![
-                ValueInput::argument(TY_U32, 1),
+                ValueInput::argument(TY_PREDICATE, 1),
                 ValueInput::output(ptr_ty, alloca_node, 0),
             ],
             vec![ValueOutput::new(TY_U32)],
@@ -905,7 +905,7 @@ mod tests {
         assert_eq!(
             rvsdg[switch_node].expect_switch().value_inputs(),
             &[
-                ValueInput::argument(TY_U32, 1),
+                ValueInput::argument(TY_PREDICATE, 1),
                 ValueInput::output(ptr_ty, alloca_node, 0),
                 ValueInput::argument(TY_U32, 0),
             ],
@@ -955,11 +955,11 @@ mod tests {
                         shader_io_binding: None,
                     },
                     FnArg {
-                        ty: TY_U32,
+                        ty: TY_PREDICATE,
                         shader_io_binding: None,
                     },
                     FnArg {
-                        ty: TY_U32,
+                        ty: TY_PREDICATE,
                         shader_io_binding: None,
                     },
                 ],
@@ -986,8 +986,8 @@ mod tests {
         let outer_switch_node = rvsdg.add_switch(
             region,
             vec![
-                ValueInput::argument(TY_U32, 1),
-                ValueInput::argument(TY_U32, 2),
+                ValueInput::argument(TY_PREDICATE, 1),
+                ValueInput::argument(TY_PREDICATE, 2),
                 ValueInput::output(ptr_ty, alloca_node, 0),
             ],
             vec![ValueOutput::new(TY_U32)],
@@ -1001,7 +1001,7 @@ mod tests {
         let inner_switch_node = rvsdg.add_switch(
             outer_branch_0,
             vec![
-                ValueInput::argument(TY_U32, 0),
+                ValueInput::argument(TY_PREDICATE, 0),
                 ValueInput::argument(ptr_ty, 1),
             ],
             vec![ValueOutput::new(TY_U32)],
@@ -1098,8 +1098,8 @@ mod tests {
         assert_eq!(
             rvsdg[outer_switch_node].expect_switch().value_inputs(),
             &[
-                ValueInput::argument(TY_U32, 1),
-                ValueInput::argument(TY_U32, 2),
+                ValueInput::argument(TY_PREDICATE, 1),
+                ValueInput::argument(TY_PREDICATE, 2),
                 ValueInput::output(ptr_ty, alloca_node, 0),
                 ValueInput::argument(TY_U32, 0),
             ],
@@ -1158,7 +1158,7 @@ mod tests {
                 ty: TY_DUMMY,
                 args: vec![
                     FnArg {
-                        ty: TY_U32,
+                        ty: TY_PREDICATE,
                         shader_io_binding: None,
                     },
                     FnArg {
@@ -1190,7 +1190,7 @@ mod tests {
         let switch_node = rvsdg.add_switch(
             region,
             vec![
-                ValueInput::argument(TY_U32, 0),
+                ValueInput::argument(TY_PREDICATE, 0),
                 ValueInput::output(ptr_ty, alloca_node, 0),
                 ValueInput::argument(TY_U32, 2),
             ],
@@ -1249,7 +1249,7 @@ mod tests {
         assert_eq!(
             rvsdg[switch_node].expect_switch().value_inputs(),
             &[
-                ValueInput::argument(TY_U32, 0),
+                ValueInput::argument(TY_PREDICATE, 0),
                 ValueInput::output(ptr_ty, alloca_node, 0),
                 ValueInput::argument(TY_U32, 2),
                 ValueInput::argument(TY_U32, 1),
@@ -1344,11 +1344,11 @@ mod tests {
                 ty: TY_DUMMY,
                 args: vec![
                     FnArg {
-                        ty: TY_U32,
+                        ty: TY_PREDICATE,
                         shader_io_binding: None,
                     },
                     FnArg {
-                        ty: TY_U32,
+                        ty: TY_PREDICATE,
                         shader_io_binding: None,
                     },
                     FnArg {
@@ -1383,8 +1383,8 @@ mod tests {
         let outer_switch_node = rvsdg.add_switch(
             region,
             vec![
-                ValueInput::argument(TY_U32, 0),
-                ValueInput::argument(TY_U32, 1),
+                ValueInput::argument(TY_PREDICATE, 0),
+                ValueInput::argument(TY_PREDICATE, 1),
                 ValueInput::output(ptr_ty, alloca_node, 0),
                 ValueInput::argument(TY_U32, 3),
             ],
@@ -1399,7 +1399,7 @@ mod tests {
         let inner_switch_node = rvsdg.add_switch(
             outer_branch_0,
             vec![
-                ValueInput::argument(TY_U32, 0),
+                ValueInput::argument(TY_PREDICATE, 0),
                 ValueInput::argument(ptr_ty, 1),
                 ValueInput::argument(TY_U32, 2),
             ],
@@ -1878,7 +1878,7 @@ mod tests {
                 name: Default::default(),
                 ty: TY_DUMMY,
                 args: vec![FnArg {
-                    ty: TY_U32,
+                    ty: TY_PREDICATE,
                     shader_io_binding: None,
                 }],
                 ret_ty: Some(TY_U32),
@@ -1912,7 +1912,7 @@ mod tests {
         let switch_node = rvsdg.add_switch(
             region,
             vec![
-                ValueInput::argument(TY_U32, 0),
+                ValueInput::argument(TY_PREDICATE, 0),
                 ValueInput::output(ptr_ty, alloca_0_node, 0),
                 ValueInput::output(ptr_ty, alloca_1_node, 0),
             ],

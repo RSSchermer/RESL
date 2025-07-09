@@ -1,4 +1,5 @@
 pub mod cfg_explorer;
+pub mod enum_explorer;
 pub mod function_explorer;
 pub mod inner;
 mod rvsdg_explorer;
@@ -19,6 +20,7 @@ use crate::module_explorer::inner::ModuleExplorerInner;
 
 pub const FUNCTION_ITEM_LABEL_START: &'static str = "function-";
 pub const STRUCT_ITEM_LABEL_START: &'static str = "struct-";
+pub const ENUM_ITEM_LABEL_START: &'static str = "enum-";
 pub const UNIFORM_ITEM_LABEL_START: &'static str = "uniform-";
 pub const STORAGE_ITEM_LABEL_START: &'static str = "storage-";
 pub const WORKGROUP_ITEM_LABEL_START: &'static str = "workgroup-";

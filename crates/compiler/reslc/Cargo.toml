@@ -23,6 +23,7 @@ indexmap = { workspace = true }
 index_vec = { workspace = true }
 internment = { workspace = true }
 itertools = { workspace = true }
+regex = { workspace = true }
 rustc-hash = { workspace = true }
 slir = { workspace = true }
 smallvec = { workspace = true }

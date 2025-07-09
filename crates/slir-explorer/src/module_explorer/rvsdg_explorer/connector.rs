@@ -52,8 +52,12 @@ fn ty_str(module: &Module, ty: Type) -> String {
         TypeKind::Struct(s) => {
             format!("S_{}", s.to_usize())
         }
+        TypeKind::Enum(e) => {
+            format!("E_{}", e.to_usize())
+        }
         TypeKind::Ptr(pointee_ty) => format!("ptr<{}>", ty_str(module, *pointee_ty)),
         TypeKind::Function(_) => "fn".to_owned(),
+        TypeKind::Predicate => "predicate".to_owned(),
         TypeKind::Dummy => "dummy".to_owned(),
     }
 }

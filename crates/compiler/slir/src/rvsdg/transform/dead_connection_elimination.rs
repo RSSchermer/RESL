@@ -301,7 +301,7 @@ mod tests {
 
     use super::*;
     use crate::rvsdg::{StateOrigin, ValueInput, ValueOutput};
-    use crate::ty::{TY_DUMMY, TY_U32};
+    use crate::ty::{TY_DUMMY, TY_PREDICATE, TY_U32};
     use crate::{BinaryOperator, FnArg, FnSig, Function, Module, Symbol};
 
     #[test]
@@ -401,7 +401,7 @@ mod tests {
                 name: Default::default(),
                 ty: TY_DUMMY,
                 args: vec![FnArg {
-                    ty: TY_U32,
+                    ty: TY_PREDICATE,
                     shader_io_binding: None,
                 }],
                 ret_ty: Some(TY_U32),
@@ -414,7 +414,7 @@ mod tests {
 
         let switch_node = rvsdg.add_switch(
             region,
-            vec![ValueInput::argument(TY_U32, 0)],
+            vec![ValueInput::argument(TY_PREDICATE, 0)],
             vec![ValueOutput::new(TY_U32)],
             None,
         );
@@ -478,7 +478,7 @@ mod tests {
                 name: Default::default(),
                 ty: TY_DUMMY,
                 args: vec![FnArg {
-                    ty: TY_U32,
+                    ty: TY_PREDICATE,
                     shader_io_binding: None,
                 }],
                 ret_ty: None,
@@ -491,7 +491,7 @@ mod tests {
 
         let switch_node = rvsdg.add_switch(
             region,
-            vec![ValueInput::argument(TY_U32, 0)],
+            vec![ValueInput::argument(TY_PREDICATE, 0)],
             vec![ValueOutput::new(TY_U32)],
             None,
         );
@@ -545,7 +545,7 @@ mod tests {
                 name: Default::default(),
                 ty: TY_DUMMY,
                 args: vec![FnArg {
-                    ty: TY_U32,
+                    ty: TY_PREDICATE,
                     shader_io_binding: None,
                 }],
                 ret_ty: Some(TY_U32),
@@ -558,7 +558,7 @@ mod tests {
 
         let switch_node = rvsdg.add_switch(
             region,
-            vec![ValueInput::argument(TY_U32, 0)],
+            vec![ValueInput::argument(TY_PREDICATE, 0)],
             vec![ValueOutput::new(TY_U32), ValueOutput::new(TY_U32)],
             None,
         );
@@ -643,7 +643,7 @@ mod tests {
                 name: Default::default(),
                 ty: TY_DUMMY,
                 args: vec![FnArg {
-                    ty: TY_U32,
+                    ty: TY_PREDICATE,
                     shader_io_binding: None,
                 }],
                 ret_ty: Some(TY_U32),
@@ -659,7 +659,7 @@ mod tests {
         let switch_node = rvsdg.add_switch(
             region,
             vec![
-                ValueInput::argument(TY_U32, 0),
+                ValueInput::argument(TY_PREDICATE, 0),
                 ValueInput::output(TY_U32, node_0, 0),
             ],
             vec![ValueOutput::new(TY_U32)],

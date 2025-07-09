@@ -1,5 +1,7 @@
 use std::fmt;
 use std::fmt::Display;
+use std::hash::Hash;
+use std::marker::PhantomData;
 use std::ops::{Deref, Index, IndexMut};
 
 use indexmap::set::MutableValues;
@@ -31,6 +33,21 @@ impl Struct {
 impl From<usize> for Struct {
     fn from(value: usize) -> Self {
         Struct(value)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
+pub struct Enum(usize);
+
+impl Enum {
+    pub fn to_usize(&self) -> usize {
+        self.0
+    }
+}
+
+impl From<usize> for Enum {
+    fn from(value: usize) -> Self {
+        Enum(value)
     }
 }
 
@@ -89,6 +106,43 @@ impl IndexMut<Struct> for StructRegistry {
         self.store
             .get_index_mut2(struct_handle.0)
             .expect("unregistered struct")
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Default, Debug)]
+pub struct EnumRegistry {
+    store: IndexSet<EnumData>,
+}
+
+impl EnumRegistry {
+    pub fn register(&mut self, enum_data: EnumData) -> Enum {
+        let (index, _) = self.store.insert_full(enum_data);
+
+        Enum(index)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = Enum> + use<'_> {
+        self.store
+            .iter()
+            .map(|s| Enum(self.store.get_index_of(s).unwrap()))
+    }
+}
+
+impl Index<Enum> for EnumRegistry {
+    type Output = EnumData;
+
+    fn index(&self, enum_handle: Enum) -> &Self::Output {
+        self.store
+            .get_index(enum_handle.0)
+            .expect("unregistered enum")
+    }
+}
+
+impl IndexMut<Enum> for EnumRegistry {
+    fn index_mut(&mut self, enum_handle: Enum) -> &mut Self::Output {
+        self.store
+            .get_index_mut2(enum_handle.0)
+            .expect("unregistered enum")
     }
 }
 
@@ -276,6 +330,7 @@ pub struct Module {
     pub name: Symbol,
     pub ty: TypeRegistry,
     pub structs: StructRegistry,
+    pub enums: EnumRegistry,
     pub fn_sigs: FnSigRegistry,
     pub uniform_bindings: UniformBindingRegistry,
     pub storage_bindings: StorageBindingRegistry,
@@ -289,6 +344,7 @@ impl Module {
             name,
             ty: Default::default(),
             structs: Default::default(),
+            enums: Default::default(),
             fn_sigs: Default::default(),
             uniform_bindings: Default::default(),
             storage_bindings: Default::default(),
@@ -315,6 +371,11 @@ pub struct FnArg {
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct StructData {
     pub fields: Vec<StructField>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
+pub struct EnumData {
+    pub variants: Vec<Struct>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]

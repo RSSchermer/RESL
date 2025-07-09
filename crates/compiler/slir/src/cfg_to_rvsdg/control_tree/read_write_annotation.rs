@@ -1,8 +1,9 @@
 use indexmap::IndexSet;
 
 use crate::cfg::{
-    BasicBlock, Body, LocalValue, OpAlloca, OpAssign, OpBinary, OpCall, OpLoad, OpPtrElementPtr,
-    OpStore, OpUnary, Statement, Terminator, Value,
+    BasicBlock, Body, LocalValue, OpAlloca, OpAssign, OpBinary, OpBoolToBranchPredicate, OpCall,
+    OpCaseToBranchPredicate, OpGetDiscriminant, OpLoad, OpPtrElementPtr, OpPtrVariantPtr,
+    OpSetDiscriminant, OpStore, OpUnary, Statement, Terminator, Value,
 };
 use crate::cfg_to_rvsdg::control_tree::control_tree::{
     BranchingNode, ControlTree, ControlTreeNode, ControlTreeNodeKind, LinearNode, LoopNode,
@@ -61,6 +62,33 @@ impl WithReadValues for OpPtrElementPtr {
     }
 }
 
+impl WithReadValues for OpPtrVariantPtr {
+    fn with_read_values<F>(&self, mut f: F)
+    where
+        F: FnMut(&Value),
+    {
+        f(&self.ptr);
+    }
+}
+
+impl WithReadValues for OpGetDiscriminant {
+    fn with_read_values<F>(&self, mut f: F)
+    where
+        F: FnMut(&Value),
+    {
+        f(&self.ptr);
+    }
+}
+
+impl WithReadValues for OpSetDiscriminant {
+    fn with_read_values<F>(&self, mut f: F)
+    where
+        F: FnMut(&Value),
+    {
+        f(&self.ptr);
+    }
+}
+
 impl WithReadValues for OpUnary {
     fn with_read_values<F>(&self, mut f: F)
     where
@@ -89,6 +117,24 @@ impl WithReadValues for OpCall {
     }
 }
 
+impl WithReadValues for OpCaseToBranchPredicate {
+    fn with_read_values<F>(&self, mut f: F)
+    where
+        F: FnMut(&Value),
+    {
+        f(&self.value);
+    }
+}
+
+impl WithReadValues for OpBoolToBranchPredicate {
+    fn with_read_values<F>(&self, mut f: F)
+    where
+        F: FnMut(&Value),
+    {
+        f(&self.value);
+    }
+}
+
 macro_rules! impl_with_read_values_statement {
     ($($op:ident,)*) => {
         impl WithReadValues for Statement {
@@ -110,9 +156,14 @@ impl_with_read_values_statement! {
     OpLoad,
     OpStore,
     OpPtrElementPtr,
+    OpPtrVariantPtr,
+    OpGetDiscriminant,
+    OpSetDiscriminant,
     OpUnary,
     OpBinary,
     OpCall,
+    OpCaseToBranchPredicate,
+    OpBoolToBranchPredicate,
 }
 
 pub trait WithWrittenValues {
@@ -122,6 +173,14 @@ pub trait WithWrittenValues {
 }
 
 impl WithWrittenValues for OpStore {
+    fn with_written_values<F>(&self, _: F)
+    where
+        F: FnMut(&LocalValue),
+    {
+    }
+}
+
+impl WithWrittenValues for OpSetDiscriminant {
     fn with_written_values<F>(&self, _: F)
     where
         F: FnMut(&LocalValue),
@@ -160,8 +219,12 @@ impl_with_written_values_op! {
     OpAssign,
     OpLoad,
     OpPtrElementPtr,
+    OpPtrVariantPtr,
+    OpGetDiscriminant,
     OpUnary,
     OpBinary,
+    OpCaseToBranchPredicate,
+    OpBoolToBranchPredicate,
 }
 
 macro_rules! impl_with_written_values_statement {
@@ -185,9 +248,14 @@ impl_with_written_values_statement! {
     OpLoad,
     OpStore,
     OpPtrElementPtr,
+    OpPtrVariantPtr,
+    OpGetDiscriminant,
+    OpSetDiscriminant,
     OpUnary,
     OpBinary,
     OpCall,
+    OpCaseToBranchPredicate,
+    OpBoolToBranchPredicate,
 }
 
 pub struct ReadWriteAnnotationVisitor<'a> {

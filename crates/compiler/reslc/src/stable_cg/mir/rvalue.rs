@@ -2,9 +2,11 @@ use std::assert_matches::assert_matches;
 
 use arrayvec::ArrayVec;
 use rustc_middle::{bug, span_bug};
-use stable_mir::abi::{TyAndLayout, ValueAbi};
-use stable_mir::mir::{AggregateKind, CastKind, PointerCoercion, Rvalue};
-use stable_mir::ty::{IndexedVal, Region, RegionKind, RigidTy, Span, Ty, TyKind, VariantIdx};
+use stable_mir::abi::ValueAbi;
+use stable_mir::mir::{AggregateKind, CastKind, Mutability, PointerCoercion, Rvalue};
+use stable_mir::ty::{
+    IndexedVal, Region, RegionKind, RigidTy, Span, Ty, TyKind, UintTy, VariantIdx,
+};
 use stable_mir::{abi, mir};
 use tracing::{debug, instrument, trace};
 
@@ -12,7 +14,7 @@ use super::operand::{OperandRef, OperandValue};
 use super::place::PlaceRef;
 use super::{FunctionCx, LocalRef};
 use crate::stable_cg::common::{IntPredicate, RealPredicate, TypeKind};
-use crate::stable_cg::layout::{ScalarExt, TyAndLayoutExt};
+use crate::stable_cg::layout::{ScalarExt, TyAndLayout};
 use crate::stable_cg::traits::*;
 
 pub(crate) fn shift_mask_val<'a, Bx: BuilderMethods<'a>>(
@@ -274,11 +276,11 @@ fn unsize_ptr<'a, Bx: BuilderMethods<'a>>(
 
             let src_layout = TyAndLayout {
                 ty: src_ty,
-                layout: src_ty.layout().unwrap(),
+                layout: src_ty.layout().unwrap().into(),
             };
             let dst_layout = TyAndLayout {
                 ty: dst_ty,
-                layout: dst_ty.layout().unwrap(),
+                layout: dst_ty.layout().unwrap().into(),
             };
             let src_shape = src_layout.layout.shape();
             let dst_shape = dst_layout.layout.shape();
@@ -514,7 +516,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                 let layout = mir_cast_ty.layout().unwrap();
                 let cast = TyAndLayout {
                     ty: *mir_cast_ty,
-                    layout,
+                    layout: layout.into(),
                 };
 
                 let val = match *kind {
@@ -611,7 +613,10 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
 
                 OperandRef {
                     val: OperandValue::Immediate(size),
-                    layout: TyAndLayout { ty, layout },
+                    layout: TyAndLayout {
+                        ty,
+                        layout: layout.into(),
+                    },
                 }
             }
 
@@ -645,7 +650,10 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
 
                 OperandRef {
                     val: OperandValue::Immediate(llresult),
-                    layout: TyAndLayout { ty, layout },
+                    layout: TyAndLayout {
+                        ty,
+                        layout: layout.into(),
+                    },
                 }
             }
 
@@ -688,17 +696,26 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                 OperandRef { val, layout }
             }
 
-            mir::Rvalue::Discriminant(ref place) => {
-                todo!()
-                // let discr_ty = rvalue.ty(self.mir, bx.tcx());
-                // let discr_ty = self.monomorphize(discr_ty);
-                // let discr = self
-                //     .codegen_place(bx, place.as_ref())
-                //     .codegen_get_discr(bx, discr_ty);
-                // OperandRef {
-                //     val: OperandValue::Immediate(discr),
-                //     layout: self.cx.layout_of(discr_ty),
-                // }
+            mir::Rvalue::Discriminant(place) => {
+                let discr = self
+                    .codegen_place(
+                        bx,
+                        mir::visit::PlaceRef {
+                            local: place.local,
+                            projection: &place.projection,
+                        },
+                    )
+                    .codegen_get_discr(bx);
+                let ty = Ty::unsigned_ty(UintTy::U32);
+                let layout = ty.layout().unwrap();
+
+                OperandRef {
+                    val: OperandValue::Immediate(discr),
+                    layout: TyAndLayout {
+                        ty,
+                        layout: layout.into(),
+                    },
+                }
             }
 
             mir::Rvalue::NullaryOp(ref null_op, ty) => {
@@ -734,7 +751,10 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
 
                 OperandRef {
                     val: OperandValue::Immediate(val),
-                    layout: TyAndLayout { ty, layout },
+                    layout: TyAndLayout {
+                        ty,
+                        layout: layout.into(),
+                    },
                 }
             }
 
@@ -743,7 +763,10 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
             mir::Rvalue::Aggregate(_, fields) => {
                 let ty = rvalue.ty(self.mir.locals()).unwrap();
                 let layout = ty.layout().unwrap();
-                let layout = TyAndLayout { ty, layout };
+                let layout = TyAndLayout {
+                    ty,
+                    layout: layout.into(),
+                };
 
                 // `rvalue_creates_operand` has arranged that we only get here if
                 // we can build the aggregate immediate from the field immediates.
@@ -927,7 +950,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                     .ty;
                 let pointee_layout = TyAndLayout {
                     ty: pointee_type,
-                    layout: pointee_type.layout().unwrap(),
+                    layout: pointee_type.layout().unwrap().into(),
                 };
 
                 if pointee_layout.layout.shape().is_1zst() {
@@ -937,7 +960,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                 } else {
                     let llty = bx.cx().backend_type(pointee_layout);
 
-                    bx.inbounds_gep(llty, lhs, &[rhs])
+                    bx.ptr_element_ptr(llty, lhs, &[rhs])
                 }
             }
             mir::BinOp::Shl | mir::BinOp::ShlUnchecked => {
@@ -1034,9 +1057,9 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
     pub(crate) fn rvalue_creates_operand(&self, rvalue: &Rvalue) -> bool {
         match rvalue {
             Rvalue::Cast(CastKind::Transmute, ..)
+            | Rvalue::AddressOf(..)
             | Rvalue::ShallowInitBox(..)
-            | Rvalue::ThreadLocalRef(_)
-            | Rvalue::AddressOf(..) => {
+            | Rvalue::ThreadLocalRef(_) => {
                 bug!("not supported by resl")
             }
             Rvalue::Ref(..)

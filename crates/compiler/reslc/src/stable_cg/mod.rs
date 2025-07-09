@@ -9,7 +9,7 @@ mod scalar;
 pub mod traits;
 
 pub use self::common::*;
-pub use self::layout::{ScalarExt, TyAndLayoutExt};
+pub use self::layout::{ScalarExt, TyAndLayout};
 pub use self::mir::operand::{OperandRef, OperandValue};
 pub use self::mir::place::{PlaceRef, PlaceValue};
 pub use self::mono_item::MonoItemExt;

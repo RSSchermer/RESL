@@ -29,6 +29,7 @@ extern crate rustc_span;
 extern crate rustc_target;
 extern crate stable_mir;
 
+mod abi;
 mod attr;
 mod check;
 mod codegen;

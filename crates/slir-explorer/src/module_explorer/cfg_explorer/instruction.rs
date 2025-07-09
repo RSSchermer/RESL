@@ -26,6 +26,15 @@ pub fn Instruction(
         slir::cfg::Statement::OpPtrElementPtr(op) => {
             view! { <OpPtrElementPtr module function op highlight/> }.into_any()
         }
+        slir::cfg::Statement::OpPtrVariantPtr(op) => {
+            view! { <OpPtrVariantPtr module function op highlight/> }.into_any()
+        }
+        slir::cfg::Statement::OpGetDiscriminant(op) => {
+            view! { <OpGetDiscriminant module function op highlight/> }.into_any()
+        }
+        slir::cfg::Statement::OpSetDiscriminant(op) => {
+            view! { <OpSetDiscriminant module function op highlight/> }.into_any()
+        }
         slir::cfg::Statement::OpUnary(op) => {
             view! { <OpUnary module function op highlight/> }.into_any()
         }
@@ -34,6 +43,12 @@ pub fn Instruction(
         }
         slir::cfg::Statement::OpCall(op) => {
             view! { <OpCall module function op highlight/> }.into_any()
+        }
+        slir::cfg::Statement::OpCaseToBranchPredicate(op) => {
+            view! { <OpCaseToBranchPredicate module function op highlight/> }.into_any()
+        }
+        slir::cfg::Statement::OpBoolToBranchPredicate(op) => {
+            view! { <OpBoolToBranchPredicate module function op highlight/> }.into_any()
         }
     };
 
@@ -113,6 +128,51 @@ pub fn OpPtrElementPtr(
 }
 
 #[component]
+pub fn OpPtrVariantPtr(
+    module: StoredValue<ModuleData>,
+    function: slir::Function,
+    op: slir::cfg::OpPtrVariantPtr,
+    highlight: HighlightSignal,
+) -> impl IntoView {
+    view! {
+        <Value module function value=op.result.into() highlight/>
+        " = variant-ptr "
+        <Value module function value=op.ptr highlight/>
+        ":"
+        {op.variant_index}
+    }
+}
+
+#[component]
+pub fn OpGetDiscriminant(
+    module: StoredValue<ModuleData>,
+    function: slir::Function,
+    op: slir::cfg::OpGetDiscriminant,
+    highlight: HighlightSignal,
+) -> impl IntoView {
+    view! {
+        <Value module function value=op.result.into() highlight/>
+        " = get-discriminant "
+        <Value module function value=op.ptr highlight/>
+    }
+}
+
+#[component]
+pub fn OpSetDiscriminant(
+    module: StoredValue<ModuleData>,
+    function: slir::Function,
+    op: slir::cfg::OpSetDiscriminant,
+    highlight: HighlightSignal,
+) -> impl IntoView {
+    view! {
+        "set-discriminant "
+        {op.variant_index}
+        " on "
+        <Value module function value=op.ptr highlight/>
+    }
+}
+
+#[component]
 pub fn OpUnary(
     module: StoredValue<ModuleData>,
     function: slir::Function,
@@ -179,5 +239,36 @@ pub fn OpCall(
         }}
 
         ")"
+    }
+}
+
+#[component]
+pub fn OpCaseToBranchPredicate(
+    module: StoredValue<ModuleData>,
+    function: slir::Function,
+    op: slir::cfg::OpCaseToBranchPredicate,
+    highlight: HighlightSignal,
+) -> impl IntoView {
+    view! {
+        <Value module function value=op.result.into() highlight/>
+        " = predicate-from-case "
+        <Value module function value=op.value highlight/>
+        " ["
+        {op.cases.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", ")}
+        "]"
+    }
+}
+
+#[component]
+pub fn OpBoolToBranchPredicate(
+    module: StoredValue<ModuleData>,
+    function: slir::Function,
+    op: slir::cfg::OpBoolToBranchPredicate,
+    highlight: HighlightSignal,
+) -> impl IntoView {
+    view! {
+        <Value module function value=op.result.into() highlight/>
+        " = predicate-from-bool "
+        <Value module function value=op.value highlight/>
     }
 }

@@ -2,7 +2,7 @@ use std::hash::Hash;
 
 use rustc_middle::mir::tcx::PlaceTy;
 use rustc_middle::{bug, ty};
-use stable_mir::abi::{FieldsShape, TyAndLayout, ValueAbi, VariantsShape};
+use stable_mir::abi::{FieldsShape, ValueAbi, VariantsShape};
 use stable_mir::mir;
 use stable_mir::mir::Mutability;
 use stable_mir::target::MachineSize;
@@ -11,7 +11,7 @@ use tracing::{debug, instrument};
 
 use super::operand::OperandValue;
 use super::{FunctionCx, LocalRef};
-use crate::stable_cg::layout::TyAndLayoutExt;
+use crate::stable_cg::layout::TyAndLayout;
 use crate::stable_cg::traits::*;
 
 /// The location and extra runtime properties of the place.
@@ -148,7 +148,7 @@ impl<'a, V: CodegenObject> PlaceRef<V> {
     /// Access a field, at a point when the value's case is known.
     pub fn project_field<Bx: BuilderMethods<'a, Value = V>>(self, bx: &mut Bx, ix: usize) -> Self {
         let field = self.layout.field(ix);
-        let ptr = bx.gep(
+        let ptr = bx.ptr_element_ptr(
             bx.backend_type(field),
             self.val.llval,
             &[bx.const_u32(ix as u32)],
@@ -168,144 +168,17 @@ impl<'a, V: CodegenObject> PlaceRef<V> {
         llindex: V,
     ) -> Self {
         let layout = self.layout.field(0);
-        let llval = bx.inbounds_gep(bx.backend_type(layout), self.val.llval, &[llindex]);
+        let llval = bx.ptr_element_ptr(bx.backend_type(layout), self.val.llval, &[llindex]);
 
         PlaceValue::new_sized(llval, layout.layout.shape().abi_align).with_type(layout)
     }
 
-    //
-    // /// Obtain the actual discriminant of a value.
-    // #[instrument(level = "trace", skip(bx))]
-    // pub fn codegen_get_discr<Bx: BuilderMethods<'a, 'tcx, Value = V>>(
-    //     self,
-    //     bx: &mut Bx,
-    //     cast_to: Ty<'tcx>,
-    // ) -> V {
-    //     let dl = &bx.tcx().data_layout;
-    //     let cast_to_layout = bx.cx().layout_of(cast_to);
-    //     let cast_to = bx.cx().immediate_backend_type(cast_to_layout);
-    //     if self.layout.is_uninhabited() {
-    //         return bx.cx().const_poison(cast_to);
-    //     }
-    //     let (tag_scalar, tag_encoding, tag_field) = match self.layout.variants {
-    //         Variants::Empty => unreachable!("we already handled uninhabited types"),
-    //         Variants::Single { index } => {
-    //             let discr_val = self
-    //                 .layout
-    //                 .ty
-    //                 .discriminant_for_variant(bx.cx().tcx(), index)
-    //                 .map_or(index.as_u32() as u128, |discr| discr.val);
-    //             return bx.cx().const_uint_big(cast_to, discr_val);
-    //         }
-    //         Variants::Multiple {
-    //             tag,
-    //             ref tag_encoding,
-    //             tag_field,
-    //             ..
-    //         } => (tag, tag_encoding, tag_field),
-    //     };
-    //
-    //     // Read the tag/niche-encoded discriminant from memory.
-    //     let tag = self.project_field(bx, tag_field);
-    //     let tag_op = bx.load_operand(tag);
-    //     let tag_imm = tag_op.immediate();
-    //
-    //     // Decode the discriminant (specifically if it's niche-encoded).
-    //     match *tag_encoding {
-    //         TagEncoding::Direct => {
-    //             let signed = match tag_scalar.primitive() {
-    //                 // We use `i1` for bytes that are always `0` or `1`,
-    //                 // e.g., `#[repr(i8)] enum E { A, B }`, but we can't
-    //                 // let LLVM interpret the `i1` as signed, because
-    //                 // then `i1 1` (i.e., `E::B`) is effectively `i8 -1`.
-    //                 Int(_, signed) => !tag_scalar.is_bool() && signed,
-    //                 _ => false,
-    //             };
-    //             bx.intcast(tag_imm, cast_to, signed)
-    //         }
-    //         TagEncoding::Niche {
-    //             untagged_variant,
-    //             ref niche_variants,
-    //             niche_start,
-    //         } => {
-    //             // Cast to an integer so we don't have to treat a pointer as a
-    //             // special case.
-    //             let (tag, tag_llty) = match tag_scalar.primitive() {
-    //                 // FIXME(erikdesjardins): handle non-default addrspace ptr sizes
-    //                 Pointer(_) => {
-    //                     let t = bx.type_from_integer(dl.ptr_sized_integer());
-    //                     let tag = bx.ptrtoint(tag_imm, t);
-    //                     (tag, t)
-    //                 }
-    //                 _ => (tag_imm, bx.cx().immediate_backend_type(tag_op.layout)),
-    //             };
-    //
-    //             let relative_max = niche_variants.end().as_u32() - niche_variants.start().as_u32();
-    //
-    //             // We have a subrange `niche_start..=niche_end` inside `range`.
-    //             // If the value of the tag is inside this subrange, it's a
-    //             // "niche value", an increment of the discriminant. Otherwise it
-    //             // indicates the untagged variant.
-    //             // A general algorithm to extract the discriminant from the tag
-    //             // is:
-    //             // relative_tag = tag - niche_start
-    //             // is_niche = relative_tag <= (ule) relative_max
-    //             // discr = if is_niche {
-    //             //     cast(relative_tag) + niche_variants.start()
-    //             // } else {
-    //             //     untagged_variant
-    //             // }
-    //             // However, we will likely be able to emit simpler code.
-    //             let (is_niche, tagged_discr, delta) = if relative_max == 0 {
-    //                 // Best case scenario: only one tagged variant. This will
-    //                 // likely become just a comparison and a jump.
-    //                 // The algorithm is:
-    //                 // is_niche = tag == niche_start
-    //                 // discr = if is_niche {
-    //                 //     niche_start
-    //                 // } else {
-    //                 //     untagged_variant
-    //                 // }
-    //                 let niche_start = bx.cx().const_uint_big(tag_llty, niche_start);
-    //                 let is_niche = bx.icmp(IntPredicate::IntEQ, tag, niche_start);
-    //                 let tagged_discr = bx
-    //                     .cx()
-    //                     .const_uint(cast_to, niche_variants.start().as_u32() as u64);
-    //                 (is_niche, tagged_discr, 0)
-    //             } else {
-    //                 // The special cases don't apply, so we'll have to go with
-    //                 // the general algorithm.
-    //                 let relative_discr = bx.sub(tag, bx.cx().const_uint_big(tag_llty, niche_start));
-    //                 let cast_tag = bx.intcast(relative_discr, cast_to, false);
-    //                 let is_niche = bx.icmp(
-    //                     IntPredicate::IntULE,
-    //                     relative_discr,
-    //                     bx.cx().const_uint(tag_llty, relative_max as u64),
-    //                 );
-    //                 (is_niche, cast_tag, niche_variants.start().as_u32() as u128)
-    //             };
-    //
-    //             let tagged_discr = if delta == 0 {
-    //                 tagged_discr
-    //             } else {
-    //                 bx.add(tagged_discr, bx.cx().const_uint_big(cast_to, delta))
-    //             };
-    //
-    //             let discr = bx.select(
-    //                 is_niche,
-    //                 tagged_discr,
-    //                 bx.cx()
-    //                     .const_uint(cast_to, untagged_variant.as_u32() as u64),
-    //             );
-    //
-    //             // In principle we could insert assumes on the possible range of `discr`, but
-    //             // currently in LLVM this seems to be a pessimization.
-    //
-    //             discr
-    //         }
-    //     }
-    // }
-    //
+    /// Obtain the actual discriminant of a value.
+    #[instrument(level = "trace", skip(bx))]
+    pub fn codegen_get_discr<Bx: BuilderMethods<'a, Value = V>>(self, bx: &mut Bx) -> V {
+        bx.get_discriminant(self.val.llval)
+    }
+
     /// Sets the discriminant for a new value of the given case of the given
     /// representation.
     pub fn codegen_set_discr<Bx: BuilderMethods<'a, Value = V>>(
@@ -313,68 +186,7 @@ impl<'a, V: CodegenObject> PlaceRef<V> {
         bx: &mut Bx,
         variant_index: VariantIdx,
     ) {
-        let abi = self.layout.for_variant(variant_index).layout.shape().abi;
-
-        if matches!(abi, ValueAbi::Uninhabited) {
-            return;
-        }
-
-        match self.layout.layout.shape().variants {
-            VariantsShape::Empty => unreachable!("we already handled uninhabited types"),
-            VariantsShape::Single { index } => assert_eq!(index, variant_index),
-
-            VariantsShape::Multiple {
-                // tag_encoding: TagEncoding::Direct,
-                // tag_field,
-                ..
-            } => {
-                todo!()
-                // let ptr = self.project_field(bx, tag_field);
-                // let to = self
-                //     .layout
-                //     .ty
-                //     .discriminant_for_variant(bx.tcx(), variant_index)
-                //     .unwrap()
-                //     .val;
-                // bx.store_to_place(
-                //     bx.cx().const_uint_big(bx.cx().backend_type(ptr.layout), to),
-                //     ptr.val,
-                // );
-            }
-            VariantsShape::Multiple {
-                // tag_encoding:
-                //     TagEncoding::Niche {
-                //         untagged_variant,
-                //         ref niche_variants,
-                //         niche_start,
-                //     },
-                // tag_field,
-                ..
-            } => {
-                todo!()
-                // if variant_index != untagged_variant {
-                //     let niche = self.project_field(bx, tag_field);
-                //     let niche_llty = bx.cx().immediate_backend_type(niche.layout);
-                //     let BackendRepr::Scalar(scalar) = niche.layout.backend_repr else {
-                //         bug!("expected a scalar placeref for the niche");
-                //     };
-                //     // We are supposed to compute `niche_value.wrapping_add(niche_start)` wrapping
-                //     // around the `niche`'s type.
-                //     // The easiest way to do that is to do wrapping arithmetic on `u128` and then
-                //     // masking off any extra bits that occur because we did the arithmetic with too many bits.
-                //     let niche_value = variant_index.as_u32() - niche_variants.start().as_u32();
-                //     let niche_value = (niche_value as u128).wrapping_add(niche_start);
-                //     let niche_value = niche_value & niche.layout.size.unsigned_int_max();
-                //
-                //     let niche_llval = bx.cx().scalar_to_backend(
-                //         Scalar::from_uint(niche_value, niche.layout.size),
-                //         scalar,
-                //         niche_llty,
-                //     );
-                //     OperandValue::Immediate(niche_llval).store(bx, niche);
-                // }
-            }
-        }
+        bx.set_discriminant(self.val.llval, variant_index);
     }
 
     pub fn project_downcast<Bx: BuilderMethods<'a, Value = V>>(
@@ -384,6 +196,7 @@ impl<'a, V: CodegenObject> PlaceRef<V> {
     ) -> Self {
         let mut downcast = *self;
 
+        downcast.val.llval = bx.ptr_variant_ptr(self.val.llval, variant_index);
         downcast.layout = downcast.layout.for_variant(variant_index);
 
         downcast
@@ -517,10 +330,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
 
                     subslice
                 }
-                mir::ProjectionElem::Downcast(v) => {
-                    todo!()
-                    //cg_base.project_downcast(bx, v)
-                }
+                mir::ProjectionElem::Downcast(v) => cg_base.project_downcast(bx, v),
             };
         }
 

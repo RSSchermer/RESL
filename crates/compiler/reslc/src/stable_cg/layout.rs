@@ -1,32 +1,69 @@
+use internment::Intern;
 use rustc_middle::bug;
-use stable_mir::abi::{Primitive, Scalar, TyAndLayout, VariantsShape};
+use stable_mir::abi::{Layout as LayoutToken, LayoutShape, Primitive, Scalar, VariantsShape};
 use stable_mir::target::{MachineInfo, MachineSize};
-use stable_mir::ty::{Region, RegionKind, RigidTy, Ty, TyKind, UintTy, VariantIdx};
+use stable_mir::ty::{IndexedVal, Region, RegionKind, RigidTy, Ty, TyKind, UintTy, VariantIdx};
 
-pub trait TyAndLayoutExt {
-    fn expect_from_ty(ty: Ty) -> Self;
+pub type ShapeToken = Intern<LayoutShape>;
 
-    fn field(self, i: usize) -> TyAndLayout;
-
-    fn for_variant(self, variant_idx: VariantIdx) -> Self;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Layout {
+    Layout(LayoutToken),
+    Shape(ShapeToken),
 }
 
-impl TyAndLayoutExt for TyAndLayout {
-    fn expect_from_ty(ty: Ty) -> Self {
+impl From<LayoutToken> for Layout {
+    fn from(token: LayoutToken) -> Self {
+        Layout::Layout(token)
+    }
+}
+
+impl From<ShapeToken> for Layout {
+    fn from(token: ShapeToken) -> Self {
+        Layout::Shape(token)
+    }
+}
+
+impl From<LayoutShape> for Layout {
+    fn from(shape: LayoutShape) -> Self {
+        Layout::Shape(Intern::new(shape))
+    }
+}
+
+impl Layout {
+    pub fn shape(&self) -> LayoutShape {
+        match self {
+            Layout::Layout(t) => t.shape(),
+            Layout::Shape(s) => (**s).clone(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TyAndLayout {
+    pub ty: Ty,
+    pub layout: Layout,
+}
+
+impl TyAndLayout {
+    pub fn expect_from_ty(ty: Ty) -> Self {
         let layout = ty
             .layout()
-            .expect("type should have valid layout during stable_cg");
+            .expect("type should have valid layout during codegen");
 
-        TyAndLayout { ty, layout }
+        TyAndLayout {
+            ty,
+            layout: layout.into(),
+        }
     }
 
-    fn field(self, i: usize) -> TyAndLayout {
+    pub fn field(&self, i: usize) -> TyAndLayout {
         enum TyMaybeWithLayout {
             Ty(Ty),
             TyAndLayout(TyAndLayout),
         }
 
-        fn field_ty_or_layout(this: TyAndLayout, i: usize) -> TyMaybeWithLayout {
+        fn field_ty_or_layout(this: &TyAndLayout, i: usize) -> TyMaybeWithLayout {
             let TyKind::RigidTy(ty) = this.ty.kind() else {
                 bug!("only rigid types can project to fields")
             };
@@ -73,10 +110,11 @@ impl TyAndLayoutExt for TyAndLayout {
                                 mutability,
                             )
                         };
+                        let layout = unit_ptr_ty.layout().unwrap();
 
                         TyMaybeWithLayout::TyAndLayout(TyAndLayout {
                             ty: this.ty,
-                            layout: unit_ptr_ty.layout().unwrap(),
+                            layout: layout.into(),
                         })
                     } else if i == 1 {
                         // We assume the second field is the size slice, as other wide pointer types
@@ -108,9 +146,9 @@ impl TyAndLayoutExt for TyAndLayout {
                     };
 
                     field_ty_or_layout(
-                        TyAndLayout {
+                        &TyAndLayout {
                             ty: *tupled_upvars_ty,
-                            layout: this.layout,
+                            layout: this.layout.clone(),
                         },
                         i,
                     )
@@ -155,17 +193,25 @@ impl TyAndLayoutExt for TyAndLayout {
 
                 TyAndLayout {
                     ty: field_ty,
-                    layout,
+                    layout: layout.into(),
                 }
             }
             TyMaybeWithLayout::TyAndLayout(field_layout) => field_layout,
         }
     }
 
-    fn for_variant(self, variant_idx: VariantIdx) -> Self {
+    pub fn for_variant(self, variant_idx: VariantIdx) -> Self {
         match self.layout.shape().variants {
             VariantsShape::Single { index } if index == variant_idx => self,
-            _ => todo!(),
+            VariantsShape::Multiple { variants, .. } => {
+                let variant_shape = &variants[variant_idx.to_index()];
+
+                TyAndLayout {
+                    ty: self.ty,
+                    layout: variant_shape.clone().into(),
+                }
+            }
+            _ => bug!("invalid variant"),
         }
     }
 }

@@ -2,9 +2,10 @@ use std::collections::VecDeque;
 
 use rustc_hash::FxHashMap;
 
+use crate::cfg::OpSetDiscriminant;
 use crate::rvsdg::{
-    Connectivity, Node, NodeKind, Region, Rvsdg, SimpleNode, StateOrigin, ValueInput, ValueOrigin,
-    ValueOutput, ValueUser,
+    Connectivity, Node, NodeKind, OpCaseToSwitchPredicate, OpGetDiscriminant, Region, Rvsdg,
+    SimpleNode, StateOrigin, ValueInput, ValueOrigin, ValueOutput, ValueUser,
 };
 use crate::Module;
 
@@ -118,31 +119,39 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
     }
 
     fn replicate_node(&mut self, node: Node) -> Node {
+        use NodeKind::*;
+        use SimpleNode::*;
+
         match self.rvsdg[node].kind() {
-            NodeKind::Switch(_) => self.replicate_switch_node(node),
-            NodeKind::Loop(_) => self.replicate_loop_node(node),
-            NodeKind::Simple(SimpleNode::ConstU32(_)) => self.replicate_const_u32_node(node),
-            NodeKind::Simple(SimpleNode::ConstI32(_)) => self.replicate_const_i32_node(node),
-            NodeKind::Simple(SimpleNode::ConstF32(_)) => self.replicate_const_f32_node(node),
-            NodeKind::Simple(SimpleNode::ConstBool(_)) => self.replicate_const_bool_node(node),
-            NodeKind::Simple(SimpleNode::ConstPtr(_)) => self.replicate_const_ptr_node(node),
-            NodeKind::Simple(SimpleNode::OpAlloca(_)) => self.replicate_op_alloca_node(node),
-            NodeKind::Simple(SimpleNode::OpLoad(_)) => self.replicate_op_load_node(node),
-            NodeKind::Simple(SimpleNode::OpStore(_)) => self.replicate_op_store_node(node),
-            NodeKind::Simple(SimpleNode::OpPtrElementPtr(_)) => {
-                self.replicate_op_ptr_element_ptr_node(node)
+            Switch(_) => self.replicate_switch_node(node),
+            Loop(_) => self.replicate_loop_node(node),
+            Simple(ConstU32(_)) => self.replicate_const_u32_node(node),
+            Simple(ConstI32(_)) => self.replicate_const_i32_node(node),
+            Simple(ConstF32(_)) => self.replicate_const_f32_node(node),
+            Simple(ConstBool(_)) => self.replicate_const_bool_node(node),
+            Simple(ConstPtr(_)) => self.replicate_const_ptr_node(node),
+            Simple(OpAlloca(_)) => self.replicate_op_alloca_node(node),
+            Simple(OpLoad(_)) => self.replicate_op_load_node(node),
+            Simple(OpStore(_)) => self.replicate_op_store_node(node),
+            Simple(OpPtrElementPtr(_)) => self.replicate_op_ptr_element_ptr_node(node),
+            Simple(OpPtrVariantPtr(_)) => self.replicate_op_ptr_variant_ptr_node(node),
+            Simple(OpExtractElement(_)) => self.replicate_op_extract_element(node),
+            Simple(OpGetDiscriminant(_)) => self.replicate_op_get_discriminant_node(node),
+            Simple(OpSetDiscriminant(_)) => self.replicate_op_set_discriminant_node(node),
+            Simple(OpApply(_)) => self.replicate_op_apply_node(node),
+            Simple(OpUnary(_)) => self.replicate_op_unary_node(node),
+            Simple(OpBinary(_)) => self.replicate_op_binary_node(node),
+            Simple(OpCaseToSwitchPredicate(_)) => {
+                self.replicate_op_case_to_switch_predicate_node(node)
             }
-            NodeKind::Simple(SimpleNode::OpExtractElement(_)) => {
-                self.replicate_op_extract_element(node)
+            Simple(OpBoolToSwitchPredicate(_)) => {
+                self.replicate_op_bool_to_switch_predicate_node(node)
             }
-            NodeKind::Simple(SimpleNode::OpApply(_)) => self.replicate_op_apply_node(node),
-            NodeKind::Simple(SimpleNode::OpUnary(_)) => self.replicate_op_unary_node(node),
-            NodeKind::Simple(SimpleNode::OpBinary(_)) => self.replicate_op_binary_node(node),
-            NodeKind::Simple(SimpleNode::ValueProxy(_)) => self.replicate_value_proxy_node(node),
-            NodeKind::Function(_)
-            | NodeKind::UniformBinding(_)
-            | NodeKind::StorageBinding(_)
-            | NodeKind::WorkgroupBinding(_) => {
+            Simple(OpU32ToSwitchPredicate(_)) => {
+                self.replicate_op_u32_to_switch_predicate_node(node)
+            }
+            Simple(ValueProxy(_)) => self.replicate_value_proxy_node(node),
+            Function(_) | UniformBinding(_) | StorageBinding(_) | WorkgroupBinding(_) => {
                 panic!("node kind should not appear inside a region")
             }
         }
@@ -309,9 +318,9 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
     fn replicate_op_ptr_element_ptr_node(&mut self, node: Node) -> Node {
         let data = self.rvsdg[node].expect_op_ptr_element_ptr();
         let element_ty = data.element_ty();
-        let ptr_input = self.mapped_value_input(data.ptr());
+        let ptr_input = self.mapped_value_input(data.ptr_input());
         let index_inputs = data
-            .indices()
+            .index_inputs()
             .iter()
             .map(|input| self.mapped_value_input(input))
             .collect::<Vec<_>>();
@@ -322,6 +331,20 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
             element_ty,
             ptr_input,
             index_inputs,
+        )
+    }
+
+    fn replicate_op_ptr_variant_ptr_node(&mut self, node: Node) -> Node {
+        let data = self.rvsdg[node].expect_op_ptr_variant_ptr();
+        let input = self.mapped_value_input(data.input());
+        let variant_index = data.variant_index();
+
+        self.rvsdg.add_op_ptr_variant_ptr(
+            &mut self.module.ty,
+            &self.module.enums,
+            self.dst_region,
+            input,
+            variant_index,
         )
     }
 
@@ -342,6 +365,25 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
             aggregate_input,
             index_inputs,
         )
+    }
+
+    fn replicate_op_get_discriminant_node(&mut self, node: Node) -> Node {
+        let data = self.rvsdg[node].expect_op_get_discriminant();
+        let ptr_input = self.mapped_value_input(data.ptr_input());
+        let state_origin = self.mapped_state_origin(&data.state().unwrap().origin);
+
+        self.rvsdg
+            .add_op_get_discriminant(self.dst_region, ptr_input, state_origin)
+    }
+
+    fn replicate_op_set_discriminant_node(&mut self, node: Node) -> Node {
+        let data = self.rvsdg[node].expect_op_set_discriminant();
+        let ptr_input = self.mapped_value_input(data.ptr_input());
+        let variant_index = data.variant_index();
+        let state_origin = self.mapped_state_origin(&data.state().unwrap().origin);
+
+        self.rvsdg
+            .add_op_set_discriminant(self.dst_region, ptr_input, variant_index, state_origin)
     }
 
     fn replicate_op_apply_node(&mut self, node: Node) -> Node {
@@ -379,6 +421,32 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
 
         self.rvsdg
             .add_op_binary(self.dst_region, operator, lhs_input, rhs_input)
+    }
+
+    fn replicate_op_case_to_switch_predicate_node(&mut self, node: Node) -> Node {
+        let data = self.rvsdg[node].expect_op_case_to_switch_predicate();
+        let input = self.mapped_value_input(data.input());
+        let cases = data.cases().to_vec();
+
+        self.rvsdg
+            .add_op_case_to_switch_predicate(self.dst_region, input, cases)
+    }
+
+    fn replicate_op_bool_to_switch_predicate_node(&mut self, node: Node) -> Node {
+        let data = self.rvsdg[node].expect_op_bool_to_switch_predicate();
+        let input = self.mapped_value_input(data.input());
+
+        self.rvsdg
+            .add_op_bool_to_switch_predicate(self.dst_region, input)
+    }
+
+    fn replicate_op_u32_to_switch_predicate_node(&mut self, node: Node) -> Node {
+        let data = self.rvsdg[node].expect_op_u32_to_switch_predicate();
+        let branch_count = data.branch_count();
+        let input = self.mapped_value_input(data.input());
+
+        self.rvsdg
+            .add_op_u32_to_switch_predicate(self.dst_region, branch_count, input)
     }
 
     fn replicate_value_proxy_node(&mut self, node: Node) -> Node {

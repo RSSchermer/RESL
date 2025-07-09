@@ -4,8 +4,10 @@ use index_vec::IndexVec;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::cfg::{
-    BasicBlock, Body, Cfg, InlineConst, LocalValue, OpAlloca, OpAssign, OpBinary, OpCall, OpLoad,
-    OpPtrElementPtr, OpStore, OpUnary, RootIdentifier, Statement, Terminator, Value,
+    BasicBlock, Body, Cfg, InlineConst, LocalValue, OpAlloca, OpAssign, OpBinary,
+    OpBoolToBranchPredicate, OpCall, OpCaseToBranchPredicate, OpGetDiscriminant, OpLoad,
+    OpPtrElementPtr, OpPtrVariantPtr, OpSetDiscriminant, OpStore, OpUnary, RootIdentifier,
+    Statement, Terminator, Value,
 };
 use crate::cfg_to_rvsdg::control_flow_restructuring::{
     restructure_branches, restructure_loops, Graph,
@@ -316,9 +318,14 @@ impl<'a> RegionBuilder<'a> {
             Statement::OpLoad(op) => self.visit_op_load(op),
             Statement::OpStore(op) => self.visit_op_store(op),
             Statement::OpPtrElementPtr(op) => self.visit_op_ptr_element_ptr(op),
+            Statement::OpPtrVariantPtr(op) => self.visit_op_ptr_variant_ptr(op),
+            Statement::OpGetDiscriminant(op) => self.visit_op_get_discriminant(op),
+            Statement::OpSetDiscriminant(op) => self.visit_op_set_discriminant(op),
             Statement::OpUnary(op) => self.visit_op_unary(op),
             Statement::OpBinary(op) => self.visit_op_binary(op),
             Statement::OpCall(op) => self.visit_op_call(op),
+            Statement::OpCaseToBranchPredicate(op) => self.visit_op_case_to_branch_predicate(op),
+            Statement::OpBoolToBranchPredicate(op) => self.visit_op_bool_to_branch_predicate(op),
         }
     }
 
@@ -384,6 +391,45 @@ impl<'a> RegionBuilder<'a> {
             .insert_value_node(op.result, node, 0);
     }
 
+    fn visit_op_ptr_variant_ptr(&mut self, op: &OpPtrVariantPtr) {
+        let input = self.resolve_value(op.ptr);
+
+        let node = self.rvsdg.add_op_ptr_variant_ptr(
+            &mut self.module.ty,
+            &self.module.enums,
+            self.region,
+            input,
+            op.variant_index,
+        );
+
+        self.input_state_tracker
+            .insert_value_node(op.result, node, 0);
+    }
+
+    fn visit_op_get_discriminant(&mut self, op: &OpGetDiscriminant) {
+        let ptr_input = self.resolve_value(op.ptr);
+
+        let node = self
+            .rvsdg
+            .add_op_get_discriminant(self.region, ptr_input, self.state_origin);
+
+        self.input_state_tracker
+            .insert_value_node(op.result, node, 0);
+        self.state_origin = StateOrigin::Node(node);
+    }
+
+    fn visit_op_set_discriminant(&mut self, op: &OpSetDiscriminant) {
+        let ptr_input = self.resolve_value(op.ptr);
+        let node = self.rvsdg.add_op_set_discriminant(
+            self.region,
+            ptr_input,
+            op.variant_index,
+            self.state_origin,
+        );
+
+        self.state_origin = StateOrigin::Node(node);
+    }
+
     fn visit_op_unary(&mut self, op: &OpUnary) {
         let input = self.resolve_value(op.value);
         let node = self.rvsdg.add_op_unary(self.region, op.operator, input);
@@ -424,6 +470,27 @@ impl<'a> RegionBuilder<'a> {
         }
 
         self.state_origin = StateOrigin::Node(node);
+    }
+
+    fn visit_op_case_to_branch_predicate(&mut self, op: &OpCaseToBranchPredicate) {
+        let input = self.resolve_value(op.value);
+        let cases = op.cases.clone();
+        let node = self
+            .rvsdg
+            .add_op_case_to_switch_predicate(self.region, input, cases);
+
+        self.input_state_tracker
+            .insert_value_node(op.result, node, 0);
+    }
+
+    fn visit_op_bool_to_branch_predicate(&mut self, op: &OpBoolToBranchPredicate) {
+        let input = self.resolve_value(op.value);
+        let node = self
+            .rvsdg
+            .add_op_bool_to_switch_predicate(self.region, input);
+
+        self.input_state_tracker
+            .insert_value_node(op.result, node, 0);
     }
 
     fn connect_result(&mut self, result: u32, value: Value) {
@@ -622,7 +689,7 @@ mod tests {
 
     use super::*;
     use crate::cfg::{Branch, LocalValueData};
-    use crate::ty::TY_DUMMY;
+    use crate::ty::{TY_DUMMY, TY_PREDICATE};
     use crate::{BinaryOperator, FnArg, FnSig, Function, Symbol};
 
     #[test]
@@ -739,7 +806,7 @@ mod tests {
                 ty: TY_DUMMY,
                 args: vec![
                     FnArg {
-                        ty: TY_U32,
+                        ty: TY_PREDICATE,
                         shader_io_binding: None,
                     },
                     FnArg {
@@ -817,7 +884,7 @@ mod tests {
         let switch_node = expected.add_switch(
             region,
             vec![
-                ValueInput::argument(TY_U32, 0),
+                ValueInput::argument(TY_PREDICATE, 0),
                 ValueInput::argument(TY_U32, 1),
             ],
             vec![ValueOutput::new(TY_U32)],

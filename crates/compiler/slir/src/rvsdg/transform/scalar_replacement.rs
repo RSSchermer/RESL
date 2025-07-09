@@ -8,7 +8,7 @@ use crate::rvsdg::{
     Connectivity, LoopNode, Node, NodeKind, OpAlloca, OpLoad, Region, Rvsdg, SimpleNode,
     StateOrigin, SwitchNode, ValueInput, ValueOrigin, ValueOutput, ValueUser,
 };
-use crate::ty::{Type, TypeKind, TY_U32};
+use crate::ty::{Type, TypeKind, TY_PREDICATE, TY_U32};
 use crate::{Function, Module};
 
 /// Collects all [OpAlloca] nodes of aggregate types in a region and all sub-regions (e.g. a switch
@@ -292,7 +292,7 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
         let output_ty = node_data.output().ty;
         let user_count = node_data.output().users.len();
 
-        let first_index = ElementIndex::from_origin(self.rvsdg, node_data.indices()[0].origin);
+        let first_index = ElementIndex::from_origin(self.rvsdg, node_data.index_inputs()[0].origin);
 
         let new_user_origin = match first_index {
             ElementIndex::Static(index) => {
@@ -304,11 +304,23 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
                 // The element index is not statically known. We'll have to dynamically select an
                 // input at runtime with a switch node.
 
+                let branch_count = split_input.len() as u32;
+                let to_predicate = self.rvsdg.add_op_u32_to_switch_predicate(
+                    region,
+                    branch_count,
+                    ValueInput {
+                        ty: TY_U32,
+                        origin: selector,
+                    },
+                );
                 let mut switch_inputs = Vec::with_capacity(split_input.len() + 1);
 
                 switch_inputs.push(ValueInput {
-                    ty: TY_U32,
-                    origin: selector,
+                    ty: TY_PREDICATE,
+                    origin: ValueOrigin::Output {
+                        producer: to_predicate,
+                        output: 0,
+                    },
                 });
                 switch_inputs.extend(split_input.iter().copied());
 
@@ -359,12 +371,12 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
         target_region: Region,
     ) -> ValueOrigin {
         let node_data = self.rvsdg[original].expect_op_ptr_element_ptr();
-        let is_multi_layer_access = node_data.indices().len() > 1;
+        let is_multi_layer_access = node_data.index_inputs().len() > 1;
 
         if is_multi_layer_access {
             let element_ty = node_data.element_ty();
             let indices = node_data
-                .indices()
+                .index_inputs()
                 .iter()
                 .copied()
                 .skip(1)
@@ -406,11 +418,23 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
                 // The element index is not statically known. We'll have to dynamically select an
                 // input at runtime with a switch node.
 
+                let branch_count = split_input.len() as u32;
+                let to_predicate = self.rvsdg.add_op_u32_to_switch_predicate(
+                    region,
+                    branch_count,
+                    ValueInput {
+                        ty: TY_U32,
+                        origin: selector,
+                    },
+                );
                 let mut switch_inputs = Vec::with_capacity(split_input.len() + 1);
 
                 switch_inputs.push(ValueInput {
-                    ty: TY_U32,
-                    origin: selector,
+                    ty: TY_PREDICATE,
+                    origin: ValueOrigin::Output {
+                        producer: to_predicate,
+                        output: 0,
+                    },
                 });
                 switch_inputs.extend(split_input.iter().copied());
 
@@ -1189,7 +1213,7 @@ mod tests {
     use std::iter;
 
     use super::*;
-    use crate::ty::TY_DUMMY;
+    use crate::ty::{TY_DUMMY, TY_PREDICATE};
     use crate::{thin_set, BinaryOperator, FnArg, FnSig, Symbol};
 
     #[test]
@@ -1394,8 +1418,20 @@ mod tests {
         );
         assert_eq!(branch_1.value_results()[0].origin, ValueOrigin::Argument(1));
 
-        assert_eq!(switch.value_inputs()[0].ty, TY_U32);
-        assert_eq!(switch.value_inputs()[0].origin, ValueOrigin::Argument(0));
+        assert_eq!(switch.value_inputs()[0].ty, TY_PREDICATE);
+
+        let ValueOrigin::Output {
+            producer: to_predicate,
+            output: 0,
+        } = switch.value_inputs()[0].origin
+        else {
+            panic!("switch input 0's origin should be the first output of a node")
+        };
+
+        let to_predicate_data = rvsdg[to_predicate].expect_op_u32_to_switch_predicate();
+
+        assert_eq!(to_predicate_data.branch_count(), 2);
+        assert_eq!(to_predicate_data.input().origin, ValueOrigin::Argument(0));
 
         assert_eq!(switch.value_inputs()[1].ty, element_ptr_ty);
 
@@ -1769,7 +1805,7 @@ mod tests {
                 name: Default::default(),
                 ty: TY_DUMMY,
                 args: vec![FnArg {
-                    ty: TY_U32,
+                    ty: TY_PREDICATE,
                     shader_io_binding: None,
                 }],
                 ret_ty: Some(TY_U32),
@@ -1791,7 +1827,7 @@ mod tests {
         let switch_node = rvsdg.add_switch(
             region,
             vec![
-                ValueInput::argument(TY_U32, 0),
+                ValueInput::argument(TY_PREDICATE, 0),
                 ValueInput::output(ptr_ty, op_alloca, 0),
             ],
             vec![ValueOutput::new(TY_U32)],

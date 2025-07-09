@@ -1,10 +1,10 @@
 use std::assert_matches::assert_matches;
 use std::ops::Deref;
 
-use stable_mir::abi::{FnAbi, Scalar, TyAndLayout, ValueAbi};
+use stable_mir::abi::{FnAbi, Scalar, ValueAbi};
 use stable_mir::mir::mono::Instance;
 use stable_mir::target::MachineSize;
-use stable_mir::ty::{Align, Size, Span, Ty};
+use stable_mir::ty::{Align, Size, Span, Ty, VariantIdx};
 
 use super::abi::AbiBuilderMethods;
 use super::consts::ConstCodegenMethods;
@@ -17,6 +17,7 @@ use crate::stable_cg::common::{
 };
 use crate::stable_cg::mir::operand::{OperandRef, OperandValue};
 use crate::stable_cg::mir::place::{PlaceRef, PlaceValue};
+use crate::stable_cg::TyAndLayout;
 
 #[derive(Copy, Clone, Debug)]
 pub enum OverflowOp {
@@ -76,6 +77,9 @@ pub trait BuilderMethods<'a>:
         else_llbb: Self::BasicBlock,
         cases: impl IntoIterator<Item = (u128, Self::BasicBlock)>,
     );
+
+    fn get_discriminant(&mut self, ptr: Self::Value) -> Self::Value;
+    fn set_discriminant(&mut self, ptr: Self::Value, variant_index: VariantIdx);
 
     fn unreachable(&mut self);
 
@@ -177,13 +181,13 @@ pub trait BuilderMethods<'a>:
         size: MachineSize,
     );
 
-    fn gep(&mut self, ty: Self::Type, ptr: Self::Value, indices: &[Self::Value]) -> Self::Value;
-    fn inbounds_gep(
+    fn ptr_element_ptr(
         &mut self,
         ty: Self::Type,
         ptr: Self::Value,
         indices: &[Self::Value],
     ) -> Self::Value;
+    fn ptr_variant_ptr(&mut self, ptr: Self::Value, variant_idx: VariantIdx) -> Self::Value;
 
     fn trunc(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value;
     fn sext(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value;
@@ -253,8 +257,8 @@ pub trait BuilderMethods<'a>:
             "cannot directly copy into unsized values"
         );
 
-        if self.is_backend_immediate(layout) {
-            let temp = self.load_operand(src.with_type(layout));
+        if self.is_backend_immediate(layout.clone()) {
+            let temp = self.load_operand(src.with_type(layout.clone()));
 
             temp.val.store(self, dst.with_type(layout));
         } else {
@@ -278,14 +282,14 @@ pub trait BuilderMethods<'a>:
         right: PlaceValue<Self::Value>,
         layout: TyAndLayout,
     ) {
-        let mut temp = self.load_operand(left.with_type(layout));
+        let mut temp = self.load_operand(left.with_type(layout.clone()));
         if let OperandValue::Ref(..) = temp.val {
             // The SSA value isn't stand-alone, so we need to copy it elsewhere
-            let alloca = PlaceRef::alloca(self, layout);
-            self.typed_place_copy(alloca.val, left, layout);
+            let alloca = PlaceRef::alloca(self, layout.clone());
+            self.typed_place_copy(alloca.val, left, layout.clone());
             temp = self.load_operand(alloca);
         }
-        self.typed_place_copy(left, right, layout);
+        self.typed_place_copy(left, right, layout.clone());
         temp.val.store(self, right.with_type(layout));
     }
 

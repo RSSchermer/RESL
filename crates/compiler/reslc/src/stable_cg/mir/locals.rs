@@ -112,7 +112,7 @@ impl<'a, 'b, Bx: BuilderMethods<'b>> MirVisitor for NeedsInitAnalyzer<'a, 'b, Bx
 
     fn visit_rvalue(&mut self, rvalue: &Rvalue, location: Location) {
         match rvalue {
-            Rvalue::Ref(_, _, place) => {
+            Rvalue::Ref(_, _, place) | Rvalue::Discriminant(place) => {
                 let is_local = place.projection.is_empty();
 
                 if is_local {

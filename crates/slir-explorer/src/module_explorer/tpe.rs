@@ -3,7 +3,7 @@ use slir::ty::{ScalarKind, TypeKind};
 use thaw::*;
 use urlencoding::encode as urlencode;
 
-use crate::module_explorer::{ModuleData, STRUCT_ITEM_LABEL_START};
+use crate::module_explorer::{ModuleData, ENUM_ITEM_LABEL_START, STRUCT_ITEM_LABEL_START};
 
 #[component]
 pub fn Type(module: StoredValue<ModuleData>, ty: slir::ty::Type) -> impl IntoView {
@@ -56,8 +56,18 @@ pub fn Type(module: StoredValue<ModuleData>, ty: slir::ty::Type) -> impl IntoVie
                 </Link>
             }.into_any()
         }
+        TypeKind::Enum(e) => {
+            let e = e.to_usize();
+
+            view! {
+                <Link href=format!("/{}/{}{}", urlencode(module.read_value().module.name.as_str()), ENUM_ITEM_LABEL_START, e)>
+                    {format!("E_{}", e)}
+                </Link>
+            }.into_any()
+        }
         TypeKind::Ptr(pointee_ty) => view! {"ptr<" <Type module ty=*pointee_ty/> ">"}.into_any(),
         TypeKind::Function(_) => view! {"fn"}.into_any(),
+        TypeKind::Predicate => view! {"predicate"}.into_any(),
         TypeKind::Dummy => view! {"dummy"}.into_any(),
     }
 }

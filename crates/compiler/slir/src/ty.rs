@@ -5,7 +5,7 @@ use std::ops::{Deref, Index};
 use indexmap::IndexSet;
 use serde::{Deserialize, Serialize};
 
-use crate::{Function, Module, Struct};
+use crate::{Enum, Function, Module, Struct};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct Type(TypeInner);
@@ -47,6 +47,7 @@ enum TypeInner {
     AtomicI32,
     AtomicF32,
     AtomicBool,
+    Predicate,
     Dummy,
     Registered(usize),
 }
@@ -69,8 +70,10 @@ pub enum TypeKind {
         count: u64,
     },
     Struct(Struct),
+    Enum(Enum),
     Ptr(Type),
     Function(Function),
+    Predicate,
     Dummy,
 }
 
@@ -93,7 +96,7 @@ impl TypeKind {
 
     pub fn is_aggregate(&self) -> bool {
         match self {
-            TypeKind::Struct(_) | TypeKind::Array { .. } => true,
+            TypeKind::Struct(_) | TypeKind::Enum(_) | TypeKind::Array { .. } => true,
             _ => false,
         }
     }
@@ -128,8 +131,10 @@ impl TypeKind {
                 format!("array<{}, {}>", base.to_string(module), count)
             }
             TypeKind::Struct(struct_handle) => format!("Struct_{}", struct_handle.to_usize()),
+            TypeKind::Enum(enum_handle) => format!("Enum_{}", enum_handle.to_usize()),
             TypeKind::Ptr(pointee_ty) => format!("ptr<{}>", pointee_ty.to_string(module)),
             TypeKind::Function(f) => format!("Function_{}_{}", f.module, f.name),
+            TypeKind::Predicate => format!("predicate"),
             TypeKind::Dummy => "dummy".to_string(),
         }
     }
@@ -272,6 +277,7 @@ pub const TY_KIND_ATOMIC_U32: TypeKind = TypeKind::Atomic(ScalarKind::U32);
 pub const TY_KIND_ATOMIC_I32: TypeKind = TypeKind::Atomic(ScalarKind::I32);
 pub const TY_KIND_ATOMIC_F32: TypeKind = TypeKind::Atomic(ScalarKind::F32);
 pub const TY_KIND_ATOMIC_BOOL: TypeKind = TypeKind::Atomic(ScalarKind::Bool);
+pub const TY_KIND_PREDICATE: TypeKind = TypeKind::Predicate;
 pub const TY_KIND_DUMMY: TypeKind = TypeKind::Dummy;
 
 pub const TY_U32: Type = Type(TypeInner::U32);
@@ -303,6 +309,7 @@ pub const TY_ATOMIC_U32: Type = Type(TypeInner::AtomicU32);
 pub const TY_ATOMIC_I32: Type = Type(TypeInner::AtomicI32);
 pub const TY_ATOMIC_F32: Type = Type(TypeInner::AtomicF32);
 pub const TY_ATOMIC_BOOL: Type = Type(TypeInner::AtomicBool);
+pub const TY_PREDICATE: Type = Type(TypeInner::Predicate);
 pub const TY_DUMMY: Type = Type(TypeInner::Dummy);
 
 #[derive(Clone, Default, Serialize, Deserialize, Debug)]
@@ -414,6 +421,7 @@ impl TypeRegistry {
                 columns: VectorSize::Four,
                 scalar: ScalarKind::F32,
             } => return TY_MAT4X4,
+            TypeKind::Predicate => return TY_PREDICATE,
             #[cfg(test)]
             TypeKind::Dummy => return TY_DUMMY,
             _ => (),
@@ -459,6 +467,7 @@ impl Index<Type> for TypeRegistry {
             TypeInner::AtomicI32 => &TY_KIND_ATOMIC_I32,
             TypeInner::AtomicF32 => &TY_KIND_ATOMIC_F32,
             TypeInner::AtomicBool => &TY_KIND_ATOMIC_BOOL,
+            TypeInner::Predicate => &TY_KIND_PREDICATE,
             TypeInner::Dummy => &TY_KIND_DUMMY,
             TypeInner::Registered(index) => self.store.get_index(index).expect("unregistered type"),
         }

@@ -4,7 +4,7 @@ use std::fmt;
 use arrayvec::ArrayVec;
 use either::Either;
 use rustc_middle::bug;
-use stable_mir::abi::{TyAndLayout, ValueAbi};
+use stable_mir::abi::ValueAbi;
 use stable_mir::target::MachineInfo;
 use stable_mir::ty::{Align, Allocation, ConstantKind, MirConst, Size, Ty};
 use stable_mir::{abi, mir};
@@ -12,7 +12,7 @@ use tracing::debug;
 
 use super::place::{PlaceRef, PlaceValue};
 use super::{FunctionCx, LocalRef};
-use crate::stable_cg::layout::{ScalarExt, TyAndLayoutExt};
+use crate::stable_cg::layout::{ScalarExt, TyAndLayout};
 use crate::stable_cg::scalar::Scalar;
 use crate::stable_cg::traits::*;
 
@@ -197,7 +197,10 @@ impl<'a, V: CodegenObject> OperandRef<V> {
 
                 return OperandRef {
                     val: OperandValue::Immediate(val),
-                    layout: TyAndLayout { ty, layout },
+                    layout: TyAndLayout {
+                        ty,
+                        layout: layout.into(),
+                    },
                 };
             }
             ValueAbi::ScalarPair(a, b) => {
@@ -211,10 +214,18 @@ impl<'a, V: CodegenObject> OperandRef<V> {
 
                 return OperandRef {
                     val: OperandValue::Pair(a_val, b_val),
-                    layout: TyAndLayout { ty, layout },
+                    layout: TyAndLayout {
+                        ty,
+                        layout: layout.into(),
+                    },
                 };
             }
-            _ if shape.is_1zst() => return OperandRef::zero_sized(TyAndLayout { ty, layout }),
+            _ if shape.is_1zst() => {
+                return OperandRef::zero_sized(TyAndLayout {
+                    ty,
+                    layout: layout.into(),
+                })
+            }
             _ => {}
         }
 
@@ -224,7 +235,13 @@ impl<'a, V: CodegenObject> OperandRef<V> {
         let init = bx.const_data_from_alloc(alloc);
         let addr = bx.static_addr_of(init, alloc_align, None);
 
-        bx.load_operand(PlaceRef::new_sized(addr, TyAndLayout { ty, layout }))
+        bx.load_operand(PlaceRef::new_sized(
+            addr,
+            TyAndLayout {
+                ty,
+                layout: layout.into(),
+            },
+        ))
     }
 
     /// Asserts that this operand refers to a scalar and returns
@@ -267,7 +284,7 @@ impl<'a, V: CodegenObject> OperandRef<V> {
             .deref(layout.shape().abi_align)
             .with_type(TyAndLayout {
                 ty: projected_ty,
-                layout,
+                layout: layout.into(),
             })
     }
 
@@ -608,7 +625,10 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
 
         // ZSTs don't require any actual memory access.
         if layout.shape().is_1zst() {
-            return OperandRef::zero_sized(TyAndLayout { ty, layout });
+            return OperandRef::zero_sized(TyAndLayout {
+                ty,
+                layout: layout.into(),
+            });
         }
 
         // TODO: stable_mir::visit::PlaceRef currently does not implement Copy (it should)

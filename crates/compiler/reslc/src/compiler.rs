@@ -10,6 +10,7 @@ use rustc_session::config::{CrateType, DebugInfo};
 use rustc_session::output::out_filename;
 use rustc_span::def_id::LOCAL_CRATE;
 
+use crate::abi;
 use crate::codegen::codegen_shader_modules;
 use crate::context::ReslContext;
 
@@ -52,6 +53,10 @@ impl Callbacks for ReslCompiler {
             ("CheckAlignment".to_string(), false),
             ("CheckNull".to_string(), false),
         ]);
+
+        config.override_queries = Some(|_, providers| {
+            abi::provide(providers);
+        });
     }
 
     fn after_analysis<'tcx>(
