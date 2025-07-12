@@ -1,13 +1,16 @@
 use indexmap::IndexSet;
 use rustc_hash::FxHashMap;
+use slotmap::KeyData;
 
 use crate::cfg::OpAlloca;
+use crate::rvsdg::transform::scalar_replacement::ScalarReplacer;
 use crate::rvsdg::transform::variable_pointer_emulation::EmulationContext;
 use crate::rvsdg::{
     Connectivity, Node, NodeKind, Region, Rvsdg, SimpleNode, StateOrigin, StateUser, ValueInput,
     ValueOrigin, ValueUser,
 };
 use crate::ty::TypeRegistry;
+use crate::Module;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PointerAction {
@@ -100,6 +103,10 @@ impl PointerAnalyzer {
             _ => unreachable!("node kind cannot output a pointer"),
         }
     }
+
+    fn clear(&mut self) {
+        self.cache.clear();
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -142,6 +149,10 @@ impl TouchedAllocaStack {
         }
 
         touched_allocas
+    }
+
+    fn clear(&mut self) {
+        self.stack.clear();
     }
 }
 
@@ -188,28 +199,44 @@ pub struct MemoryPromoterLegalizer {
     emulation_context: EmulationContext,
     pointer_analyzer: PointerAnalyzer,
     state_origin: (Region, StateOrigin),
-    value_availability: FxHashMap<(Node, Region), PointerValue>,
+    value_availability: FxHashMap<(Node, Region), ValueOrigin>,
     owner_stack: Vec<Node>,
     touched_alloca_stack: TouchedAllocaStack,
 }
 
 impl MemoryPromoterLegalizer {
-    pub fn new(function_body: Region) -> Self {
+    pub fn new() -> Self {
         MemoryPromoterLegalizer {
             emulation_context: EmulationContext::new(),
             pointer_analyzer: PointerAnalyzer::new(),
-            state_origin: (function_body, StateOrigin::Argument),
+            state_origin: (Region::from(KeyData::from_ffi(0)), StateOrigin::Argument),
             value_availability: Default::default(),
             owner_stack: vec![],
             touched_alloca_stack: TouchedAllocaStack::new(),
         }
     }
 
-    fn promote_and_legalize(&mut self, ty: &mut TypeRegistry, rvsdg: &mut Rvsdg) {
+    pub fn promote_and_legalize(
+        &mut self,
+        ty: &mut TypeRegistry,
+        rvsdg: &mut Rvsdg,
+        region: Region,
+    ) {
+        // Set the initial state origin to the region's state argument
+        self.state_origin = (region, StateOrigin::Argument);
+
+        // Clear any state set by a previous promote-and-legalize run
+        self.emulation_context.clear();
+        self.pointer_analyzer.clear();
+        self.value_availability.clear();
+        self.owner_stack.clear();
+        self.touched_alloca_stack.clear();
+
         while self.visit_state_user(ty, rvsdg) {}
     }
 
     fn visit_state_user(&mut self, ty: &mut TypeRegistry, rvsdg: &mut Rvsdg) -> bool {
+        dbg!(self.state_origin);
         let (current_region, current_origin) = self.state_origin;
 
         let current_user = match current_origin {
@@ -221,6 +248,12 @@ impl MemoryPromoterLegalizer {
                     .user
             }
         };
+
+        dbg!(current_user);
+
+        if let Some(node) = current_user.as_node() {
+            dbg!(&rvsdg[node]);
+        }
 
         match current_user {
             StateUser::Result => {
@@ -246,6 +279,7 @@ impl MemoryPromoterLegalizer {
     }
 
     fn visit_switch(&mut self, ty: &mut TypeRegistry, rvsdg: &mut Rvsdg, switch_node: Node) {
+        dbg!("switch");
         let region = rvsdg[switch_node].region();
         let switch_data = rvsdg[switch_node].expect_switch();
         let branch_count = switch_data.branches().len();
@@ -278,14 +312,9 @@ impl MemoryPromoterLegalizer {
                 // the alloca (did a store), then the value will already be available. If the branch
                 // did not tough the alloca, then this will find the latest available value in the
                 // outer region and make it available as an argument.
-                let value = self.resolve_alloca_value(rvsdg, op_alloca, branch);
+                let origin = self.resolve_alloca_value(rvsdg, op_alloca, branch);
 
-                match value {
-                    PointerValue::Stored(origin) => {
-                        rvsdg.reconnect_region_result(branch, output, origin)
-                    }
-                    PointerValue::Fallback => todo!("can this case actually happen?"),
-                }
+                rvsdg.reconnect_region_result(branch, output, origin);
             }
 
             // Mark the value as available in the outer region. Note that we must do this after
@@ -295,10 +324,10 @@ impl MemoryPromoterLegalizer {
             // value available in the outer region.
             self.value_availability.insert(
                 (op_alloca, region),
-                PointerValue::Stored(ValueOrigin::Output {
+                ValueOrigin::Output {
                     producer: switch_node,
                     output,
-                }),
+                },
             );
         }
 
@@ -306,6 +335,7 @@ impl MemoryPromoterLegalizer {
     }
 
     fn visit_loop(&mut self, ty: &mut TypeRegistry, rvsdg: &mut Rvsdg, loop_node: Node) {
+        dbg!("loop");
         let region = rvsdg[loop_node].region();
         let loop_region = rvsdg[loop_node].expect_loop().loop_region();
 
@@ -323,12 +353,7 @@ impl MemoryPromoterLegalizer {
         // Create an output for every alloca that was touched (stored to) inside the switch node to
         // make the pointer value available in the outer region.
         for op_alloca in touched_allocas.iter().copied() {
-            let value = self.resolve_alloca_value(rvsdg, op_alloca, loop_region);
-
-            let origin = match value {
-                PointerValue::Stored(origin) => origin,
-                PointerValue::Fallback => todo!("can this case actually happen?"),
-            };
+            let origin = self.resolve_alloca_value(rvsdg, op_alloca, loop_region);
 
             let users = match origin {
                 ValueOrigin::Argument(argument) => {
@@ -350,13 +375,8 @@ impl MemoryPromoterLegalizer {
             let output = if let Some(preexisting_output) = preexisting_output {
                 preexisting_output
             } else {
-                let initial_value = self.resolve_alloca_value(rvsdg, op_alloca, region);
+                let initial_value_origin = self.resolve_alloca_value(rvsdg, op_alloca, region);
                 let ty = rvsdg[op_alloca].expect_op_alloca().ty();
-                let initial_value_origin = match initial_value {
-                    PointerValue::Stored(origin) => origin,
-                    PointerValue::Fallback => todo!("can this case actually happen?"),
-                };
-
                 let input = rvsdg.add_loop_input(
                     loop_node,
                     ValueInput {
@@ -373,10 +393,10 @@ impl MemoryPromoterLegalizer {
 
             self.value_availability.insert(
                 (op_alloca, region),
-                PointerValue::Stored(ValueOrigin::Output {
+                ValueOrigin::Output {
                     producer: loop_node,
                     output,
-                }),
+                },
             );
         }
 
@@ -384,6 +404,7 @@ impl MemoryPromoterLegalizer {
     }
 
     fn visit_op_store(&mut self, ty: &mut TypeRegistry, rvsdg: &mut Rvsdg, op_store: Node) {
+        dbg!("store");
         let region = rvsdg[op_store].region();
         let store_data = rvsdg[op_store].expect_op_store();
         let pointer_origin = store_data.ptr_input().origin;
@@ -395,7 +416,7 @@ impl MemoryPromoterLegalizer {
         match action {
             PointerAction::Promotion(op_alloca) => {
                 self.value_availability
-                    .insert((op_alloca, region), PointerValue::Stored(value_origin));
+                    .insert((op_alloca, region), value_origin);
                 self.touched_alloca_stack.touch(op_alloca);
 
                 rvsdg.remove_node(op_store);
@@ -412,38 +433,36 @@ impl MemoryPromoterLegalizer {
                 // on the next iteration.
             }
             PointerAction::Nothing => {
-                // Do nothing...
+                // Do nothing, except move the current state origin beyond the load
+                self.state_origin = (region, StateOrigin::Node(op_store));
             }
         }
     }
 
     fn visit_op_load(&mut self, ty: &mut TypeRegistry, rvsdg: &mut Rvsdg, op_load: Node) {
+        dbg!("load");
         let region = rvsdg[op_load].region();
         let origin = rvsdg[op_load].expect_op_load().ptr_input().origin;
         let action = self.pointer_analyzer.resolve_action(rvsdg, region, origin);
 
+        dbg!(action);
+
         match action {
             PointerAction::Promotion(op_alloca) => {
-                let value = self.resolve_alloca_value(rvsdg, op_alloca, region);
+                let origin = self.resolve_alloca_value(rvsdg, op_alloca, region);
+                let user_count = rvsdg[op_load].expect_op_load().value_output().users.len();
 
-                match value {
-                    PointerValue::Stored(origin) => {
-                        let user_count = rvsdg[op_load].expect_op_load().value_output().users.len();
+                for i in (0..user_count).rev() {
+                    let user = rvsdg[op_load].expect_op_load().value_output().users[i];
 
-                        for i in (0..user_count).rev() {
-                            let user = rvsdg[op_load].expect_op_load().value_output().users[i];
-
-                            rvsdg.reconnect_value_user(region, user, origin);
-                        }
-
-                        rvsdg.remove_node(op_load);
-
-                        // Note that removing the node will connect the state chain to connect the
-                        // OpLoad's state origin to the OpLoad's state user, so we don't need to
-                        // update `self.state_origin`.
-                    }
-                    PointerValue::Fallback => todo!("can this case actually happen?"),
+                    rvsdg.reconnect_value_user(region, user, origin);
                 }
+
+                rvsdg.remove_node(op_load);
+
+                // Note that removing the node will connect the state chain to connect the
+                // OpLoad's state origin to the OpLoad's state user, so we don't need to
+                // update `self.state_origin`.
             }
             PointerAction::VariablePointerEmulation => {
                 self.emulation_context.emulate_op_load(ty, rvsdg, op_load);
@@ -453,7 +472,8 @@ impl MemoryPromoterLegalizer {
                 // next iteration.
             }
             PointerAction::Nothing => {
-                // Do nothing...
+                // Do nothing, except move the current state origin beyond the load
+                self.state_origin = (region, StateOrigin::Node(op_load));
             }
         }
     }
@@ -463,23 +483,29 @@ impl MemoryPromoterLegalizer {
         rvsdg: &mut Rvsdg,
         op_alloca: Node,
         mut region: Region,
-    ) -> PointerValue {
+    ) -> ValueOrigin {
         // Search outwards through parent regions until we find a region in which the value is
         // available. We record an "owner stack" of region owner-nodes in which the value will have
         // to be made available recursively.
-        let pointer_value = loop {
-            if let Some(pointer_value) = self.value_availability.get(&(op_alloca, region)) {
+        let mut origin = loop {
+            if let Some(origin) = self.value_availability.get(&(op_alloca, region)) {
                 // The value was previously recorded as being available in the region.
-                break *pointer_value;
+                break *origin;
             }
 
             if rvsdg[op_alloca].region() == region {
                 // No value is available yet, but we're in the region that contains the OpAlloca for
                 // the value: use the fallback value.
-                self.value_availability
-                    .insert((op_alloca, region), PointerValue::Fallback);
+                let ty = rvsdg[op_alloca].expect_op_alloca().ty();
+                let fallback_node = rvsdg.add_const_fallback(region, ty);
+                let origin = ValueOrigin::Output {
+                    producer: fallback_node,
+                    output: 0,
+                };
 
-                break PointerValue::Fallback;
+                self.value_availability.insert((op_alloca, region), origin);
+
+                break origin;
             }
 
             let owner = rvsdg[region].owner();
@@ -496,87 +522,96 @@ impl MemoryPromoterLegalizer {
             }
         };
 
-        if let PointerValue::Stored(mut origin) = pointer_value {
-            // Iterate over the region owners on the stack from the outside in, recursively making
-            // the value available inside the owned regions until the stack is empty.
-            while let Some(owner) = self.owner_stack.pop() {
-                // Ensure the value is available to the region(s) inside the `owner`.
+        // Iterate over the region owners on the stack from the outside in, recursively making
+        // the value available inside the owned regions until the stack is empty.
+        while let Some(owner) = self.owner_stack.pop() {
+            // Ensure the value is available to the region(s) inside the `owner`.
 
-                let outer_region = rvsdg[owner].region();
-                let ty = rvsdg.value_origin_ty(outer_region, origin);
+            let outer_region = rvsdg[owner].region();
+            let ty = rvsdg.value_origin_ty(outer_region, origin);
 
-                origin = match rvsdg[owner].kind() {
-                    NodeKind::Switch(_) => {
-                        let input =
-                            rvsdg[owner]
-                                .value_input_for_origin(origin)
-                                .unwrap_or_else(|| {
-                                    rvsdg.add_switch_input(owner, ValueInput { ty, origin })
-                                });
+            origin = match rvsdg[owner].kind() {
+                NodeKind::Switch(_) => {
+                    let input = rvsdg[owner]
+                        .value_input_for_origin(origin)
+                        .unwrap_or_else(|| {
+                            rvsdg.add_switch_input(owner, ValueInput { ty, origin })
+                        });
 
-                        let argument = input - 1;
-                        let inner_origin = ValueOrigin::Argument(argument);
+                    let argument = input - 1;
+                    let inner_origin = ValueOrigin::Argument(argument);
 
-                        for branch in rvsdg[owner].expect_switch().branches() {
-                            // Make the value available in the branch, but only if it was not
-                            // available already, as if a store operation already made a value
-                            // available inside the branch, that value will represent the more
-                            // recent value.
-                            if !self.value_availability.contains_key(&(op_alloca, *branch)) {
-                                self.value_availability.insert(
-                                    (op_alloca, *branch),
-                                    PointerValue::Stored(inner_origin),
-                                );
-                            }
+                    for branch in rvsdg[owner].expect_switch().branches() {
+                        // Make the value available in the branch, but only if it was not
+                        // available already, as if a store operation already made a value
+                        // available inside the branch, that value will represent the more
+                        // recent value.
+                        if !self.value_availability.contains_key(&(op_alloca, *branch)) {
+                            self.value_availability
+                                .insert((op_alloca, *branch), inner_origin);
                         }
-
-                        inner_origin
                     }
-                    NodeKind::Loop(loop_data) => {
-                        let loop_region = loop_data.loop_region();
 
-                        let argument =
-                            rvsdg[owner]
-                                .value_input_for_origin(origin)
-                                .unwrap_or_else(|| {
-                                    let input =
-                                        rvsdg.add_loop_input(owner, ValueInput { ty, origin });
-                                    let result = input + 1;
-
-                                    // Connect the new input to its corresponding result to make
-                                    // the value available to subsequent loop iterations.
-                                    rvsdg.reconnect_region_result(
-                                        loop_region,
-                                        result,
-                                        ValueOrigin::Argument(input),
-                                    );
-
-                                    input
-                                });
-
-                        let inner_origin = ValueOrigin::Argument(argument);
-
-                        self.value_availability
-                            .insert((op_alloca, loop_region), PointerValue::Stored(inner_origin));
-
-                        inner_origin
-                    }
-                    _ => panic!("not a valid region owner"),
+                    inner_origin
                 }
-            }
+                NodeKind::Loop(loop_data) => {
+                    let loop_region = loop_data.loop_region();
 
-            PointerValue::Stored(origin)
-        } else {
-            PointerValue::Fallback
+                    let argument =
+                        rvsdg[owner]
+                            .value_input_for_origin(origin)
+                            .unwrap_or_else(|| {
+                                let input = rvsdg.add_loop_input(owner, ValueInput { ty, origin });
+                                let result = input + 1;
+
+                                // Connect the new input to its corresponding result to make
+                                // the value available to subsequent loop iterations.
+                                rvsdg.reconnect_region_result(
+                                    loop_region,
+                                    result,
+                                    ValueOrigin::Argument(input),
+                                );
+
+                                input
+                            });
+
+                    let inner_origin = ValueOrigin::Argument(argument);
+
+                    self.value_availability
+                        .insert((op_alloca, loop_region), inner_origin);
+
+                    inner_origin
+                }
+                _ => panic!("not a valid region owner"),
+            }
         }
+
+        origin
+    }
+}
+
+pub fn entry_points_memory_promotion_and_legalization(module: &mut Module, rvsdg: &mut Rvsdg) {
+    let mut memory_promoter_legalizer = MemoryPromoterLegalizer::new();
+
+    let entry_points = module
+        .entry_points
+        .iter()
+        .map(|(f, _)| f)
+        .collect::<Vec<_>>();
+
+    for entry_point in entry_points {
+        let node = rvsdg
+            .get_function_node(entry_point)
+            .expect("function should have RVSDG body");
+        let body_region = rvsdg[node].expect_function().body_region();
+
+        memory_promoter_legalizer.promote_and_legalize(&mut module.ty, rvsdg, body_region);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::iter;
-
-    use thin_vec::thin_vec;
 
     use super::*;
     use crate::rvsdg::ValueOutput;
@@ -657,9 +692,9 @@ mod tests {
             },
         );
 
-        let mut promoter_legalizer = MemoryPromoterLegalizer::new(region);
+        let mut promoter_legalizer = MemoryPromoterLegalizer::new();
 
-        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg);
+        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg, region);
 
         assert_eq!(
             &rvsdg[region].value_arguments()[0].users,
@@ -765,9 +800,9 @@ mod tests {
             },
         );
 
-        let mut promoter_legalizer = MemoryPromoterLegalizer::new(region);
+        let mut promoter_legalizer = MemoryPromoterLegalizer::new();
 
-        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg);
+        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg, region);
 
         assert!(
             rvsdg[region].value_arguments()[0].users.is_empty(),
@@ -890,9 +925,9 @@ mod tests {
             },
         );
 
-        let mut promoter_legalizer = MemoryPromoterLegalizer::new(region);
+        let mut promoter_legalizer = MemoryPromoterLegalizer::new();
 
-        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg);
+        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg, region);
 
         assert_eq!(
             &rvsdg[region].value_arguments()[0].users,
@@ -1081,9 +1116,9 @@ mod tests {
             },
         );
 
-        let mut promoter_legalizer = MemoryPromoterLegalizer::new(region);
+        let mut promoter_legalizer = MemoryPromoterLegalizer::new();
 
-        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg);
+        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg, region);
 
         assert_eq!(
             &rvsdg[region].value_arguments()[0].users,
@@ -1226,9 +1261,9 @@ mod tests {
             },
         );
 
-        let mut promoter_legalizer = MemoryPromoterLegalizer::new(region);
+        let mut promoter_legalizer = MemoryPromoterLegalizer::new();
 
-        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg);
+        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg, region);
 
         assert_eq!(
             &rvsdg[region].value_arguments()[1].users,
@@ -1441,9 +1476,9 @@ mod tests {
             },
         );
 
-        let mut promoter_legalizer = MemoryPromoterLegalizer::new(region);
+        let mut promoter_legalizer = MemoryPromoterLegalizer::new();
 
-        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg);
+        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg, region);
 
         // Verify that the third function argument (initial stored value) is correctly passed into
         // the outer switch
@@ -1647,9 +1682,9 @@ mod tests {
             },
         );
 
-        let mut promoter_legalizer = MemoryPromoterLegalizer::new(region);
+        let mut promoter_legalizer = MemoryPromoterLegalizer::new();
 
-        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg);
+        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg, region);
 
         assert_eq!(
             &rvsdg[region].value_arguments()[0].users,
@@ -1805,9 +1840,9 @@ mod tests {
             },
         );
 
-        let mut promoter_legalizer = MemoryPromoterLegalizer::new(region);
+        let mut promoter_legalizer = MemoryPromoterLegalizer::new();
 
-        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg);
+        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg, region);
 
         assert_eq!(
             &rvsdg[region].value_arguments()[0].users,
@@ -1944,9 +1979,9 @@ mod tests {
             },
         );
 
-        let mut promoter_legalizer = MemoryPromoterLegalizer::new(region);
+        let mut promoter_legalizer = MemoryPromoterLegalizer::new();
 
-        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg);
+        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg, region);
 
         let ValueOrigin::Output {
             producer: emulation_node,

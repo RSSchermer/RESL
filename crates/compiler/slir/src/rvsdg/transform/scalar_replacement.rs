@@ -8,7 +8,7 @@ use crate::rvsdg::{
     Connectivity, LoopNode, Node, NodeKind, OpAlloca, OpLoad, Region, Rvsdg, SimpleNode,
     StateOrigin, SwitchNode, ValueInput, ValueOrigin, ValueOutput, ValueUser,
 };
-use crate::ty::{Type, TypeKind, TY_PREDICATE, TY_U32};
+use crate::ty::{Type, TypeKind, TypeRegistry, TY_PREDICATE, TY_U32};
 use crate::{Function, Module};
 
 /// Collects all [OpAlloca] nodes of aggregate types in a region and all sub-regions (e.g. a switch
@@ -16,15 +16,21 @@ use crate::{Function, Module};
 ///
 /// Note that this does not yet make any decisions about whether we should perform a scalar
 /// replacement transform on a given [OpAlloca] node, this requires further analysis.
-struct CandidateAllocaCollector<'a, 'b> {
+struct CandidateAllocaCollector<'a, 'b, 'c> {
     rvsdg: &'a Rvsdg,
-    candidate_queue: &'b mut VecDeque<Node>,
+    ty: &'b TypeRegistry,
+    candidate_queue: &'c mut VecDeque<Node>,
 }
 
-impl<'a, 'b> CandidateAllocaCollector<'a, 'b> {
-    fn new(rvsdg: &'a Rvsdg, candidate_queue: &'b mut VecDeque<Node>) -> Self {
+impl<'a, 'b, 'c> CandidateAllocaCollector<'a, 'b, 'c> {
+    fn new(
+        rvsdg: &'a Rvsdg,
+        ty: &'b TypeRegistry,
+        candidate_queue: &'c mut VecDeque<Node>,
+    ) -> Self {
         CandidateAllocaCollector {
             rvsdg,
+            ty,
             candidate_queue,
         }
     }
@@ -37,7 +43,11 @@ impl<'a, 'b> CandidateAllocaCollector<'a, 'b> {
 
     fn visit_node(&mut self, node: Node) {
         match self.rvsdg[node].kind() {
-            NodeKind::Simple(SimpleNode::OpAlloca(_)) => self.candidate_queue.push_back(node),
+            NodeKind::Simple(SimpleNode::OpAlloca(op)) => {
+                if self.ty[op.ty()].is_aggregate() {
+                    self.candidate_queue.push_back(node)
+                }
+            }
             NodeKind::Switch(n) => {
                 for branch in n.branches() {
                     self.visit_region(*branch)
@@ -281,7 +291,7 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
             Simple(OpPtrElementPtr(_)) => self.visit_op_ptr_element_ptr(node, split_input),
             Simple(OpExtractElement(_)) => self.visit_op_extract_element(node, split_input),
             Simple(ValueProxy(_)) => self.visit_value_proxy(node, split_input),
-            _ => unreachable!("node king cannot take a pointer or aggregate value as input"),
+            _ => unreachable!("node kind cannot take a pointer or aggregate value as input"),
         }
     }
 
@@ -558,26 +568,26 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
 
     fn split_op_store(&mut self, node: Node, input: u32, split_input: &[ValueInput]) {
         // OpStore presents a more complex case than most of the other cases. This is due to OpStore
-        // having two inputs, both of which has to split at the same time (as opposed to e.g. a
+        // having two inputs, both of which have to split at the same time (as opposed to e.g. a
         // Switch input, where we can split inputs individually). For whichever input is visited
         // first, we generate final connectivity immediately; for the other, we introduce an
-        // intermediate set of [OpElementPtrElement] nodes (for case of the "pointer" input) or an
+        // intermediate set of [OpPtrElementPtr] nodes (for the case of the "pointer" input) or an
         // intermediate set of [OpExtractElement] nodes (for the case of the "value" input).
         //
         // However, it is possible that both inputs originate from a common output somewhere up
-        // the DAG. Adding [OpElementPtrElement]/[OpExtractElement] nodes to upstream user sets
+        // the DAG. Adding [OpPtrElementPtr]/[OpExtractElement] nodes to upstream user sets
         // runs the risk of modifying a user set concurrently with its iteration. To sidestep this
-        // problem, instead of directly connecting the [OpElementPtrElement]/[OpExtractElement]
+        // problem, instead of directly connecting the [OpPtrElementPtr]/[OpExtractElement]
         // nodes to the value origin, we first introduce a [ValueProxy] node with
-        // [Rvsdg::proxy_origin_user] and then connect the [OpElementPtrElement]/[OpExtractElement]
+        // [Rvsdg::proxy_origin_user] and then connect the [OpPtrElementPtr]/[OpExtractElement]
         // to the output of this [ValueProxy] node instead.
         //
-        // The [ValueProxy] and [OpElementPtrElement]/[OpExtractElement] nodes introduced by this
+        // The [ValueProxy] and [OpPtrElementPtr]/[OpExtractElement] nodes introduced by this
         // strategy are in most cases temporary. When later the DAG path that would have arrived at
-        // the other input is traversed, the [ValueProxy] and [OpElementPtrElement]/
+        // the other input is traversed, the [ValueProxy] and [OpPtrElementPtr]/
         // [OpExtractElement] nodes will typically be eliminated. For cases where the input does
         // not originate from an OpAlloca, [ValueProxy] nodes will have to be cleaned up by a later
-        // pass (in these cases the [OpElementPtrElement]/[OpExtractElement] nodes typically remain
+        // pass (in these cases the [OpPtrElementPtr]/[OpExtractElement] nodes typically remain
         // necessary).
 
         assert!(input < 2, "OpStore only has 2 value inputs");
@@ -817,7 +827,7 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
         }
 
         // First connect all region results that we've created to the unsplit input that the
-        // original result connects to, via [OpElementPtrElement] nodes or [OpExtractElement] nodes,
+        // original result connects to, via [OpPtrElementPtr] nodes or [OpExtractElement] nodes,
         // depending on whether the result type is a pointer or an immediate value. This also
         // disconnects the original result.
         self.redirect_region_result(loop_region, input as usize + 1, prior_result_count);
@@ -825,7 +835,7 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
         // Now redirect the argument using the argument mapping. We do this after redirecting the
         // results, because otherwise this might try to split the original result again; by doing
         // this after result redirection, all the argument's user tree should terminate at the
-        // [OpElementPtrElement]/[OpExtractElement] nodes that were inserted, since nothing should
+        // [OpPtrElementPtr]/[OpExtractElement] nodes that were inserted, since nothing should
         // be connected to the original result anymore.
         self.redirect_region_argument(loop_region, input, &split_args);
 
@@ -844,6 +854,7 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
         );
 
         let owner = self.rvsdg[region].owner();
+        let outer_region = self.rvsdg[owner].region();
         let loop_data = self.rvsdg[owner].expect_loop();
         let prior_input_count = loop_data.value_inputs().len();
         let prior_result_count = prior_input_count + 1;
@@ -857,7 +868,7 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
         // we insert a proxy between the input and its origin, so that our modification will modify
         // the proxy's user set, which we know is not currently being traversed.
         let proxy = self.rvsdg.proxy_origin_user(
-            region,
+            outer_region,
             value_input.ty,
             value_input.origin,
             ValueUser::Input {
@@ -877,7 +888,7 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
         let mut split_outputs = Vec::with_capacity(split_input.len());
 
         // Add inputs for each element of the aggregate, and connect them to the proxy via either
-        // an OpElementPtrElement node if the input is of a pointer type, or via an OpExtractElement
+        // an OpPtrElementPtr node if the input is of a pointer type, or via an OpExtractElement
         // node otherwise. Also record an argument mapping in `split_args` and an output mapping in
         // `split_outputs`.
         match self.module.ty[value_input.ty] {
@@ -888,7 +899,7 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
                         let index = self.rvsdg.add_const_u32(region, i as u32);
                         let element = self.rvsdg.add_op_ptr_element_ptr(
                             &mut self.module.ty,
-                            region,
+                            outer_region,
                             base,
                             proxy_input,
                             [ValueInput::output(TY_U32, index, 0)],
@@ -918,7 +929,7 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
                         let index = self.rvsdg.add_const_u32(region, i as u32);
                         let element = self.rvsdg.add_op_ptr_element_ptr(
                             &mut self.module.ty,
-                            region,
+                            outer_region,
                             element_ty,
                             proxy_input,
                             [ValueInput::output(TY_U32, index, 0)],
@@ -944,7 +955,7 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
                 for i in 0..count {
                     let index = self.rvsdg.add_const_u32(region, i as u32);
                     let element = self.rvsdg.add_op_extract_element(
-                        region,
+                        outer_region,
                         base,
                         proxy_input,
                         [ValueInput::output(TY_U32, index, 0)],
@@ -972,7 +983,7 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
 
                     let index = self.rvsdg.add_const_u32(region, i as u32);
                     let element = self.rvsdg.add_op_extract_element(
-                        region,
+                        outer_region,
                         element_ty,
                         proxy_input,
                         [ValueInput::output(TY_U32, index, 0)],
@@ -1043,7 +1054,7 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
     }
 
     /// Redirects the origin for the `region`'s given `result` to a set of "split" results that
-    /// start at `split_results_start`, via either [OpElementPtrElement] or [OpExtractElement] nodes
+    /// start at `split_results_start`, via either [OpPtrElementPtr] or [OpExtractElement] nodes
     /// depending on whether to original input type is a pointer or immediate value.
     ///
     /// Leaves the original result connected to the "placeholder" origin.
@@ -1180,7 +1191,7 @@ impl ScalarReplacer {
         let body_region = rvsdg[node].expect_function().body_region();
 
         let mut candidate_collector =
-            CandidateAllocaCollector::new(rvsdg, &mut self.candidate_queue);
+            CandidateAllocaCollector::new(rvsdg, &module.ty, &mut self.candidate_queue);
 
         candidate_collector.visit_region(body_region);
 

@@ -968,10 +968,12 @@ impl NodeLayout {
                 SimpleNode::ConstF32(v) => NodeContent::PlainText(v.value().to_string().into()),
                 SimpleNode::ConstBool(v) => NodeContent::PlainText(v.value().to_string().into()),
                 SimpleNode::ConstPtr(_) => NodeContent::PlainText("ptr".into()),
+                SimpleNode::ConstFallback(_) => NodeContent::PlainText("fallback".into()),
                 SimpleNode::OpAlloca(_) => NodeContent::PlainText("alloca".into()),
                 SimpleNode::OpLoad(_) => NodeContent::PlainText("load".into()),
                 SimpleNode::OpStore(_) => NodeContent::PlainText("store".into()),
                 SimpleNode::OpPtrElementPtr(_) => NodeContent::PlainText("el-ptr".into()),
+                SimpleNode::OpPtrDiscriminantPtr(_) => NodeContent::PlainText("discr-ptr".into()),
                 SimpleNode::OpPtrVariantPtr(op) => {
                     NodeContent::PlainText(format!("vrnt-ptr:{}", op.variant_index()).into())
                 }

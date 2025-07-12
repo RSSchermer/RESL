@@ -170,6 +170,10 @@ impl SwitchEmulationRegistry {
 
         branch_end
     }
+
+    fn clear(&mut self) {
+        self.switch_emulation_values.clear();
+    }
 }
 
 /// Propagates input requirements for pointer emulation from the bottom up, and for each branching
@@ -316,6 +320,11 @@ impl EmulationContext {
         emulator.emulate(&info.emulation_root);
 
         rvsdg.remove_node(op_store);
+    }
+
+    pub fn clear(&mut self) {
+        self.pointer_emulation_info.clear();
+        self.switch_emulation_registry.clear();
     }
 
     fn resolve_pointer_emulation_info(

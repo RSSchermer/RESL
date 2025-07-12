@@ -8,7 +8,11 @@ use crate::cfg_to_rvsdg::control_tree::{
 impl Statement {
     fn uses_state(&self) -> bool {
         match self {
-            Statement::OpLoad(_) | Statement::OpStore(_) | Statement::OpCall(_) => true,
+            Statement::OpLoad(_)
+            | Statement::OpStore(_)
+            | Statement::OpGetDiscriminant(_)
+            | Statement::OpSetDiscriminant(_)
+            | Statement::OpCall(_) => true,
             _ => false,
         }
     }
@@ -46,14 +50,24 @@ impl<'a> StateUseAnnotationVisitor<'a> {
     }
 
     fn visit_linear_node(&mut self, (node, data): (ControlTreeNode, &LinearNode)) {
+        for child in &data.children {
+            self.visit(*child);
+        }
+
         self.annotation_state[node] = data.children.iter().any(|c| self.annotation_state[*c]);
     }
 
     fn visit_branching_node(&mut self, (node, data): (ControlTreeNode, &BranchingNode)) {
+        for branch in &data.branches {
+            self.visit(*branch);
+        }
+
         self.annotation_state[node] = data.branches.iter().any(|b| self.annotation_state[*b]);
     }
 
     fn visit_loop_node(&mut self, (node, data): (ControlTreeNode, &LoopNode)) {
+        self.visit(data.inner);
+
         self.annotation_state[node] = self.annotation_state[data.inner];
     }
 

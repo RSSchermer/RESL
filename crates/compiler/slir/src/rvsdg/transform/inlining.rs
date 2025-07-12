@@ -4,8 +4,8 @@ use rustc_hash::FxHashMap;
 
 use crate::cfg::OpSetDiscriminant;
 use crate::rvsdg::{
-    Connectivity, Node, NodeKind, OpCaseToSwitchPredicate, OpGetDiscriminant, Region, Rvsdg,
-    SimpleNode, StateOrigin, ValueInput, ValueOrigin, ValueOutput, ValueUser,
+    Connectivity, Node, NodeKind, OpCaseToSwitchPredicate, OpGetDiscriminant, OpPtrDiscriminantPtr,
+    Region, Rvsdg, SimpleNode, StateOrigin, ValueInput, ValueOrigin, ValueOutput, ValueUser,
 };
 use crate::Module;
 
@@ -130,10 +130,12 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
             Simple(ConstF32(_)) => self.replicate_const_f32_node(node),
             Simple(ConstBool(_)) => self.replicate_const_bool_node(node),
             Simple(ConstPtr(_)) => self.replicate_const_ptr_node(node),
+            Simple(ConstFallback(_)) => self.replicate_const_fallback_node(node),
             Simple(OpAlloca(_)) => self.replicate_op_alloca_node(node),
             Simple(OpLoad(_)) => self.replicate_op_load_node(node),
             Simple(OpStore(_)) => self.replicate_op_store_node(node),
             Simple(OpPtrElementPtr(_)) => self.replicate_op_ptr_element_ptr_node(node),
+            Simple(OpPtrDiscriminantPtr(_)) => self.replicate_op_ptr_discriminant_ptr_node(node),
             Simple(OpPtrVariantPtr(_)) => self.replicate_op_ptr_variant_ptr_node(node),
             Simple(OpExtractElement(_)) => self.replicate_op_extract_element(node),
             Simple(OpGetDiscriminant(_)) => self.replicate_op_get_discriminant_node(node),
@@ -288,6 +290,12 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
             .add_const_ptr(&mut self.module.ty, self.dst_region, pointee_ty, base)
     }
 
+    fn replicate_const_fallback_node(&mut self, node: Node) -> Node {
+        let ty = self.rvsdg[node].expect_const_fallback().ty();
+
+        self.rvsdg.add_const_fallback(self.dst_region, ty)
+    }
+
     fn replicate_op_alloca_node(&mut self, node: Node) -> Node {
         let ty = self.rvsdg[node].expect_op_alloca().ty();
 
@@ -334,6 +342,14 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
         )
     }
 
+    fn replicate_op_ptr_discriminant_ptr_node(&mut self, node: Node) -> Node {
+        let data = self.rvsdg[node].expect_op_ptr_discriminant_ptr();
+        let input = self.mapped_value_input(data.input());
+
+        self.rvsdg
+            .add_op_ptr_discriminant_ptr(self.dst_region, input)
+    }
+
     fn replicate_op_ptr_variant_ptr_node(&mut self, node: Node) -> Node {
         let data = self.rvsdg[node].expect_op_ptr_variant_ptr();
         let input = self.mapped_value_input(data.input());
@@ -369,7 +385,7 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
 
     fn replicate_op_get_discriminant_node(&mut self, node: Node) -> Node {
         let data = self.rvsdg[node].expect_op_get_discriminant();
-        let ptr_input = self.mapped_value_input(data.ptr_input());
+        let ptr_input = self.mapped_value_input(data.input());
         let state_origin = self.mapped_state_origin(&data.state().unwrap().origin);
 
         self.rvsdg
@@ -378,7 +394,7 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
 
     fn replicate_op_set_discriminant_node(&mut self, node: Node) -> Node {
         let data = self.rvsdg[node].expect_op_set_discriminant();
-        let ptr_input = self.mapped_value_input(data.ptr_input());
+        let ptr_input = self.mapped_value_input(data.input());
         let variant_index = data.variant_index();
         let state_origin = self.mapped_state_origin(&data.state().unwrap().origin);
 

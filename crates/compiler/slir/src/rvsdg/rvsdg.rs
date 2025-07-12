@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
 
 use crate::cfg::OpCaseToBranchPredicate;
-use crate::ty::{Type, TypeKind, TypeRegistry, TY_BOOL, TY_F32, TY_I32, TY_PREDICATE, TY_U32};
+use crate::ty::{
+    Type, TypeKind, TypeRegistry, TY_BOOL, TY_F32, TY_I32, TY_PREDICATE, TY_PTR_U32, TY_U32,
+};
 use crate::util::thin_set::ThinSet;
 use crate::{
     thin_set, BinaryOperator, EnumRegistry, Function, Module, StorageBinding, UnaryOperator,
@@ -405,6 +407,18 @@ impl NodeData {
         }
     }
 
+    pub fn is_const_fallback(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::ConstFallback(_)))
+    }
+
+    pub fn expect_const_fallback(&self) -> &ConstFallback {
+        if let NodeKind::Simple(SimpleNode::ConstFallback(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be a fallback value constant")
+        }
+    }
+
     pub fn is_op_alloca(&self) -> bool {
         matches!(self.kind, NodeKind::Simple(SimpleNode::OpAlloca(_)))
     }
@@ -450,6 +464,21 @@ impl NodeData {
             op
         } else {
             panic!("expected node to be a `pointer-element-pointer` operation")
+        }
+    }
+
+    pub fn is_op_ptr_discriminant_ptr(&self) -> bool {
+        matches!(
+            self.kind,
+            NodeKind::Simple(SimpleNode::OpPtrDiscriminantPtr(_))
+        )
+    }
+
+    pub fn expect_op_ptr_discriminant_ptr(&self) -> &OpPtrDiscriminantPtr {
+        if let NodeKind::Simple(SimpleNode::OpPtrDiscriminantPtr(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be a `pointer-discriminant-pointer` operation")
         }
     }
 
@@ -1054,6 +1083,52 @@ impl Connectivity for OpPtrElementPtr {
     }
 }
 
+/// Takes a pointer to an enum as its input and outputs a pointer the the enum's discriminant.
+///
+/// This is a temporary node kind used by enum-replacement. To represent code that interacts with an
+/// enum's discriminant, use [OpGetDiscriminant] and [OpSetDiscriminant] instead.
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OpPtrDiscriminantPtr {
+    input: ValueInput,
+    output: ValueOutput,
+}
+
+impl OpPtrDiscriminantPtr {
+    pub fn input(&self) -> &ValueInput {
+        &self.input
+    }
+
+    pub fn output(&self) -> &ValueOutput {
+        &self.output
+    }
+}
+
+impl Connectivity for OpPtrDiscriminantPtr {
+    fn value_inputs(&self) -> &[ValueInput] {
+        slice::from_ref(&self.input)
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        slice::from_mut(&mut self.input)
+    }
+
+    fn value_outputs(&self) -> &[ValueOutput] {
+        slice::from_ref(&self.output)
+    }
+
+    fn value_outputs_mut(&mut self) -> &mut [ValueOutput] {
+        slice::from_mut(&mut self.output)
+    }
+
+    fn state(&self) -> Option<&State> {
+        None
+    }
+
+    fn state_mut(&mut self) -> Option<&mut State> {
+        None
+    }
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct OpPtrVariantPtr {
     variant_index: u32,
@@ -1154,36 +1229,36 @@ impl Connectivity for OpExtractElement {
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct OpGetDiscriminant {
-    ptr_input: ValueInput,
-    value_output: ValueOutput,
+    input: ValueInput,
+    output: ValueOutput,
     state: State,
 }
 
 impl OpGetDiscriminant {
-    pub fn ptr_input(&self) -> &ValueInput {
-        &self.ptr_input
+    pub fn input(&self) -> &ValueInput {
+        &self.input
     }
 
-    pub fn value_output(&self) -> &ValueOutput {
-        &self.value_output
+    pub fn output(&self) -> &ValueOutput {
+        &self.output
     }
 }
 
 impl Connectivity for OpGetDiscriminant {
     fn value_inputs(&self) -> &[ValueInput] {
-        slice::from_ref(&self.ptr_input)
+        slice::from_ref(&self.input)
     }
 
     fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
-        slice::from_mut(&mut self.ptr_input)
+        slice::from_mut(&mut self.input)
     }
 
     fn value_outputs(&self) -> &[ValueOutput] {
-        slice::from_ref(&self.value_output)
+        slice::from_ref(&self.output)
     }
 
     fn value_outputs_mut(&mut self) -> &mut [ValueOutput] {
-        slice::from_mut(&mut self.value_output)
+        slice::from_mut(&mut self.output)
     }
 
     fn state(&self) -> Option<&State> {
@@ -1198,13 +1273,13 @@ impl Connectivity for OpGetDiscriminant {
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct OpSetDiscriminant {
     variant_index: u32,
-    ptr_input: ValueInput,
+    input: ValueInput,
     state: State,
 }
 
 impl OpSetDiscriminant {
-    pub fn ptr_input(&self) -> &ValueInput {
-        &self.ptr_input
+    pub fn input(&self) -> &ValueInput {
+        &self.input
     }
 
     pub fn variant_index(&self) -> u32 {
@@ -1214,11 +1289,11 @@ impl OpSetDiscriminant {
 
 impl Connectivity for OpSetDiscriminant {
     fn value_inputs(&self) -> &[ValueInput] {
-        slice::from_ref(&self.ptr_input)
+        slice::from_ref(&self.input)
     }
 
     fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
-        slice::from_mut(&mut self.ptr_input)
+        slice::from_mut(&mut self.input)
     }
 
     fn value_outputs(&self) -> &[ValueOutput] {
@@ -1481,6 +1556,51 @@ impl Connectivity for ConstPtr {
     }
 }
 
+/// Represents a "fallback" value of a given type that is used when a determinate (initialized)
+/// value is unknown.
+///
+/// The actual value this will represent depends on the type.
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct ConstFallback {
+    output: ValueOutput,
+}
+
+impl ConstFallback {
+    pub fn ty(&self) -> Type {
+        self.output.ty
+    }
+
+    pub fn output(&self) -> &ValueOutput {
+        &self.output
+    }
+}
+
+impl Connectivity for ConstFallback {
+    fn value_inputs(&self) -> &[ValueInput] {
+        &[]
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        &mut []
+    }
+
+    fn value_outputs(&self) -> &[ValueOutput] {
+        slice::from_ref(&self.output)
+    }
+
+    fn value_outputs_mut(&mut self) -> &mut [ValueOutput] {
+        slice::from_mut(&mut self.output)
+    }
+
+    fn state(&self) -> Option<&State> {
+        None
+    }
+
+    fn state_mut(&mut self) -> Option<&mut State> {
+        None
+    }
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct OpCaseToSwitchPredicate {
     cases: Vec<u32>,
@@ -1718,10 +1838,12 @@ gen_simple_node! {
     ConstF32,
     ConstBool,
     ConstPtr,
+    ConstFallback,
     OpAlloca,
     OpLoad,
     OpStore,
     OpPtrElementPtr,
+    OpPtrDiscriminantPtr,
     OpPtrVariantPtr,
     OpExtractElement,
     OpGetDiscriminant,
@@ -2138,8 +2260,8 @@ impl Rvsdg {
             .collect::<Vec<_>>();
 
         let mut loop_region_results = vec![ValueInput {
-            // First result of the region in the re-entry predicate
-            ty: TY_U32,
+            // First result of the region is the re-entry predicate
+            ty: TY_BOOL,
             origin: ValueOrigin::placeholder(),
         }];
 
@@ -2291,6 +2413,23 @@ impl Rvsdg {
         node
     }
 
+    pub fn add_const_fallback(&mut self, region: Region, ty: Type) -> Node {
+        let node = self.nodes.insert(NodeData {
+            kind: NodeKind::Simple(
+                ConstFallback {
+                    output: ValueOutput::new(ty),
+                }
+                .into(),
+            ),
+            region: Some(region),
+        });
+
+        self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
+
+        node
+    }
+
     pub fn add_op_alloca(
         &mut self,
         type_registry: &mut TypeRegistry,
@@ -2416,6 +2555,26 @@ impl Rvsdg {
         node
     }
 
+    pub fn add_op_ptr_discriminant_ptr(&mut self, region: Region, ptr_input: ValueInput) -> Node {
+        self.validate_node_value_input(region, &ptr_input);
+
+        let node = self.nodes.insert(NodeData {
+            kind: NodeKind::Simple(
+                OpPtrDiscriminantPtr {
+                    input: ptr_input,
+                    output: ValueOutput::new(TY_PTR_U32),
+                }
+                .into(),
+            ),
+            region: Some(region),
+        });
+
+        self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
+
+        node
+    }
+
     pub fn add_op_ptr_variant_ptr(
         &mut self,
         type_registry: &mut TypeRegistry,
@@ -2514,8 +2673,8 @@ impl Rvsdg {
         let node = self.nodes.insert(NodeData {
             kind: NodeKind::Simple(
                 OpGetDiscriminant {
-                    ptr_input,
-                    value_output: ValueOutput::new(TY_U32),
+                    input: ptr_input,
+                    output: ValueOutput::new(TY_U32),
                     state: State {
                         origin: state_origin,
                         user: StateUser::Result, // Temp value
@@ -2545,7 +2704,7 @@ impl Rvsdg {
         let node = self.nodes.insert(NodeData {
             kind: NodeKind::Simple(
                 OpSetDiscriminant {
-                    ptr_input,
+                    input: ptr_input,
                     variant_index,
                     state: State {
                         origin: state_origin,
@@ -4201,7 +4360,7 @@ mod tests {
         assert_eq!(
             rvsdg[loop_node_3].value_outputs()[0],
             ValueOutput {
-                ty: TY_U32,
+                ty: TY_BOOL,
                 users: thin_set![ValueUser::Result(0)],
             }
         );
@@ -4210,7 +4369,7 @@ mod tests {
         assert_eq!(rvsdg[loop_region].value_results().len(), 2);
         assert_eq!(
             rvsdg[loop_region].value_results()[0],
-            ValueInput::output(TY_U32, loop_node_3, 0),
+            ValueInput::output(TY_BOOL, loop_node_3, 0),
         );
         assert_eq!(
             rvsdg[loop_region].value_results()[1],

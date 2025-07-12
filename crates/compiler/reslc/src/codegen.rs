@@ -159,21 +159,21 @@ fn create_slir_artifact(
             )
             .expect("failed to append SLIR RVSDG-initial to SLIR artifact archive");
 
-        // rvsdg::transform::transform(module, rvsdg);
-        //
-        // let rvsdg_transformed_encoding =
-        //     bincode::serde::encode_to_vec(&rvsdg, bincode::config::standard())
-        //         .expect("failed to encode SLIR RVSDG-transformed");
-        //
-        // builder
-        //     .append(
-        //         &Header::new(
-        //             rvsdg_transformed_identifier,
-        //             rvsdg_transformed_encoding.len() as u64,
-        //         ),
-        //         rvsdg_transformed_encoding.as_slice(),
-        //     )
-        //     .expect("failed to append SLIR RVSDG-transformed to SLIR artifact archive");
+        rvsdg::transform::transform(module, rvsdg);
+
+        let rvsdg_transformed_encoding =
+            bincode::serde::encode_to_vec(&rvsdg, bincode::config::standard())
+                .expect("failed to encode SLIR RVSDG-transformed");
+
+        builder
+            .append(
+                &Header::new(
+                    rvsdg_transformed_identifier,
+                    rvsdg_transformed_encoding.len() as u64,
+                ),
+                rvsdg_transformed_encoding.as_slice(),
+            )
+            .expect("failed to append SLIR RVSDG-transformed to SLIR artifact archive");
     }
 }
 
