@@ -269,11 +269,7 @@ impl EmulationContext {
         let output_ty = data.value_output().ty;
         let state_origin = data.state().unwrap().origin;
         let ptr_origin = data.ptr_input().origin;
-
-        dbg!("-----------------------------------");
         let info = self.resolve_pointer_emulation_info(rvsdg, region, ptr_origin);
-
-        dbg!(info);
 
         let gen_op_load = |rvsdg: &mut Rvsdg,
                            region: Region,
@@ -416,7 +412,6 @@ impl EmulationContext {
         region: Region,
         argument: u32,
     ) -> PointerEmulationInfo {
-        dbg!("argument info");
         let owner = rvsdg[region].owner();
 
         match rvsdg[owner].kind() {
@@ -939,17 +934,6 @@ where
             self.state_origin
         };
 
-        for value_input in value_inputs.iter() {
-            match value_input.origin {
-                ValueOrigin::Argument(a) => {
-                    dbg!(format!("argument {}", a));
-                }
-                ValueOrigin::Output { producer, .. } => {
-                    dbg!(&self.rvsdg[producer]);
-                }
-            }
-        }
-
         let switch_node =
             self.rvsdg
                 .add_switch(region, value_inputs, value_outputs, Some(state_origin));
@@ -1250,6 +1234,258 @@ mod tests {
         assert!(
             rvsdg[switch_node].value_outputs()[0].users.is_empty(),
             "original switch node should no longer have any users"
+        );
+    }
+
+    #[test]
+    fn test_emulate_single_switch_output_load_inside_switch() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![FnArg {
+                    ty: TY_PREDICATE,
+                    shader_io_binding: None,
+                }],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let ptr_0 = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let ptr_1 = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+
+        let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
+
+        let switch_0_node = rvsdg.add_switch(
+            region,
+            vec![
+                ValueInput::argument(TY_PREDICATE, 0),
+                ValueInput::output(ptr_ty, ptr_0, 0),
+                ValueInput::output(ptr_ty, ptr_1, 0),
+            ],
+            vec![ValueOutput::new(ptr_ty)],
+            None,
+        );
+
+        let switch_0_branch_0 = rvsdg.add_switch_branch(switch_0_node);
+
+        rvsdg.reconnect_region_result(switch_0_branch_0, 0, ValueOrigin::Argument(0));
+
+        let switch_0_branch_1 = rvsdg.add_switch_branch(switch_0_node);
+
+        rvsdg.reconnect_region_result(switch_0_branch_1, 0, ValueOrigin::Argument(1));
+
+        let switch_1_node = rvsdg.add_switch(
+            region,
+            vec![
+                ValueInput::argument(TY_PREDICATE, 0),
+                ValueInput::output(ptr_ty, switch_0_node, 0),
+            ],
+            vec![ValueOutput::new(TY_U32)],
+            Some(StateOrigin::Argument),
+        );
+
+        let switch_1_branch_0 = rvsdg.add_switch_branch(switch_1_node);
+
+        let load_op = rvsdg.add_op_load(
+            switch_1_branch_0,
+            ValueInput::argument(ptr_ty, 0),
+            TY_U32,
+            StateOrigin::Argument,
+        );
+
+        rvsdg.reconnect_region_result(
+            switch_1_branch_0,
+            0,
+            ValueOrigin::Output {
+                producer: load_op,
+                output: 0,
+            },
+        );
+
+        let switch_1_branch_1 = rvsdg.add_switch_branch(switch_1_node);
+
+        let fallback = rvsdg.add_const_u32(switch_1_branch_1, 0);
+
+        rvsdg.reconnect_region_result(
+            switch_1_branch_1,
+            0,
+            ValueOrigin::Output {
+                producer: fallback,
+                output: 0,
+            },
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: switch_1_node,
+                output: 0,
+            },
+        );
+
+        let mut emulation_context = EmulationContext::new();
+
+        emulation_context.emulate_op_load(&mut module.ty, &mut rvsdg, load_op);
+
+        let ValueOrigin::Output {
+            producer: emulation_switch_node,
+            output: 0,
+        } = rvsdg[switch_1_branch_0].value_results()[0].origin
+        else {
+            panic!("the second switch's result should connect to the first output of a node")
+        };
+
+        let emulation_switch_data = rvsdg[emulation_switch_node].expect_switch();
+
+        assert_eq!(
+            emulation_switch_data.value_inputs(),
+            &[
+                ValueInput::argument(TY_PREDICATE, 1),
+                ValueInput::argument(ptr_ty, 2),
+                ValueInput::argument(ptr_ty, 3),
+            ]
+        );
+        assert_eq!(
+            emulation_switch_data.value_outputs(),
+            &[ValueOutput {
+                ty: TY_U32,
+                users: thin_set![ValueUser::Result(0)]
+            }]
+        );
+
+        assert_eq!(rvsdg[switch_1_node].value_inputs(), &[
+            ValueInput::argument(TY_PREDICATE, 0),
+            ValueInput::output(ptr_ty, switch_0_node, 0),
+            ValueInput::argument(TY_PREDICATE, 0),
+            ValueInput::output(ptr_ty, ptr_0, 0),
+            ValueInput::output(ptr_ty, ptr_1, 0),
+        ], "the predicate and both alloca nodes have been added as inputs to the second switch node");
+
+        assert!(
+            rvsdg[switch_1_branch_0].value_arguments()[0]
+                .users
+                .is_empty(),
+            "the second switch's variable pointer argument in the first branch should no longer \
+            have any users"
+        );
+        assert_eq!(
+            &rvsdg[switch_1_branch_0].value_arguments()[1].users,
+            &thin_set![ValueUser::Input {
+                consumer: emulation_switch_node,
+                input: 0
+            }],
+            "the newly added predicate argument in the second switch's first branch should be used \
+            by the emulation node"
+        );
+        assert_eq!(
+            &rvsdg[switch_1_branch_0].value_arguments()[2].users,
+            &thin_set![ValueUser::Input {
+                consumer: emulation_switch_node,
+                input: 1
+            }],
+            "the newly added ptr_0 argument in the second switch's first branch should be used \
+            by the emulation node"
+        );
+        assert_eq!(
+            &rvsdg[switch_1_branch_0].value_arguments()[3].users,
+            &thin_set![ValueUser::Input {
+                consumer: emulation_switch_node,
+                input: 2
+            }],
+            "the newly added ptr_1 argument in the second switch's first branch should be used \
+            by the emulation node"
+        );
+
+        assert!(
+            rvsdg[switch_1_branch_1].value_arguments()[0]
+                .users
+                .is_empty(),
+            "the second switch's variable pointer argument in the second branch should not have \
+            any users"
+        );
+        assert!(
+            rvsdg[switch_1_branch_1].value_arguments()[1]
+                .users
+                .is_empty(),
+            "the newly added predicate argument in the second switch's second branch should not \
+            have any users"
+        );
+        assert!(
+            rvsdg[switch_1_branch_1].value_arguments()[2]
+                .users
+                .is_empty(),
+            "the newly added ptr_0 argument in the second switch's second branch should not \
+            have any users"
+        );
+        assert!(
+            rvsdg[switch_1_branch_1].value_arguments()[3]
+                .users
+                .is_empty(),
+            "the newly added ptr_1 argument in the second switch's second branch should not \
+            have any users"
+        );
+
+        assert_eq!(
+            &rvsdg[region].value_arguments()[0].users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: switch_0_node,
+                    input: 0,
+                },
+                ValueUser::Input {
+                    consumer: switch_1_node,
+                    input: 0,
+                },
+                ValueUser::Input {
+                    consumer: switch_1_node,
+                    input: 2,
+                }
+            ],
+            "the second switch node should have been added as a user to the predicate function \
+            argument"
+        );
+
+        assert_eq!(
+            &rvsdg[ptr_0].expect_op_alloca().value_output().users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: switch_0_node,
+                    input: 1,
+                },
+                ValueUser::Input {
+                    consumer: switch_1_node,
+                    input: 3,
+                }
+            ],
+            "the second switch node should have been added as a user to the first alloca node"
+        );
+
+        assert_eq!(
+            &rvsdg[ptr_1].expect_op_alloca().value_output().users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: switch_0_node,
+                    input: 2,
+                },
+                ValueUser::Input {
+                    consumer: switch_1_node,
+                    input: 4,
+                }
+            ],
+            "the second switch node should have been added as a user to the second alloca node"
         );
     }
 
