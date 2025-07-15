@@ -114,5 +114,5 @@ macro_rules! thin_set {
 
         set
     });
-    ($($x:expr,)*) => (thin_vec![$($x),*]);
+    ($($x:expr,)*) => (thin_set![$($x),*]);
 }
