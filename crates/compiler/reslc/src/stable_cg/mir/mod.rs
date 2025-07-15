@@ -137,6 +137,8 @@ pub fn codegen_mir<'a, Bx: BuilderMethods<'a>>(cx: &'a Bx::CodegenCx, instance: 
         return;
     };
 
+    // mir.dump(&mut io::stdout(), instance.name().as_str());
+
     let Ok(fn_abi) = instance.fn_abi() else {
         bug!("fn ABI should be available during codegen")
     };

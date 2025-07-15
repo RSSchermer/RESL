@@ -99,7 +99,9 @@ impl PointerAnalyzer {
             Switch(_) | Loop(_) => PointerAction::VariablePointerEmulation,
             Simple(OpAlloca(_)) if !element_access => PointerAction::Promotion(node),
             Simple(OpPtrElementPtr(op)) => Self::analyze_input(rvsdg, node, 0, true),
-            Simple(OpAlloca(_) | ConstPtr(_) | OpLoad(_)) => PointerAction::Nothing,
+            Simple(OpAlloca(_) | ConstPtr(_) | ConstFallback(_) | OpLoad(_)) => {
+                PointerAction::Nothing
+            }
             _ => unreachable!("node kind cannot output a pointer"),
         }
     }
@@ -236,7 +238,6 @@ impl MemoryPromoterLegalizer {
     }
 
     fn visit_state_user(&mut self, ty: &mut TypeRegistry, rvsdg: &mut Rvsdg) -> bool {
-        dbg!(self.state_origin);
         let (current_region, current_origin) = self.state_origin;
 
         let current_user = match current_origin {
@@ -248,12 +249,6 @@ impl MemoryPromoterLegalizer {
                     .user
             }
         };
-
-        dbg!(current_user);
-
-        if let Some(node) = current_user.as_node() {
-            dbg!(&rvsdg[node]);
-        }
 
         match current_user {
             StateUser::Result => {
@@ -279,7 +274,6 @@ impl MemoryPromoterLegalizer {
     }
 
     fn visit_switch(&mut self, ty: &mut TypeRegistry, rvsdg: &mut Rvsdg, switch_node: Node) {
-        dbg!("switch");
         let region = rvsdg[switch_node].region();
         let switch_data = rvsdg[switch_node].expect_switch();
         let branch_count = switch_data.branches().len();
@@ -335,7 +329,6 @@ impl MemoryPromoterLegalizer {
     }
 
     fn visit_loop(&mut self, ty: &mut TypeRegistry, rvsdg: &mut Rvsdg, loop_node: Node) {
-        dbg!("loop");
         let region = rvsdg[loop_node].region();
         let loop_region = rvsdg[loop_node].expect_loop().loop_region();
 
@@ -404,7 +397,6 @@ impl MemoryPromoterLegalizer {
     }
 
     fn visit_op_store(&mut self, ty: &mut TypeRegistry, rvsdg: &mut Rvsdg, op_store: Node) {
-        dbg!("store");
         let region = rvsdg[op_store].region();
         let store_data = rvsdg[op_store].expect_op_store();
         let pointer_origin = store_data.ptr_input().origin;
@@ -440,12 +432,9 @@ impl MemoryPromoterLegalizer {
     }
 
     fn visit_op_load(&mut self, ty: &mut TypeRegistry, rvsdg: &mut Rvsdg, op_load: Node) {
-        dbg!("load");
         let region = rvsdg[op_load].region();
         let origin = rvsdg[op_load].expect_op_load().ptr_input().origin;
         let action = self.pointer_analyzer.resolve_action(rvsdg, region, origin);
-
-        dbg!(action);
 
         match action {
             PointerAction::Promotion(op_alloca) => {

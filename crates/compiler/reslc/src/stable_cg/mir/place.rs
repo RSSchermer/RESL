@@ -186,7 +186,13 @@ impl<'a, V: CodegenObject> PlaceRef<V> {
         bx: &mut Bx,
         variant_index: VariantIdx,
     ) {
-        bx.set_discriminant(self.val.llval, variant_index);
+        match self.layout.layout.shape().variants {
+            VariantsShape::Empty => bug!("cannot set discriminant on a type without variants"),
+            VariantsShape::Single { index } => assert_eq!(index, variant_index),
+            VariantsShape::Multiple { .. } => {
+                bx.set_discriminant(self.val.llval, variant_index);
+            }
+        }
     }
 
     pub fn project_downcast<Bx: BuilderMethods<'a, Value = V>>(

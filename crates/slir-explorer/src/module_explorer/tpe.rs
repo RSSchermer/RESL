@@ -45,7 +45,7 @@ pub fn Type(module: StoredValue<ModuleData>, ty: slir::ty::Type) -> impl IntoVie
             }
         },
         TypeKind::Array { base, count } => {
-            view! { "array<" <Type module ty=*base/> ", count>" }.into_any()
+            view! { "array<" <Type module ty=*base/> ", " {*count} ">" }.into_any()
         }
         TypeKind::Struct(s) => {
             let s = s.to_usize();

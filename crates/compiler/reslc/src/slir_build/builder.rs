@@ -392,6 +392,7 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
     }
 
     fn set_discriminant(&mut self, ptr: Self::Value, variant_index: VariantIdx) {
+        panic!("adsf");
         let ptr = ptr.expect_value();
         let variant_index = variant_index.to_index() as u32;
 

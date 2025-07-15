@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use leptos::leptos_dom::logging::console_log;
 use leptos::prelude::{StoredValue, *};
 use leptos::svg::*;
 use leptos::{component, IntoView};

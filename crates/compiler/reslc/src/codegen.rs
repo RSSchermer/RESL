@@ -124,16 +124,6 @@ fn create_slir_artifact(
 
     let mut builder = GnuBuilder::new(file, identifiers);
 
-    let module_encoding = bincode::serde::encode_to_vec(&module, bincode::config::standard())
-        .expect("failed to encode SLIR module");
-
-    builder
-        .append(
-            &Header::new(module_identifier, module_encoding.len() as u64),
-            module_encoding.as_slice(),
-        )
-        .expect("failed to append SLIR module to SLIR artifact archive");
-
     let cfg_encoding = bincode::serde::encode_to_vec(&cfg, bincode::config::standard())
         .expect("failed to encode SLIR Control-Flow Graph");
 
@@ -175,6 +165,16 @@ fn create_slir_artifact(
             )
             .expect("failed to append SLIR RVSDG-transformed to SLIR artifact archive");
     }
+
+    let module_encoding = bincode::serde::encode_to_vec(&module, bincode::config::standard())
+        .expect("failed to encode SLIR module");
+
+    builder
+        .append(
+            &Header::new(module_identifier, module_encoding.len() as u64),
+            module_encoding.as_slice(),
+        )
+        .expect("failed to append SLIR module to SLIR artifact archive");
 }
 
 pub fn codegen_shader_modules(cx: &Cx) -> (slir::Module, slir::cfg::Cfg) {

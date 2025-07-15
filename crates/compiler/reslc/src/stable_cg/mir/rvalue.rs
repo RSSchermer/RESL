@@ -424,7 +424,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                 for (i, operand) in operands.iter().enumerate() {
                     let op = self.codegen_operand(bx, operand);
 
-                    // Do not generate stores and GEPis for zero-sized fields.
+                    // Do not generate stores for zero-sized fields.
                     if !op.layout.layout.shape().is_1zst() {
                         let field_index = active_field_index.unwrap_or(i);
 

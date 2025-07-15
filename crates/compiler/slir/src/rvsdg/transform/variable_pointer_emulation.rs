@@ -21,6 +21,14 @@ enum EmulationTreeNode {
     Leaf(LeafNode),
 }
 
+impl EmulationTreeNode {
+    fn assign_child_inputs(&mut self) {
+        if let EmulationTreeNode::Branching(node) = self {
+            node.assign_child_inputs();
+        }
+    }
+}
+
 impl From<BranchingNode> for EmulationTreeNode {
     fn from(branching: BranchingNode) -> Self {
         EmulationTreeNode::Branching(branching)
@@ -41,10 +49,8 @@ struct BranchingNode {
 }
 
 impl BranchingNode {
-    fn assign_argument_inputs(&mut self, region: Region) {
-        let assigner = ChildInputAssigner { region };
-
-        assigner.visit_branching_node(self)
+    fn assign_child_inputs(&mut self) {
+        ChildInputAssigner.visit_branching_node(self)
     }
 }
 
@@ -163,6 +169,31 @@ impl SwitchEmulationRegistry {
         if branch_end >= emulation_values.end {
             rvsdg.add_switch_output(switch_node, TY_U32);
 
+            // Connect a `0` as a fallback value for all branches except for the current branch
+            // (since for the current branch we should expect that the reason an output is
+            // requested is to connect something to it). Other branches that request an output
+            // later and may get an output that already has such a placeholder `0` attached to it
+            // and may reconnect the output to some other input. This should leave the placeholder
+            // `0` node unused and ready to be eliminated by a dead-connectible-elimination pass.
+            let branch_count = rvsdg[switch_node].expect_switch().branches().len();
+
+            for i in 0..branch_count {
+                let current_branch = rvsdg[switch_node].expect_switch().branches()[i];
+
+                if i != branch as usize {
+                    let placeholder = rvsdg.add_const_u32(current_branch, 0);
+
+                    rvsdg.reconnect_region_result(
+                        current_branch,
+                        emulation_values.end,
+                        ValueOrigin::Output {
+                            producer: placeholder,
+                            output: 0,
+                        },
+                    );
+                }
+            }
+
             emulation_values.end += 1;
         }
 
@@ -181,9 +212,7 @@ impl SwitchEmulationRegistry {
 ///
 /// These input sets help construct the sets of switch node inputs when constructing a node graph
 /// to emulate a load or store operation on a variable pointer that requires emulation.
-struct ChildInputAssigner {
-    region: Region,
-}
+struct ChildInputAssigner;
 
 impl ChildInputAssigner {
     fn visit_branching_node(&self, node: &mut BranchingNode) {
@@ -234,13 +263,17 @@ impl EmulationContext {
         rvsdg: &mut Rvsdg,
         op_load: Node,
     ) {
-        let outer_region = rvsdg[op_load].region();
+        let region = rvsdg[op_load].region();
         let data = rvsdg[op_load].expect_op_load();
         let pointer_ty = data.ptr_input().ty;
         let output_ty = data.value_output().ty;
         let state_origin = data.state().unwrap().origin;
         let ptr_origin = data.ptr_input().origin;
-        let info = self.resolve_pointer_emulation_info(rvsdg, outer_region, ptr_origin);
+
+        dbg!("-----------------------------------");
+        let info = self.resolve_pointer_emulation_info(rvsdg, region, ptr_origin);
+
+        dbg!(info);
 
         let gen_op_load = |rvsdg: &mut Rvsdg,
                            region: Region,
@@ -253,7 +286,7 @@ impl EmulationContext {
         let mut emulator = Emulator {
             type_registry,
             rvsdg,
-            outer_region,
+            outer_region: region,
             state_origin,
             pointer_ty,
             output_ty: Some(output_ty),
@@ -272,7 +305,7 @@ impl EmulationContext {
             let user = rvsdg[op_load].expect_op_load().value_output().users[i];
 
             rvsdg.reconnect_value_user(
-                outer_region,
+                region,
                 user,
                 ValueOrigin::Output {
                     producer: emulated,
@@ -361,6 +394,7 @@ impl EmulationContext {
                 Loop(_) => self.create_loop_output_info(rvsdg, producer, output),
                 Simple(OpPtrElementPtr(_)) => self.create_ptr_element_ptr_info(rvsdg, producer),
                 Simple(OpAlloca(_)) => self.create_alloca_info(rvsdg, producer),
+                Simple(ConstFallback(_)) => self.create_fallback_info(rvsdg, producer),
                 Simple(OpLoad(_)) => panic!(
                     "cannot emulate a pointer for which the access chain \
                 information cannot be tracked through value-flow"
@@ -382,6 +416,7 @@ impl EmulationContext {
         region: Region,
         argument: u32,
     ) -> PointerEmulationInfo {
+        dbg!("argument info");
         let owner = rvsdg[region].owner();
 
         match rvsdg[owner].kind() {
@@ -448,6 +483,7 @@ impl EmulationContext {
             .visit_value_origins_mut(&mut |outer_origin| {
                 *outer_origin = resolve_inner_origin(rvsdg, switch_node, *outer_origin);
             });
+        info.emulation_root.assign_child_inputs();
 
         info
     }
@@ -505,6 +541,7 @@ impl EmulationContext {
             .visit_value_origins_mut(&mut |outer_origin| {
                 *outer_origin = resolve_inner_origin(rvsdg, loop_node, *outer_origin);
             });
+        info.emulation_root.assign_child_inputs();
 
         info
     }
@@ -561,7 +598,7 @@ impl EmulationContext {
         }
 
         // Helper function to find or create a pointer value origin outside the switch node that
-        // represents the same value as the given `inner_origin` inside the loop node
+        // represents the same value as the given `inner_origin` inside the switch node
         fn resolve_ptr_outer_origin(
             rvsdg: &mut Rvsdg,
             switch_node: Node,
@@ -575,7 +612,7 @@ impl EmulationContext {
             // corresponding input.
 
             let ValueOrigin::Argument(argument) = inner_origin else {
-                panic!("originating pointer value must originate outside the loop region")
+                panic!("originating pointer value must originate outside the switch region")
             };
 
             // The argument's corresponding input is at an index 1 greater than the argument's
@@ -585,7 +622,6 @@ impl EmulationContext {
             rvsdg[switch_node].value_inputs()[input as usize].origin
         }
 
-        let outer_region = rvsdg[switch_node].region();
         let switch_data = rvsdg[switch_node].expect_switch();
         let pointer_ty = switch_data.value_outputs()[output as usize].ty;
         let branch_count = switch_data.branches().len();
@@ -625,7 +661,7 @@ impl EmulationContext {
             child_inputs: Default::default(),
         };
 
-        branching_node.assign_argument_inputs(outer_region);
+        branching_node.assign_child_inputs();
 
         PointerEmulationInfo {
             pointer_ty,
@@ -715,6 +751,7 @@ impl EmulationContext {
             .visit_ptr_origins_mut(&mut |inner_origin| {
                 *inner_origin = resolve_ptr_outer_origin(rvsdg, loop_node, *inner_origin);
             });
+        info.emulation_root.assign_child_inputs();
 
         info
     }
@@ -757,6 +794,25 @@ impl EmulationContext {
 
         PointerEmulationInfo {
             pointer_ty: rvsdg[op_alloca].expect_op_alloca().value_output().ty,
+            emulation_root: emulation_root.into(),
+        }
+    }
+
+    fn create_fallback_info(
+        &mut self,
+        rvsdg: &Rvsdg,
+        const_fallback: Node,
+    ) -> PointerEmulationInfo {
+        let emulation_root = LeafNode {
+            root_pointer: ValueOrigin::Output {
+                producer: const_fallback,
+                output: 0,
+            },
+            access_chain: vec![],
+        };
+
+        PointerEmulationInfo {
+            pointer_ty: rvsdg[const_fallback].expect_const_fallback().ty(),
             emulation_root: emulation_root.into(),
         }
     }
@@ -882,6 +938,17 @@ where
             // to the provided state origin for the original load/store operation.
             self.state_origin
         };
+
+        for value_input in value_inputs.iter() {
+            match value_input.origin {
+                ValueOrigin::Argument(a) => {
+                    dbg!(format!("argument {}", a));
+                }
+                ValueOrigin::Output { producer, .. } => {
+                    dbg!(&self.rvsdg[producer]);
+                }
+            }
+        }
 
         let switch_node =
             self.rvsdg

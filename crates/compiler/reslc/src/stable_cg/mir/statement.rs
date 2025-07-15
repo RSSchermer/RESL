@@ -87,9 +87,14 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                 place,
                 variant_index,
             } => {
-                todo!()
-                // self.codegen_place(bx, place.as_ref())
-                //     .codegen_set_discr(bx, variant_index);
+                self.codegen_place(
+                    bx,
+                    mir::visit::PlaceRef {
+                        local: place.local,
+                        projection: &place.projection,
+                    },
+                )
+                .codegen_set_discr(bx, *variant_index);
             }
             mir::StatementKind::Deinit(..) => {
                 // For now, don't codegen this to anything. In the future it may be worth

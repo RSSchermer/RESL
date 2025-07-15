@@ -8,6 +8,7 @@ members = [
     "tests/examples/hello_world",
     "tests/examples/simple_enum",
     "tests/examples/simple_lib",
+    "tests/examples/slice",
     "tests/examples/variable_pointers",
     "tests/examples/workgroup_binding",
 ]
