@@ -30,6 +30,7 @@ extern crate rustc_target;
 extern crate stable_mir;
 
 mod abi;
+mod artifact;
 mod attr;
 mod check;
 mod codegen;

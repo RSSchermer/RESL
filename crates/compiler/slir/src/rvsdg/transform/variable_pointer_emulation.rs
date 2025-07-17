@@ -44,29 +44,29 @@ impl From<LeafNode> for EmulationTreeNode {
 }
 
 /// Represents a branching node in a variable pointer emulation program description.
-/// 
+///
 /// This will translate to a [Switch] node when constructing the emulation program.
 #[derive(Clone, Debug)]
 struct BranchingNode {
     /// The [ValueOrigin] for the branch selector predicate, relative to the root emulation node.
-    /// 
+    ///
     /// For the root emulation switch node, this directly identifies the branch selector input. For
-    /// a switch node nested deeper in the pointer emulation program, this needs to be resolved 
+    /// a switch node nested deeper in the pointer emulation program, this needs to be resolved
     /// against the parent [BranchingNode]'s [child_inputs].
     branch_selector: ValueOrigin,
-    
+
     /// The branches of the node.
-    /// 
+    ///
     /// Each branch will translate to its own [Region] in the [Switch] node when constructing the
-    /// emulation program. 
+    /// emulation program.
     branches: Vec<EmulationTreeNode>,
-    
-    /// The complete set of [ValueOrigin]s used by the child nodes (branches) of this branching 
+
+    /// The complete set of [ValueOrigin]s used by the child nodes (branches) of this branching
     /// node.
-    /// 
+    ///
     /// These map to inputs/arguments for the [Switch] node when constructing the emulation program
     /// in index order.
-    /// 
+    ///
     /// Child nodes look to map a [ValueOrigin] that is relative to the emulation root region, to
     /// the index of the argument at which their direct parent node makes the value available to
     /// its child nodes.
@@ -80,13 +80,13 @@ impl BranchingNode {
 }
 
 /// Represents a leaf node in a variable pointer emulation program description.
-/// 
+///
 /// A leaf node resolves to a pointer without any further branching.
 #[derive(Clone, Debug)]
 struct LeafNode {
     /// A pointer to the root identifier of the pointer that this leaf emulates.
     root_pointer: ValueOrigin,
-    
+
     /// A complete access chain that will refine the [root_identifier] into the pointer that this
     /// leave emulates.
     access_chain: Vec<ElementIndex>,
@@ -155,7 +155,7 @@ impl EmulationTreeNode {
 
 /// Stores information about the extra values that have been added to a switch node to make inner
 /// values available outside the node for pointer emulation.
-/// 
+///
 /// See [SwitchEmulationRegistry] for details.
 struct SwitchEmulationValues {
     start: u32,
@@ -184,7 +184,7 @@ impl SwitchEmulationRegistry {
     }
 
     /// Returns the index of the next available output for the given [branch].
-    /// 
+    ///
     /// This may add a new output for the [switch_node] if no output is currently available. In that
     /// case, for each branch other than the requested [branch], the corresponding new region result
     /// will be connected to a placeholder `0u32` constant value.
