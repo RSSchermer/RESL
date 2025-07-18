@@ -586,3 +586,596 @@ pub fn entry_points_enum_replacement(module: &mut Module, rvsdg: &mut Rvsdg) {
         replacer.replace_in_fn(module, rvsdg, entry_point);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::iter;
+
+    use super::*;
+    use crate::rvsdg::{StateOrigin, ValueOutput};
+    use crate::ty::{TY_DUMMY, TY_PREDICATE};
+    use crate::{thin_set, EnumData, FnArg, FnSig, StructData, StructField, Symbol};
+
+    #[test]
+    fn test_enum_replacement() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![FnArg {
+                    ty: TY_PREDICATE,
+                    shader_io_binding: None,
+                }],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new();
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let variant_0 = module.structs.register(StructData {
+            fields: vec![StructField {
+                offset: 0,
+                ty: TY_U32,
+            }],
+        });
+        let variant_0_ty = module.ty.register(TypeKind::Struct(variant_0));
+        let variant_0_ptr_ty = module.ty.register(TypeKind::Ptr(variant_0_ty));
+
+        let variant_1 = module.structs.register(StructData {
+            fields: vec![StructField {
+                offset: 0,
+                ty: TY_U32,
+            }],
+        });
+        let variant_1_ty = module.ty.register(TypeKind::Struct(variant_1));
+        let variant_1_ptr_ty = module.ty.register(TypeKind::Ptr(variant_1_ty));
+
+        let enum_handle = module.enums.register(EnumData {
+            variants: vec![variant_0, variant_1],
+        });
+        let enum_ty = module.ty.register(TypeKind::Enum(enum_handle));
+        let enum_ptr_ty = module.ty.register(TypeKind::Ptr(enum_ty));
+
+        let alloca_node = rvsdg.add_op_alloca(&mut module.ty, region, enum_ty);
+        let switch_0_node = rvsdg.add_switch(
+            region,
+            vec![
+                ValueInput::argument(TY_PREDICATE, 0),
+                ValueInput::output(enum_ptr_ty, alloca_node, 0),
+            ],
+            vec![],
+            Some(StateOrigin::Argument),
+        );
+
+        let switch_0_branch_0 = rvsdg.add_switch_branch(switch_0_node);
+
+        let switch_0_variant_0_node = rvsdg.add_op_ptr_variant_ptr(
+            &mut module.ty,
+            &module.enums,
+            switch_0_branch_0,
+            ValueInput::argument(enum_ptr_ty, 0),
+            0,
+        );
+        let switch_0_index_0_node = rvsdg.add_const_u32(switch_0_branch_0, 0);
+        let switch_0_element_0_node = rvsdg.add_op_ptr_element_ptr(
+            &mut module.ty,
+            switch_0_branch_0,
+            TY_U32,
+            ValueInput::output(variant_0_ptr_ty, switch_0_variant_0_node, 0),
+            [ValueInput::output(TY_U32, switch_0_index_0_node, 0)],
+        );
+        let switch_0_value_0_node = rvsdg.add_const_u32(switch_0_branch_0, 0);
+        let switch_0_store_0_node = rvsdg.add_op_store(
+            switch_0_branch_0,
+            ValueInput::output(TY_PTR_U32, switch_0_element_0_node, 0),
+            ValueInput::output(TY_U32, switch_0_value_0_node, 0),
+            StateOrigin::Argument,
+        );
+        let switch_0_set_discr_0_node = rvsdg.add_op_set_discriminant(
+            switch_0_branch_0,
+            ValueInput::argument(enum_ptr_ty, 0),
+            0,
+            StateOrigin::Node(switch_0_store_0_node),
+        );
+
+        let switch_0_branch_1 = rvsdg.add_switch_branch(switch_0_node);
+
+        let switch_0_variant_1_node = rvsdg.add_op_ptr_variant_ptr(
+            &mut module.ty,
+            &module.enums,
+            switch_0_branch_1,
+            ValueInput::argument(enum_ptr_ty, 0),
+            1,
+        );
+        let switch_0_index_1_node = rvsdg.add_const_u32(switch_0_branch_1, 0);
+        let switch_0_element_1_node = rvsdg.add_op_ptr_element_ptr(
+            &mut module.ty,
+            switch_0_branch_1,
+            TY_U32,
+            ValueInput::output(variant_1_ptr_ty, switch_0_variant_1_node, 0),
+            [ValueInput::output(TY_U32, switch_0_index_1_node, 0)],
+        );
+        let switch_0_value_1_node = rvsdg.add_const_u32(switch_0_branch_1, 0);
+        let switch_0_store_1_node = rvsdg.add_op_store(
+            switch_0_branch_1,
+            ValueInput::output(TY_PTR_U32, switch_0_element_1_node, 0),
+            ValueInput::output(TY_U32, switch_0_value_1_node, 0),
+            StateOrigin::Argument,
+        );
+        let switch_0_set_discr_1_node = rvsdg.add_op_set_discriminant(
+            switch_0_branch_1,
+            ValueInput::argument(enum_ptr_ty, 0),
+            1,
+            StateOrigin::Node(switch_0_store_1_node),
+        );
+
+        let get_discr_node = rvsdg.add_op_get_discriminant(
+            region,
+            ValueInput::output(enum_ptr_ty, alloca_node, 0),
+            StateOrigin::Node(switch_0_node),
+        );
+        let switch_1_predicate = rvsdg.add_op_u32_to_switch_predicate(
+            region,
+            2,
+            ValueInput::output(TY_U32, get_discr_node, 0),
+        );
+        let switch_1_node = rvsdg.add_switch(
+            region,
+            vec![
+                ValueInput::output(TY_PREDICATE, switch_1_predicate, 0),
+                ValueInput::output(enum_ptr_ty, alloca_node, 0),
+            ],
+            vec![ValueOutput::new(TY_U32)],
+            Some(StateOrigin::Node(get_discr_node)),
+        );
+
+        let switch_1_branch_0 = rvsdg.add_switch_branch(switch_1_node);
+        let switch_1_variant_0_node = rvsdg.add_op_ptr_variant_ptr(
+            &mut module.ty,
+            &module.enums,
+            switch_1_branch_0,
+            ValueInput::argument(enum_ptr_ty, 0),
+            0,
+        );
+        let switch_1_index_0_node = rvsdg.add_const_u32(switch_1_branch_0, 0);
+        let switch_1_element_0_node = rvsdg.add_op_ptr_element_ptr(
+            &mut module.ty,
+            switch_1_branch_0,
+            TY_U32,
+            ValueInput::output(variant_0_ptr_ty, switch_1_variant_0_node, 0),
+            [ValueInput::output(TY_U32, switch_1_index_0_node, 0)],
+        );
+        let switch_1_load_0_node = rvsdg.add_op_load(
+            switch_1_branch_0,
+            ValueInput::output(TY_PTR_U32, switch_1_element_0_node, 0),
+            TY_U32,
+            StateOrigin::Argument,
+        );
+
+        rvsdg.reconnect_region_result(
+            switch_1_branch_0,
+            0,
+            ValueOrigin::Output {
+                producer: switch_1_load_0_node,
+                output: 0,
+            },
+        );
+
+        let switch_1_branch_1 = rvsdg.add_switch_branch(switch_1_node);
+        let switch_1_variant_1_node = rvsdg.add_op_ptr_variant_ptr(
+            &mut module.ty,
+            &module.enums,
+            switch_1_branch_1,
+            ValueInput::argument(enum_ptr_ty, 0),
+            1,
+        );
+        let switch_1_index_1_node = rvsdg.add_const_u32(switch_1_branch_1, 0);
+        let switch_1_element_1_node = rvsdg.add_op_ptr_element_ptr(
+            &mut module.ty,
+            switch_1_branch_1,
+            TY_U32,
+            ValueInput::output(variant_1_ptr_ty, switch_1_variant_1_node, 0),
+            [ValueInput::output(TY_U32, switch_1_index_1_node, 0)],
+        );
+        let switch_1_load_1_node = rvsdg.add_op_load(
+            switch_1_branch_1,
+            ValueInput::output(TY_PTR_U32, switch_1_element_1_node, 0),
+            TY_U32,
+            StateOrigin::Argument,
+        );
+
+        rvsdg.reconnect_region_result(
+            switch_1_branch_1,
+            0,
+            ValueOrigin::Output {
+                producer: switch_1_load_1_node,
+                output: 0,
+            },
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: switch_1_node,
+                output: 0,
+            },
+        );
+
+        let mut replacer = EnumAllocaReplacer::new();
+
+        replacer.replace_in_fn(&mut module, &mut rvsdg, function);
+
+        let switch_0_data = rvsdg[switch_0_node].expect_switch();
+
+        // The second input of the first switch node (that was originally the enum pointer input)
+        // should have been replaced with a pointer to the discriminant.
+        let ValueOrigin::Output {
+            producer: discriminant_node,
+            output: 0,
+        } = switch_0_data.value_inputs()[1].origin
+        else {
+            panic!(
+                "the second input of the first switch node should connect to the first output \
+            of a node"
+            )
+        };
+
+        let discriminant_data = rvsdg[discriminant_node].expect_op_alloca();
+
+        assert_eq!(
+            discriminant_data.ty(),
+            TY_U32,
+            "the discriminant alloca should have a `u32` type"
+        );
+
+        assert_eq!(
+            rvsdg[switch_0_node].value_inputs().len(),
+            4,
+            "two additional inputs have been added to the first switch node"
+        );
+
+        let ValueOrigin::Output {
+            producer: variant_0_node,
+            output: 0,
+        } = switch_0_data.value_inputs()[2].origin
+        else {
+            panic!(
+                "the third input of the first switch node should connect to the first output \
+            of a node"
+            )
+        };
+
+        let variant_0_data = rvsdg[variant_0_node].expect_op_alloca();
+
+        assert_eq!(
+            variant_0_data.ty(),
+            variant_0_ty,
+            "the alloca for the first variant should have the correct type"
+        );
+
+        let ValueOrigin::Output {
+            producer: variant_1_node,
+            output: 0,
+        } = switch_0_data.value_inputs()[3].origin
+        else {
+            panic!(
+                "the fourth input of the first switch node should connect to the first output \
+            of a node"
+            )
+        };
+
+        let variant_1_data = rvsdg[variant_1_node].expect_op_alloca();
+
+        assert_eq!(
+            variant_1_data.ty(),
+            variant_1_ty,
+            "the alloca for the second variant should have the correct type"
+        );
+
+        assert_eq!(rvsdg[switch_0_branch_0].value_arguments()[0].users.len(), 1);
+
+        let ValueUser::Input {
+            consumer: discr_store_0_node,
+            input: 0,
+        } = rvsdg[switch_0_branch_0].value_arguments()[0].users[0]
+        else {
+            panic!(
+                "the discriminant argument of the first branch of the first node should connect \
+            to a node"
+            );
+        };
+
+        let discr_store_0_data = rvsdg[discr_store_0_node].expect_op_store();
+
+        let ValueOrigin::Output {
+            producer: variant_index_0_node,
+            output: 0,
+        } = discr_store_0_data.value_input().origin
+        else {
+            panic!(
+                "the `value` input of the discriminant-store-node in the first branch of the \
+            first switch should connect to a node"
+            );
+        };
+
+        let variant_index_0_data = rvsdg[variant_index_0_node].expect_const_u32();
+
+        assert_eq!(
+            variant_index_0_data.value(),
+            0,
+            "the discriminant stored in the first branch of the first switch node should be `0`"
+        );
+
+        assert_eq!(
+            rvsdg[switch_0_element_0_node]
+                .expect_op_ptr_element_ptr()
+                .ptr_input()
+                .origin,
+            ValueOrigin::Argument(1),
+            "the ptr-element-ptr op in the first branch of the first switch should now take a \
+            pointer to the first variant's alloca"
+        );
+
+        assert!(
+            rvsdg[switch_0_branch_0].value_arguments()[2]
+                .users
+                .is_empty(),
+            "the second variant pointer argument in the first branch of the first switch node \
+            should not be used"
+        );
+
+        let ValueUser::Input {
+            consumer: discr_store_1_node,
+            input: 0,
+        } = rvsdg[switch_0_branch_1].value_arguments()[0].users[0]
+        else {
+            panic!(
+                "the discriminant argument of the second branch of the first node should connect \
+            to a node"
+            );
+        };
+
+        let discr_store_1_data = rvsdg[discr_store_1_node].expect_op_store();
+
+        let ValueOrigin::Output {
+            producer: variant_index_1_node,
+            output: 0,
+        } = discr_store_1_data.value_input().origin
+        else {
+            panic!(
+                "the `value` input of the discriminant-store-node in the second branch of the \
+            first switch should connect to a node"
+            );
+        };
+
+        let variant_index_1_data = rvsdg[variant_index_1_node].expect_const_u32();
+
+        assert_eq!(
+            variant_index_1_data.value(),
+            1,
+            "the discriminant stored in the second branch of the first switch node should be `0`"
+        );
+
+        assert_eq!(
+            rvsdg[switch_0_element_1_node]
+                .expect_op_ptr_element_ptr()
+                .ptr_input()
+                .origin,
+            ValueOrigin::Argument(2),
+            "the ptr-element-ptr op in the second branch of the first switch should now take a \
+            pointer to the second variant's alloca"
+        );
+
+        assert!(
+            rvsdg[switch_0_branch_1].value_arguments()[1]
+                .users
+                .is_empty(),
+            "the first variant pointer argument in the second branch of the first switch node \
+            should not be used"
+        );
+
+        let ValueOrigin::Output {
+            producer: discr_load_node,
+            output: 0,
+        } = rvsdg[switch_1_predicate].value_inputs()[0].origin
+        else {
+            panic!(
+                "the input of the predicate for the second switch node should connect to a node"
+            );
+        };
+
+        let discr_load_data = rvsdg[discr_load_node].expect_op_load();
+
+        assert_eq!(
+            discr_load_data.ptr_input().origin,
+            ValueOrigin::Output {
+                producer: discriminant_node,
+                output: 0,
+            },
+            "the discriminant-load node should load from the discriminant alloca"
+        );
+
+        let switch_1_data = rvsdg[switch_1_node].expect_switch();
+
+        assert_eq!(
+            switch_1_data.value_inputs()[1].origin,
+            ValueOrigin::Output {
+                producer: discriminant_node,
+                output: 0,
+            },
+            "the second input of the second switch node should have been replaced by a connect to \
+        the discriminant-alloca node"
+        );
+
+        assert_eq!(
+            switch_1_data.value_inputs().len(),
+            4,
+            "two additional inputs have been added to the second switch node"
+        );
+
+        assert_eq!(
+            switch_1_data.value_inputs()[2].origin,
+            ValueOrigin::Output {
+                producer: variant_0_node,
+                output: 0,
+            },
+            "the third input of the second switch node should connect to the variant-0-alloca node"
+        );
+
+        assert_eq!(switch_1_data.value_inputs()[3].origin, ValueOrigin::Output {
+            producer: variant_1_node,
+            output: 0,
+        }, "the fourth input of the second switch node should connect to the variant-1-alloca node");
+
+        assert_eq!(
+            rvsdg[switch_1_element_0_node]
+                .expect_op_ptr_element_ptr()
+                .ptr_input()
+                .origin,
+            ValueOrigin::Argument(1),
+            "the ptr-element-ptr op in the first branch of the second switch should now take a \
+            pointer to the first variant's alloca"
+        );
+
+        assert!(
+            rvsdg[switch_1_branch_0].value_arguments()[0]
+                .users
+                .is_empty(),
+            "the argument for a pointer to the discriminant alloca should not be used in the \
+            first branch of the second switch node"
+        );
+
+        assert!(
+            rvsdg[switch_1_branch_0].value_arguments()[2]
+                .users
+                .is_empty(),
+            "the argument for a pointer to the second variant's alloca should not be used in the \
+            first branch of the second switch node"
+        );
+
+        assert_eq!(
+            rvsdg[switch_1_element_1_node]
+                .expect_op_ptr_element_ptr()
+                .ptr_input()
+                .origin,
+            ValueOrigin::Argument(2),
+            "the ptr-element-ptr op in the second branch of the second switch should now take a \
+            pointer to the second variant's alloca"
+        );
+
+        assert!(
+            rvsdg[switch_1_branch_1].value_arguments()[0]
+                .users
+                .is_empty(),
+            "the argument for a pointer to the discriminant alloca should not be used in the \
+            second branch of the second switch node"
+        );
+
+        assert!(
+            rvsdg[switch_1_branch_1].value_arguments()[1]
+                .users
+                .is_empty(),
+            "the argument for a pointer to the first variant's alloca should not be used in the \
+            second branch of the second switch node"
+        );
+
+        assert_eq!(
+            &discriminant_data.value_output().users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: switch_0_node,
+                    input: 1,
+                },
+                ValueUser::Input {
+                    consumer: switch_1_node,
+                    input: 1,
+                },
+                ValueUser::Input {
+                    consumer: discr_load_node,
+                    input: 0,
+                }
+            ],
+            "the new discriminant alloca node should be used by the both switch nodes and the \
+        discriminant load node"
+        );
+
+        assert_eq!(
+            &variant_0_data.value_output().users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: switch_0_node,
+                    input: 2,
+                },
+                ValueUser::Input {
+                    consumer: switch_1_node,
+                    input: 2,
+                },
+            ],
+            "the new variant-0 alloca node should be used by the both switch nodes"
+        );
+
+        assert_eq!(
+            &variant_1_data.value_output().users,
+            &thin_set![
+                ValueUser::Input {
+                    consumer: switch_0_node,
+                    input: 3,
+                },
+                ValueUser::Input {
+                    consumer: switch_1_node,
+                    input: 3,
+                },
+            ],
+            "the new variant-1 alloca node should be used by the both switch nodes"
+        );
+
+        assert!(
+            !rvsdg.is_live_node(alloca_node),
+            "the original enum alloca node should no longer be live"
+        );
+        assert!(
+            !rvsdg.is_live_node(switch_0_variant_0_node),
+            "the ptr-variant-ptr node in the first branch of the first switch node should no \
+            longer be live"
+        );
+        assert!(
+            !rvsdg.is_live_node(switch_0_set_discr_0_node),
+            "the set-discriminant node in the first branch of the first switch node should no \
+            longer be live"
+        );
+        assert!(
+            !rvsdg.is_live_node(switch_0_variant_1_node),
+            "the ptr-variant-ptr node in the second branch of the first switch node should no \
+            longer be live"
+        );
+        assert!(
+            !rvsdg.is_live_node(switch_0_set_discr_1_node),
+            "the set-discriminant node in the second branch of the first switch node should no \
+            longer be live"
+        );
+        assert!(
+            !rvsdg.is_live_node(get_discr_node),
+            "the get-discriminant node should no longer be live"
+        );
+        assert!(
+            !rvsdg.is_live_node(switch_1_variant_0_node),
+            "the ptr-variant-ptr node in the first branch of the second switch node should no \
+            longer be live"
+        );
+        assert!(
+            !rvsdg.is_live_node(switch_1_variant_1_node),
+            "the ptr-variant-ptr node in the second branch of the second switch node should no \
+            longer be live"
+        );
+    }
+}
