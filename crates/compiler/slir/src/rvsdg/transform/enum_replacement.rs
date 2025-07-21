@@ -1,8 +1,10 @@
+use std::ops::Deref;
+
 use crate::rvsdg::{
     Connectivity, Node, NodeKind, Region, Rvsdg, SimpleNode, ValueInput, ValueOrigin, ValueUser,
 };
-use crate::ty::{TypeKind, TY_PTR_U32, TY_U32};
-use crate::{Enum, Function, Module};
+use crate::ty::{Type, TypeKind, TypeRegistry, TY_PTR_U32, TY_U32};
+use crate::{Function, Module};
 
 pub struct EnumAllocaReplacer {
     variant_node_buffer: Vec<Node>,
@@ -15,16 +17,16 @@ impl EnumAllocaReplacer {
         }
     }
 
-    pub fn replace_in_fn(&mut self, module: &mut Module, rvsdg: &mut Rvsdg, function: Function) {
+    pub fn replace_in_fn(&mut self, rvsdg: &mut Rvsdg, function: Function) {
         let node = rvsdg
             .get_function_node(function)
             .expect("function should have RVSDG body");
         let body_region = rvsdg[node].expect_function().body_region();
 
-        self.visit_region(module, rvsdg, body_region);
+        self.visit_region(rvsdg, body_region);
     }
 
-    fn visit_region(&mut self, module: &mut Module, rvsdg: &mut Rvsdg, region: Region) {
+    fn visit_region(&mut self, rvsdg: &mut Rvsdg, region: Region) {
         use NodeKind::*;
         use SimpleNode::*;
 
@@ -34,58 +36,56 @@ impl EnumAllocaReplacer {
             let node = rvsdg[region].nodes()[i];
 
             match rvsdg[node].kind() {
-                Simple(OpAlloca(_)) => self.visit_alloca_node(module, rvsdg, node),
-                Switch(_) => self.visit_switch_node(module, rvsdg, node),
-                Loop(_) => self.visit_switch_node(module, rvsdg, node),
+                Simple(OpAlloca(_)) => self.visit_alloca_node(rvsdg, node),
+                Switch(_) => self.visit_switch_node(rvsdg, node),
+                Loop(_) => self.visit_switch_node(rvsdg, node),
                 _ => {}
             }
         }
     }
 
-    fn visit_alloca_node(&mut self, module: &mut Module, rvsdg: &mut Rvsdg, alloca_node: Node) {
+    fn visit_alloca_node(&mut self, rvsdg: &mut Rvsdg, alloca_node: Node) {
         let ty = rvsdg[alloca_node].expect_op_alloca().ty();
 
-        if let TypeKind::Enum(enum_handle) = module.ty[ty] {
+        if let TypeKind::Enum(_) = rvsdg.ty().kind(ty).deref() {
             let mut replacer = AllocaReplacer {
-                module,
+                ty: rvsdg.ty().clone(),
                 rvsdg,
-                enum_handle,
+                enum_ty: ty,
             };
 
             replacer.replace_alloca(alloca_node);
         }
     }
 
-    fn visit_switch_node(&mut self, module: &mut Module, rvsdg: &mut Rvsdg, node: Node) {
+    fn visit_switch_node(&mut self, rvsdg: &mut Rvsdg, node: Node) {
         let branch_count = rvsdg[node].expect_switch().branches().len();
 
         for i in 0..branch_count {
             let branch = rvsdg[node].expect_switch().branches()[i];
 
-            self.visit_region(module, rvsdg, branch);
+            self.visit_region(rvsdg, branch);
         }
     }
 
-    fn visit_loop_node(&mut self, module: &mut Module, rvsdg: &mut Rvsdg, node: Node) {
+    fn visit_loop_node(&mut self, rvsdg: &mut Rvsdg, node: Node) {
         let loop_region = rvsdg[node].expect_loop().loop_region();
 
-        self.visit_region(module, rvsdg, loop_region);
+        self.visit_region(rvsdg, loop_region);
     }
 }
 
-struct AllocaReplacer<'a, 'b> {
-    module: &'a mut Module,
-    rvsdg: &'b mut Rvsdg,
-    enum_handle: Enum,
+struct AllocaReplacer<'a> {
+    rvsdg: &'a mut Rvsdg,
+    ty: TypeRegistry,
+    enum_ty: Type,
 }
 
-impl<'a, 'b> AllocaReplacer<'a, 'b> {
+impl<'a> AllocaReplacer<'a> {
     fn replace_alloca(&mut self, node: Node) {
         let node_data = &self.rvsdg[node];
         let region = node_data.region();
-        let discriminant_node = self
-            .rvsdg
-            .add_op_alloca(&mut self.module.ty, region, TY_U32);
+        let discriminant_node = self.rvsdg.add_op_alloca(region, TY_U32);
 
         let mut replacements = Vec::new();
 
@@ -97,25 +97,20 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
             },
         });
 
-        replacements.extend(
-            self.module.enums[self.enum_handle]
-                .variants
-                .iter()
-                .copied()
-                .map(|variant| {
-                    let ty = self.module.ty.register(TypeKind::Struct(variant));
-                    let ptr_ty = self.module.ty.register(TypeKind::Ptr(ty));
-                    let variant_node = self.rvsdg.add_op_alloca(&mut self.module.ty, region, ty);
+        let ty_kind = self.ty.kind(self.enum_ty);
 
-                    ValueInput {
-                        ty: ptr_ty,
-                        origin: ValueOrigin::Output {
-                            producer: variant_node,
-                            output: 0,
-                        },
-                    }
-                }),
-        );
+        replacements.extend(ty_kind.expect_enum().variants.iter().copied().map(|ty| {
+            let ptr_ty = self.ty.register(TypeKind::Ptr(ty));
+            let variant_node = self.rvsdg.add_op_alloca(region, ty);
+
+            ValueInput {
+                ty: ptr_ty,
+                origin: ValueOrigin::Output {
+                    producer: variant_node,
+                    output: 0,
+                },
+            }
+        }));
 
         self.visit_users(node, 0, &replacements);
 
@@ -452,17 +447,14 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
             prior_input_count as u32,
         ));
 
-        let variant_count = self.module.enums[self.enum_handle].variants.len();
+        let ty_kind = self.ty.kind(self.enum_ty);
+        let variant_count = ty_kind.expect_enum().variants.len();
 
         for i in 0..variant_count {
             let input_index = (prior_input_count + 1 + i) as u32;
-            let variant_node = self.rvsdg.add_op_ptr_variant_ptr(
-                &mut self.module.ty,
-                &mut self.module.enums,
-                outer_region,
-                proxy_input,
-                i as u32,
-            );
+            let variant_node =
+                self.rvsdg
+                    .add_op_ptr_variant_ptr(outer_region, proxy_input, i as u32);
             let variant_ptr_ty = self.rvsdg[variant_node]
                 .expect_op_ptr_variant_ptr()
                 .output()
@@ -547,17 +539,14 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
             },
         );
 
-        let variant_count = self.module.enums[self.enum_handle].variants.len();
+        let ty_kind = self.ty.kind(self.enum_ty);
+        let variant_count = ty_kind.expect_enum().variants.len();
 
         for i in 0..variant_count {
             let result_index = (split_results_start + 1 + i) as u32;
-            let variant_node = self.rvsdg.add_op_ptr_variant_ptr(
-                &mut self.module.ty,
-                &mut self.module.enums,
-                region,
-                original_input,
-                i as u32,
-            );
+            let variant_node = self
+                .rvsdg
+                .add_op_ptr_variant_ptr(region, original_input, i as u32);
 
             self.rvsdg.reconnect_region_result(
                 region,
@@ -573,7 +562,7 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
     }
 }
 
-pub fn entry_points_enum_replacement(module: &mut Module, rvsdg: &mut Rvsdg) {
+pub fn entry_points_enum_replacement(module: &Module, rvsdg: &mut Rvsdg) {
     let mut replacer = EnumAllocaReplacer::new();
 
     let entry_points = module
@@ -583,7 +572,7 @@ pub fn entry_points_enum_replacement(module: &mut Module, rvsdg: &mut Rvsdg) {
         .collect::<Vec<_>>();
 
     for entry_point in entry_points {
-        replacer.replace_in_fn(module, rvsdg, entry_point);
+        replacer.replace_in_fn(rvsdg, entry_point);
     }
 }
 
@@ -593,8 +582,8 @@ mod tests {
 
     use super::*;
     use crate::rvsdg::{StateOrigin, ValueOutput};
-    use crate::ty::{TY_DUMMY, TY_PREDICATE};
-    use crate::{thin_set, EnumData, FnArg, FnSig, StructData, StructField, Symbol};
+    use crate::ty::{Enum, Struct, StructField, TY_DUMMY, TY_PREDICATE};
+    use crate::{thin_set, FnArg, FnSig, Symbol};
 
     #[test]
     fn test_enum_replacement() {
@@ -617,35 +606,32 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
-        let variant_0 = module.structs.register(StructData {
+        let variant_0_ty = module.ty.register(TypeKind::Struct(Struct {
             fields: vec![StructField {
                 offset: 0,
                 ty: TY_U32,
             }],
-        });
-        let variant_0_ty = module.ty.register(TypeKind::Struct(variant_0));
+        }));
         let variant_0_ptr_ty = module.ty.register(TypeKind::Ptr(variant_0_ty));
 
-        let variant_1 = module.structs.register(StructData {
+        let variant_1_ty = module.ty.register(TypeKind::Struct(Struct {
             fields: vec![StructField {
                 offset: 0,
                 ty: TY_U32,
             }],
-        });
-        let variant_1_ty = module.ty.register(TypeKind::Struct(variant_1));
+        }));
         let variant_1_ptr_ty = module.ty.register(TypeKind::Ptr(variant_1_ty));
 
-        let enum_handle = module.enums.register(EnumData {
-            variants: vec![variant_0, variant_1],
-        });
-        let enum_ty = module.ty.register(TypeKind::Enum(enum_handle));
+        let enum_ty = module.ty.register(TypeKind::Enum(Enum {
+            variants: vec![variant_0_ty, variant_1_ty],
+        }));
         let enum_ptr_ty = module.ty.register(TypeKind::Ptr(enum_ty));
 
-        let alloca_node = rvsdg.add_op_alloca(&mut module.ty, region, enum_ty);
+        let alloca_node = rvsdg.add_op_alloca(region, enum_ty);
         let switch_0_node = rvsdg.add_switch(
             region,
             vec![
@@ -659,15 +645,12 @@ mod tests {
         let switch_0_branch_0 = rvsdg.add_switch_branch(switch_0_node);
 
         let switch_0_variant_0_node = rvsdg.add_op_ptr_variant_ptr(
-            &mut module.ty,
-            &module.enums,
             switch_0_branch_0,
             ValueInput::argument(enum_ptr_ty, 0),
             0,
         );
         let switch_0_index_0_node = rvsdg.add_const_u32(switch_0_branch_0, 0);
         let switch_0_element_0_node = rvsdg.add_op_ptr_element_ptr(
-            &mut module.ty,
             switch_0_branch_0,
             TY_U32,
             ValueInput::output(variant_0_ptr_ty, switch_0_variant_0_node, 0),
@@ -690,15 +673,12 @@ mod tests {
         let switch_0_branch_1 = rvsdg.add_switch_branch(switch_0_node);
 
         let switch_0_variant_1_node = rvsdg.add_op_ptr_variant_ptr(
-            &mut module.ty,
-            &module.enums,
             switch_0_branch_1,
             ValueInput::argument(enum_ptr_ty, 0),
             1,
         );
         let switch_0_index_1_node = rvsdg.add_const_u32(switch_0_branch_1, 0);
         let switch_0_element_1_node = rvsdg.add_op_ptr_element_ptr(
-            &mut module.ty,
             switch_0_branch_1,
             TY_U32,
             ValueInput::output(variant_1_ptr_ty, switch_0_variant_1_node, 0),
@@ -740,15 +720,12 @@ mod tests {
 
         let switch_1_branch_0 = rvsdg.add_switch_branch(switch_1_node);
         let switch_1_variant_0_node = rvsdg.add_op_ptr_variant_ptr(
-            &mut module.ty,
-            &module.enums,
             switch_1_branch_0,
             ValueInput::argument(enum_ptr_ty, 0),
             0,
         );
         let switch_1_index_0_node = rvsdg.add_const_u32(switch_1_branch_0, 0);
         let switch_1_element_0_node = rvsdg.add_op_ptr_element_ptr(
-            &mut module.ty,
             switch_1_branch_0,
             TY_U32,
             ValueInput::output(variant_0_ptr_ty, switch_1_variant_0_node, 0),
@@ -772,15 +749,12 @@ mod tests {
 
         let switch_1_branch_1 = rvsdg.add_switch_branch(switch_1_node);
         let switch_1_variant_1_node = rvsdg.add_op_ptr_variant_ptr(
-            &mut module.ty,
-            &module.enums,
             switch_1_branch_1,
             ValueInput::argument(enum_ptr_ty, 0),
             1,
         );
         let switch_1_index_1_node = rvsdg.add_const_u32(switch_1_branch_1, 0);
         let switch_1_element_1_node = rvsdg.add_op_ptr_element_ptr(
-            &mut module.ty,
             switch_1_branch_1,
             TY_U32,
             ValueInput::output(variant_1_ptr_ty, switch_1_variant_1_node, 0),
@@ -813,7 +787,7 @@ mod tests {
 
         let mut replacer = EnumAllocaReplacer::new();
 
-        replacer.replace_in_fn(&mut module, &mut rvsdg, function);
+        replacer.replace_in_fn(&mut rvsdg, function);
 
         let switch_0_data = rvsdg[switch_0_node].expect_switch();
 

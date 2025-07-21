@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::ops::Range;
+use std::ops::{Deref, Range};
 
 use rustc_hash::FxHashSet;
 
@@ -16,21 +16,15 @@ use crate::{Function, Module};
 ///
 /// Note that this does not yet make any decisions about whether we should perform a scalar
 /// replacement transform on a given [OpAlloca] node, this requires further analysis.
-struct CandidateAllocaCollector<'a, 'b, 'c> {
+struct CandidateAllocaCollector<'a, 'b> {
     rvsdg: &'a Rvsdg,
-    ty: &'b TypeRegistry,
-    candidate_queue: &'c mut VecDeque<Node>,
+    candidate_queue: &'b mut VecDeque<Node>,
 }
 
-impl<'a, 'b, 'c> CandidateAllocaCollector<'a, 'b, 'c> {
-    fn new(
-        rvsdg: &'a Rvsdg,
-        ty: &'b TypeRegistry,
-        candidate_queue: &'c mut VecDeque<Node>,
-    ) -> Self {
+impl<'a, 'b> CandidateAllocaCollector<'a, 'b> {
+    fn new(rvsdg: &'a Rvsdg, candidate_queue: &'b mut VecDeque<Node>) -> Self {
         CandidateAllocaCollector {
             rvsdg,
-            ty,
             candidate_queue,
         }
     }
@@ -44,7 +38,7 @@ impl<'a, 'b, 'c> CandidateAllocaCollector<'a, 'b, 'c> {
     fn visit_node(&mut self, node: Node) {
         match self.rvsdg[node].kind() {
             NodeKind::Simple(SimpleNode::OpAlloca(op)) => {
-                if self.ty[op.ty()].is_aggregate() {
+                if self.rvsdg.ty().kind(op.ty()).is_aggregate() {
                     self.candidate_queue.push_back(node)
                 }
             }
@@ -183,12 +177,11 @@ impl<'a, 'b> NonlocalUseAnalyzer<'a, 'b> {
     }
 }
 
-struct AllocaReplacer<'a, 'b> {
-    module: &'a mut Module,
-    rvsdg: &'b mut Rvsdg,
+struct AllocaReplacer<'a> {
+    rvsdg: &'a mut Rvsdg,
 }
 
-impl<'a, 'b> AllocaReplacer<'a, 'b> {
+impl AllocaReplacer<'_> {
     fn replace_alloca(&mut self, node: Node) {
         let node_data = &self.rvsdg[node];
         let region = node_data.region();
@@ -197,12 +190,12 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
 
         let mut scalar_replacements = Vec::new();
 
-        match self.module.ty[ty] {
+        match self.rvsdg.ty().clone().kind(ty).deref() {
             TypeKind::Array { base, count, .. } => {
-                let element_ptr_ty = self.module.ty.register(TypeKind::Ptr(base));
+                let element_ptr_ty = self.rvsdg.ty().register(TypeKind::Ptr(*base));
 
-                for _ in 0..count {
-                    let scalar_node = self.rvsdg.add_op_alloca(&mut self.module.ty, region, base);
+                for _ in 0..*count {
+                    let scalar_node = self.rvsdg.add_op_alloca(region, *base);
 
                     scalar_replacements.push(ValueInput {
                         ty: element_ptr_ty,
@@ -213,15 +206,11 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
                     });
                 }
             }
-            TypeKind::Struct(struct_handle) => {
-                let field_count = self.module.structs[struct_handle].fields.len();
-
-                for i in 0..field_count {
-                    let field_ty = self.module.structs[struct_handle].fields[i].ty;
-                    let field_ptr_ty = self.module.ty.register(TypeKind::Ptr(field_ty));
-                    let scalar_node =
-                        self.rvsdg
-                            .add_op_alloca(&mut self.module.ty, region, field_ty);
+            TypeKind::Struct(struct_data) => {
+                for field in &struct_data.fields {
+                    let field_ty = field.ty;
+                    let field_ptr_ty = self.rvsdg.ty().register(TypeKind::Ptr(field_ty));
+                    let scalar_node = self.rvsdg.add_op_alloca(region, field_ty);
 
                     scalar_replacements.push(ValueInput {
                         ty: field_ptr_ty,
@@ -392,13 +381,9 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
                 .skip(1)
                 .collect::<Vec<_>>();
 
-            let node = self.rvsdg.add_op_ptr_element_ptr(
-                &mut self.module.ty,
-                target_region,
-                element_ty,
-                input,
-                indices,
-            );
+            let node = self
+                .rvsdg
+                .add_op_ptr_element_ptr(target_region, element_ty, input, indices);
 
             ValueOrigin::Output {
                 producer: node,
@@ -535,7 +520,7 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
             .iter()
             .rev()
             .map(|input| {
-                let TypeKind::Ptr(output_ty) = self.module.ty[input.ty] else {
+                let TypeKind::Ptr(output_ty) = *self.rvsdg.ty().kind(input.ty) else {
                     panic!("expected input to load operation to be a pointer");
                 };
 
@@ -638,7 +623,7 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
             };
         }
 
-        match self.module.ty[value_input.ty] {
+        match self.rvsdg.ty().clone().kind(value_input.ty).deref() {
             TypeKind::Array { base, count, .. } => {
                 // We iterate the element indices in reverse due to the way we link the load and
                 // store nodes we create into the state chain: we repeatedly reuse the state_origin
@@ -646,12 +631,12 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
                 // last, will make it end up the earliest in the state chain. Though the actual
                 // order should not matter for the validity of the program, lowest-to-highest index
                 // order is the more natural order for human review of the compiler's output.
-                for i in (0..count).rev() {
+                for i in (0..*count).rev() {
                     self.add_store_element_nodes(
                         region,
                         input,
                         i as u32,
-                        base,
+                        *base,
                         ptr_input,
                         value_input,
                         state_origin,
@@ -659,13 +644,13 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
                     );
                 }
             }
-            TypeKind::Struct(struct_handle) => {
-                let field_count = self.module.structs[struct_handle].fields.len();
+            TypeKind::Struct(struct_data) => {
+                let field_count = struct_data.fields.len();
 
                 // We iterate in reverse for the same reason as for the array case, see the comment
                 // above.
                 for i in (0..field_count).rev() {
-                    let element_ty = self.module.structs[struct_handle].fields[i].ty;
+                    let element_ty = struct_data.fields[i].ty;
 
                     self.add_store_element_nodes(
                         region,
@@ -696,14 +681,13 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
         state_origin: StateOrigin,
         split_input: &[ValueInput],
     ) {
-        let ptr_ty = self.module.ty.register(TypeKind::Ptr(element_ty));
+        let ptr_ty = self.rvsdg.ty().register(TypeKind::Ptr(element_ty));
         let index_input = self.rvsdg.add_const_u32(region, element_index);
 
         let element_ptr_input = if provoking_input == 0 {
             split_input[element_index as usize]
         } else {
             let element_ptr = self.rvsdg.add_op_ptr_element_ptr(
-                &mut self.module.ty,
                 region,
                 element_ty,
                 ptr_input,
@@ -887,20 +871,21 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
         let mut split_args = Vec::with_capacity(split_input.len());
         let mut split_outputs = Vec::with_capacity(split_input.len());
 
+        let ty_reg = self.rvsdg.ty().clone();
+
         // Add inputs for each element of the aggregate, and connect them to the proxy via either
         // an OpPtrElementPtr node if the input is of a pointer type, or via an OpExtractElement
         // node otherwise. Also record an argument mapping in `split_args` and an output mapping in
         // `split_outputs`.
-        match self.module.ty[value_input.ty] {
-            TypeKind::Ptr(pointee_ty) => match self.module.ty[pointee_ty] {
+        match ty_reg.kind(value_input.ty).deref() {
+            TypeKind::Ptr(pointee_ty) => match ty_reg.kind(*pointee_ty).deref() {
                 TypeKind::Array { base, count, .. } => {
-                    for i in 0..count {
-                        let ptr_ty = self.module.ty.register(TypeKind::Ptr(base));
+                    for i in 0..*count {
+                        let ptr_ty = ty_reg.register(TypeKind::Ptr(*base));
                         let index = self.rvsdg.add_const_u32(region, i as u32);
                         let element = self.rvsdg.add_op_ptr_element_ptr(
-                            &mut self.module.ty,
                             outer_region,
-                            base,
+                            *base,
                             proxy_input,
                             [ValueInput::output(TY_U32, index, 0)],
                         );
@@ -919,16 +904,13 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
                         ));
                     }
                 }
-                TypeKind::Struct(struct_handle) => {
-                    let field_count = self.module.structs[struct_handle].fields.len();
-
-                    for i in 0..field_count {
-                        let element_ty = self.module.structs[struct_handle].fields[i].ty;
-                        let ptr_ty = self.module.ty.register(TypeKind::Ptr(element_ty));
+                TypeKind::Struct(struct_data) => {
+                    for (i, field) in struct_data.fields.iter().enumerate() {
+                        let element_ty = field.ty;
+                        let ptr_ty = ty_reg.register(TypeKind::Ptr(element_ty));
 
                         let index = self.rvsdg.add_const_u32(region, i as u32);
                         let element = self.rvsdg.add_op_ptr_element_ptr(
-                            &mut self.module.ty,
                             outer_region,
                             element_ty,
                             proxy_input,
@@ -952,34 +934,32 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
                 _ => panic!("pointee type is not an aggregate"),
             },
             TypeKind::Array { base, count, .. } => {
-                for i in 0..count {
+                for i in 0..*count {
                     let index = self.rvsdg.add_const_u32(region, i as u32);
                     let element = self.rvsdg.add_op_extract_element(
                         outer_region,
-                        base,
+                        *base,
                         proxy_input,
                         [ValueInput::output(TY_U32, index, 0)],
                     );
 
                     self.rvsdg
-                        .add_loop_input(owner, ValueInput::output(base, element, 0));
+                        .add_loop_input(owner, ValueInput::output(*base, element, 0));
 
                     split_args.push(ValueInput::argument(
-                        base,
+                        *base,
                         prior_input_count as u32 + i as u32,
                     ));
                     split_outputs.push(ValueInput::output(
-                        base,
+                        *base,
                         owner,
                         prior_input_count as u32 + i as u32,
                     ));
                 }
             }
-            TypeKind::Struct(struct_handle) => {
-                let field_count = self.module.structs[struct_handle].fields.len();
-
-                for i in 0..field_count {
-                    let element_ty = self.module.structs[struct_handle].fields[i].ty;
+            TypeKind::Struct(struct_data) => {
+                for (i, field) in struct_data.fields.iter().enumerate() {
+                    let element_ty = field.ty;
 
                     let index = self.rvsdg.add_const_u32(region, i as u32);
                     let element = self.rvsdg.add_op_extract_element(
@@ -1065,16 +1045,16 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
         split_results_start: usize,
     ) {
         let original_input = self.rvsdg[region].value_results()[original];
+        let ty_reg = self.rvsdg.ty().clone();
 
-        match self.module.ty[original_input.ty] {
-            TypeKind::Ptr(pointee_ty) => match self.module.ty[pointee_ty] {
+        match ty_reg.kind(original_input.ty).deref() {
+            TypeKind::Ptr(pointee_ty) => match ty_reg.kind(*pointee_ty).deref() {
                 TypeKind::Array { base, count, .. } => {
-                    for i in 0..count {
+                    for i in 0..*count {
                         let index_node = self.rvsdg.add_const_u32(region, i as u32);
                         let split_node = self.rvsdg.add_op_ptr_element_ptr(
-                            &mut self.module.ty,
                             region,
-                            base,
+                            *base,
                             original_input,
                             [ValueInput::output(TY_U32, index_node, 0)],
                         );
@@ -1090,16 +1070,12 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
                         );
                     }
                 }
-                TypeKind::Struct(struct_handle) => {
-                    let field_count = self.module.structs[struct_handle].fields.len();
-
-                    for i in 0..field_count {
-                        let field_ty = self.module.structs[struct_handle].fields[i].ty;
+                TypeKind::Struct(struct_data) => {
+                    for (i, field) in struct_data.fields.iter().enumerate() {
                         let index_node = self.rvsdg.add_const_u32(region, i as u32);
                         let split_node = self.rvsdg.add_op_ptr_element_ptr(
-                            &mut self.module.ty,
                             region,
-                            field_ty,
+                            field.ty,
                             original_input,
                             [ValueInput::output(TY_U32, index_node, 0)],
                         );
@@ -1118,11 +1094,11 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
                 _ => unreachable!("pointee type is not an aggregate"),
             },
             TypeKind::Array { base, count, .. } => {
-                for i in 0..count {
+                for i in 0..*count {
                     let index_node = self.rvsdg.add_const_u32(region, i as u32);
                     let split_node = self.rvsdg.add_op_extract_element(
                         region,
-                        base,
+                        *base,
                         original_input,
                         [ValueInput::output(TY_U32, index_node, 0)],
                     );
@@ -1138,15 +1114,12 @@ impl<'a, 'b> AllocaReplacer<'a, 'b> {
                     );
                 }
             }
-            TypeKind::Struct(struct_handle) => {
-                let field_count = self.module.structs[struct_handle].fields.len();
-
-                for i in 0..field_count {
-                    let field_ty = self.module.structs[struct_handle].fields[i].ty;
+            TypeKind::Struct(struct_data) => {
+                for (i, field) in struct_data.fields.iter().enumerate() {
                     let index_node = self.rvsdg.add_const_u32(region, i as u32);
                     let split_node = self.rvsdg.add_op_extract_element(
                         region,
-                        field_ty,
+                        field.ty,
                         original_input,
                         [ValueInput::output(TY_U32, index_node, 0)],
                     );
@@ -1191,13 +1164,13 @@ impl ScalarReplacer {
         let body_region = rvsdg[node].expect_function().body_region();
 
         let mut candidate_collector =
-            CandidateAllocaCollector::new(rvsdg, &module.ty, &mut self.candidate_queue);
+            CandidateAllocaCollector::new(rvsdg, &mut self.candidate_queue);
 
         candidate_collector.visit_region(body_region);
 
         while let Some(candidate) = self.candidate_queue.pop_front() {
             if self.analyzer.should_replace(rvsdg, candidate, body_region) {
-                let mut replacer = AllocaReplacer { module, rvsdg };
+                let mut replacer = AllocaReplacer { rvsdg };
 
                 replacer.replace_alloca(candidate);
             }
@@ -1245,7 +1218,7 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
@@ -1256,10 +1229,9 @@ mod tests {
         let ptr_ty = module.ty.register(TypeKind::Ptr(ty));
         let element_ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
-        let op_alloca = rvsdg.add_op_alloca(&mut module.ty, region, ty);
+        let op_alloca = rvsdg.add_op_alloca(region, ty);
         let element_index = rvsdg.add_const_u32(region, 1);
         let op_ptr_element_ptr = rvsdg.add_op_ptr_element_ptr(
-            &mut module.ty,
             region,
             TY_U32,
             ValueInput::output(ptr_ty, op_alloca, 0),
@@ -1337,7 +1309,7 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
@@ -1348,9 +1320,8 @@ mod tests {
         let ptr_ty = module.ty.register(TypeKind::Ptr(ty));
         let element_ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
-        let op_alloca = rvsdg.add_op_alloca(&mut module.ty, region, ty);
+        let op_alloca = rvsdg.add_op_alloca(region, ty);
         let op_ptr_element_ptr = rvsdg.add_op_ptr_element_ptr(
-            &mut module.ty,
             region,
             TY_U32,
             ValueInput::output(ptr_ty, op_alloca, 0),
@@ -1508,7 +1479,7 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
@@ -1519,7 +1490,7 @@ mod tests {
         let ptr_ty = module.ty.register(TypeKind::Ptr(ty));
         let element_ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
-        let op_alloca = rvsdg.add_op_alloca(&mut module.ty, region, ty);
+        let op_alloca = rvsdg.add_op_alloca(region, ty);
         let op_load = rvsdg.add_op_load(
             region,
             ValueInput::output(ptr_ty, op_alloca, 0),
@@ -1615,7 +1586,7 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
@@ -1626,7 +1597,7 @@ mod tests {
         let ptr_ty = module.ty.register(TypeKind::Ptr(ty));
         let element_ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
-        let op_alloca = rvsdg.add_op_alloca(&mut module.ty, region, ty);
+        let op_alloca = rvsdg.add_op_alloca(region, ty);
         let op_load = rvsdg.add_op_load(
             region,
             ValueInput::output(ptr_ty, op_alloca, 0),
@@ -1823,7 +1794,7 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
@@ -1834,7 +1805,7 @@ mod tests {
         let ptr_ty = module.ty.register(TypeKind::Ptr(ty));
         let element_ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
-        let op_alloca = rvsdg.add_op_alloca(&mut module.ty, region, ty);
+        let op_alloca = rvsdg.add_op_alloca(region, ty);
         let switch_node = rvsdg.add_switch(
             region,
             vec![
@@ -1848,7 +1819,6 @@ mod tests {
         let branch_0 = rvsdg.add_switch_branch(switch_node);
         let branch_0_index = rvsdg.add_const_u32(branch_0, 0);
         let branch_0_op_ptr_element_ptr = rvsdg.add_op_ptr_element_ptr(
-            &mut module.ty,
             branch_0,
             TY_U32,
             ValueInput::argument(ptr_ty, 0),
@@ -1873,7 +1843,6 @@ mod tests {
         let branch_1 = rvsdg.add_switch_branch(switch_node);
         let branch_1_index = rvsdg.add_const_u32(branch_1, 1);
         let branch_1_op_ptr_element_ptr = rvsdg.add_op_ptr_element_ptr(
-            &mut module.ty,
             branch_1,
             TY_U32,
             ValueInput::argument(ptr_ty, 0),
@@ -2043,7 +2012,7 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
@@ -2055,7 +2024,7 @@ mod tests {
         let element_ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
         let counter = rvsdg.add_const_u32(region, 0);
-        let op_alloca = rvsdg.add_op_alloca(&mut module.ty, region, ty);
+        let op_alloca = rvsdg.add_op_alloca(region, ty);
 
         let (loop_node, loop_region) = rvsdg.add_loop(
             region,
@@ -2069,7 +2038,6 @@ mod tests {
 
         let element_index = rvsdg.add_const_u32(loop_region, 0);
         let op_ptr_element_ptr_node = rvsdg.add_op_ptr_element_ptr(
-            &mut module.ty,
             loop_region,
             TY_U32,
             ValueInput::argument(ptr_ty, 2),

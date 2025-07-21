@@ -12,7 +12,7 @@ use crate::module_explorer::rvsdg_explorer::layout::ConnectorElement;
 use crate::module_explorer::ModuleData;
 
 fn ty_str(module: &Module, ty: Type) -> String {
-    match &module.ty[ty] {
+    match &*module.ty.kind(ty) {
         TypeKind::Scalar(scalar) => match scalar {
             ScalarKind::I32 => "i32".to_owned(),
             ScalarKind::U32 => "u32".to_owned(),
@@ -50,11 +50,11 @@ fn ty_str(module: &Module, ty: Type) -> String {
             }
         },
         TypeKind::Array { base, count } => format!("array<{}, count>", ty_str(module, *base)),
-        TypeKind::Struct(s) => {
-            format!("S_{}", s.to_usize())
+        TypeKind::Struct(_) => {
+            format!("S_{}", ty.registration_id().unwrap_or_default())
         }
-        TypeKind::Enum(e) => {
-            format!("E_{}", e.to_usize())
+        TypeKind::Enum(_) => {
+            format!("E_{}", ty.registration_id().unwrap_or_default())
         }
         TypeKind::Ptr(pointee_ty) => format!("ptr<{}>", ty_str(module, *pointee_ty)),
         TypeKind::Function(_) => "fn".to_owned(),

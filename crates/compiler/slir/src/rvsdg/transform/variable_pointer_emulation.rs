@@ -298,12 +298,7 @@ impl EmulationContext {
         }
     }
 
-    pub fn emulate_op_load(
-        &mut self,
-        type_registry: &mut TypeRegistry,
-        rvsdg: &mut Rvsdg,
-        op_load: Node,
-    ) {
+    pub fn emulate_op_load(&mut self, rvsdg: &mut Rvsdg, op_load: Node) {
         let region = rvsdg[op_load].region();
         let data = rvsdg[op_load].expect_op_load();
         let pointer_ty = data.ptr_input().ty;
@@ -321,7 +316,6 @@ impl EmulationContext {
         };
 
         let mut emulator = Emulator {
-            type_registry,
             rvsdg,
             outer_region: region,
             state_origin,
@@ -354,12 +348,7 @@ impl EmulationContext {
         rvsdg.remove_node(op_load);
     }
 
-    pub fn emulate_op_store(
-        &mut self,
-        type_registry: &mut TypeRegistry,
-        rvsdg: &mut Rvsdg,
-        op_store: Node,
-    ) {
+    pub fn emulate_op_store(&mut self, rvsdg: &mut Rvsdg, op_store: Node) {
         let outer_region = rvsdg[op_store].region();
         let data = rvsdg[op_store].expect_op_store();
         let pointer_ty = data.ptr_input().ty;
@@ -377,7 +366,6 @@ impl EmulationContext {
         };
 
         let mut emulator = Emulator {
-            type_registry,
             rvsdg,
             outer_region,
             state_origin,
@@ -855,7 +843,6 @@ impl EmulationContext {
 }
 
 struct Emulator<'a, F> {
-    type_registry: &'a mut TypeRegistry,
     rvsdg: &'a mut Rvsdg,
 
     /// The region that hosts the "load" or "store" node that we're emulating.
@@ -1050,17 +1037,13 @@ where
                 })
                 .collect::<Vec<_>>();
 
-            let TypeKind::Ptr(element_ty) = self.type_registry[self.pointer_ty] else {
+            let TypeKind::Ptr(element_ty) = *self.rvsdg.ty().kind(self.pointer_ty) else {
                 panic!("emulated pointer value must have a pointer type");
             };
 
-            let pep_node = self.rvsdg.add_op_ptr_element_ptr(
-                self.type_registry,
-                region,
-                element_ty,
-                ptr_input,
-                index_input,
-            );
+            let pep_node =
+                self.rvsdg
+                    .add_op_ptr_element_ptr(region, element_ty, ptr_input, index_input);
 
             ValueInput::output(self.pointer_ty, pep_node, 0)
         };
@@ -1133,12 +1116,12 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
-        let ptr_0 = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
-        let ptr_1 = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let ptr_0 = rvsdg.add_op_alloca(region, TY_U32);
+        let ptr_1 = rvsdg.add_op_alloca(region, TY_U32);
 
         let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
@@ -1179,7 +1162,7 @@ mod tests {
 
         let mut emulation_context = EmulationContext::new();
 
-        emulation_context.emulate_op_load(&mut module.ty, &mut rvsdg, load_op);
+        emulation_context.emulate_op_load(&mut rvsdg, load_op);
 
         let ValueOrigin::Output {
             producer: emulation_switch_node,
@@ -1299,12 +1282,12 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
-        let ptr_0 = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
-        let ptr_1 = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let ptr_0 = rvsdg.add_op_alloca(region, TY_U32);
+        let ptr_1 = rvsdg.add_op_alloca(region, TY_U32);
 
         let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
@@ -1379,7 +1362,7 @@ mod tests {
 
         let mut emulation_context = EmulationContext::new();
 
-        emulation_context.emulate_op_load(&mut module.ty, &mut rvsdg, load_op);
+        emulation_context.emulate_op_load(&mut rvsdg, load_op);
 
         let ValueOrigin::Output {
             producer: emulation_switch_node,
@@ -1551,7 +1534,7 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
@@ -1562,17 +1545,16 @@ mod tests {
         let array_ptr_ty = module.ty.register(TypeKind::Ptr(array_ty));
         let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
-        let array_alloca_node = rvsdg.add_op_alloca(&mut module.ty, region, array_ty);
+        let array_alloca_node = rvsdg.add_op_alloca(region, array_ty);
         let index_node = rvsdg.add_const_u32(region, 1);
 
         let ptr_0_node = rvsdg.add_op_ptr_element_ptr(
-            &mut module.ty,
             region,
             TY_U32,
             ValueInput::output(array_ptr_ty, array_alloca_node, 0),
             [ValueInput::output(TY_U32, index_node, 0)],
         );
-        let ptr_1_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let ptr_1_node = rvsdg.add_op_alloca(region, TY_U32);
 
         let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
@@ -1613,7 +1595,7 @@ mod tests {
 
         let mut emulation_context = EmulationContext::new();
 
-        emulation_context.emulate_op_load(&mut module.ty, &mut rvsdg, load_op);
+        emulation_context.emulate_op_load(&mut rvsdg, load_op);
 
         let ValueOrigin::Output {
             producer: emulation_switch_node,
@@ -1781,7 +1763,7 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
@@ -1792,16 +1774,15 @@ mod tests {
         let array_ptr_ty = module.ty.register(TypeKind::Ptr(array_ty));
         let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
-        let array_alloca_node = rvsdg.add_op_alloca(&mut module.ty, region, array_ty);
+        let array_alloca_node = rvsdg.add_op_alloca(region, array_ty);
 
         let ptr_0_node = rvsdg.add_op_ptr_element_ptr(
-            &mut module.ty,
             region,
             TY_U32,
             ValueInput::output(array_ptr_ty, array_alloca_node, 0),
             [ValueInput::argument(TY_U32, 1)],
         );
-        let ptr_1_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let ptr_1_node = rvsdg.add_op_alloca(region, TY_U32);
 
         let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
@@ -1842,7 +1823,7 @@ mod tests {
 
         let mut emulation_context = EmulationContext::new();
 
-        emulation_context.emulate_op_load(&mut module.ty, &mut rvsdg, load_op);
+        emulation_context.emulate_op_load(&mut rvsdg, load_op);
 
         let ValueOrigin::Output {
             producer: emulation_switch_node,
@@ -2025,7 +2006,7 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
@@ -2041,17 +2022,16 @@ mod tests {
         let array_of_array_ptr_ty = module.ty.register(TypeKind::Ptr(array_of_array_ty));
         let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
-        let array_alloca_node = rvsdg.add_op_alloca(&mut module.ty, region, array_of_array_ty);
+        let array_alloca_node = rvsdg.add_op_alloca(region, array_of_array_ty);
         let index_node = rvsdg.add_const_u32(region, 1);
 
         let ptr_0_node = rvsdg.add_op_ptr_element_ptr(
-            &mut module.ty,
             region,
             array_ty,
             ValueInput::output(array_of_array_ptr_ty, array_alloca_node, 0),
             [ValueInput::output(TY_U32, index_node, 0)],
         );
-        let ptr_1_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let ptr_1_node = rvsdg.add_op_alloca(region, TY_U32);
 
         let switch_node = rvsdg.add_switch(
             region,
@@ -2068,7 +2048,6 @@ mod tests {
 
         let branch_0_index_node = rvsdg.add_const_u32(branch_0, 0);
         let branch_0_ptr_node = rvsdg.add_op_ptr_element_ptr(
-            &mut module.ty,
             branch_0,
             TY_U32,
             ValueInput::argument(array_ptr_ty, 0),
@@ -2106,7 +2085,7 @@ mod tests {
 
         let mut emulation_context = EmulationContext::new();
 
-        emulation_context.emulate_op_load(&mut module.ty, &mut rvsdg, load_op);
+        emulation_context.emulate_op_load(&mut rvsdg, load_op);
 
         let ValueOrigin::Output {
             producer: emulation_switch_node,
@@ -2286,15 +2265,15 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
-        let ptr_0_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
-        let ptr_1_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
-        let ptr_2_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let ptr_0_node = rvsdg.add_op_alloca(region, TY_U32);
+        let ptr_1_node = rvsdg.add_op_alloca(region, TY_U32);
+        let ptr_2_node = rvsdg.add_op_alloca(region, TY_U32);
 
         let first_switch_node = rvsdg.add_switch(
             region,
@@ -2352,7 +2331,7 @@ mod tests {
 
         let mut emulation_context = EmulationContext::new();
 
-        emulation_context.emulate_op_load(&mut module.ty, &mut rvsdg, load_op);
+        emulation_context.emulate_op_load(&mut rvsdg, load_op);
 
         let ValueOrigin::Output {
             producer: emulation_switch_node,
@@ -2553,15 +2532,15 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
-        let ptr_0_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
-        let ptr_1_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
-        let ptr_2_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let ptr_0_node = rvsdg.add_op_alloca(region, TY_U32);
+        let ptr_1_node = rvsdg.add_op_alloca(region, TY_U32);
+        let ptr_2_node = rvsdg.add_op_alloca(region, TY_U32);
 
         let outer_switch_node = rvsdg.add_switch(
             region,
@@ -2628,7 +2607,7 @@ mod tests {
 
         let mut emulation_context = EmulationContext::new();
 
-        emulation_context.emulate_op_load(&mut module.ty, &mut rvsdg, load_op);
+        emulation_context.emulate_op_load(&mut rvsdg, load_op);
 
         let ValueOrigin::Output {
             producer: emulation_switch_node,
@@ -2817,12 +2796,12 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
-        let ptr_0 = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
-        let ptr_1 = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let ptr_0 = rvsdg.add_op_alloca(region, TY_U32);
+        let ptr_1 = rvsdg.add_op_alloca(region, TY_U32);
 
         let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
@@ -2854,7 +2833,7 @@ mod tests {
 
         let mut emulation_context = EmulationContext::new();
 
-        emulation_context.emulate_op_store(&mut module.ty, &mut rvsdg, store_op);
+        emulation_context.emulate_op_store(&mut rvsdg, store_op);
 
         assert_eq!(rvsdg[region].value_arguments()[0].users.len(), 2);
         assert_eq!(
@@ -3059,7 +3038,7 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
@@ -3075,7 +3054,7 @@ mod tests {
         let array_of_array_ptr_ty = module.ty.register(TypeKind::Ptr(array_of_array_ty));
         let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
-        let array_alloca_node = rvsdg.add_op_alloca(&mut module.ty, region, array_of_array_ty);
+        let array_alloca_node = rvsdg.add_op_alloca(region, array_of_array_ty);
 
         let switch_node = rvsdg.add_switch(
             region,
@@ -3108,7 +3087,6 @@ mod tests {
         );
 
         let branch_0_ptr_node = rvsdg.add_op_ptr_element_ptr(
-            &mut module.ty,
             branch_0,
             TY_U32,
             ValueInput::argument(array_of_array_ptr_ty, 0),
@@ -3142,7 +3120,6 @@ mod tests {
         let branch_1_index_1 = rvsdg.add_const_u32(branch_1, 0);
 
         let branch_1_ptr_node = rvsdg.add_op_ptr_element_ptr(
-            &mut module.ty,
             branch_1,
             TY_U32,
             ValueInput::argument(array_of_array_ptr_ty, 0),
@@ -3179,7 +3156,7 @@ mod tests {
 
         let mut emulation_context = EmulationContext::new();
 
-        emulation_context.emulate_op_load(&mut module.ty, &mut rvsdg, load_op);
+        emulation_context.emulate_op_load(&mut rvsdg, load_op);
 
         let ValueOrigin::Output {
             producer: emulation_switch_node,

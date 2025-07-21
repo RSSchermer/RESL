@@ -39,20 +39,19 @@ fn define_usize_slice_index_get(instance: Instance, cx: &CodegenContext) {
     let mut module = cx.module.borrow_mut();
     let ret_ty = module.fn_sigs[function].args[0].ty;
 
-    let TypeKind::Ptr(pointee_ty) = module.ty[ret_ty] else {
+    let TypeKind::Ptr(pointee_ty) = *module.ty.kind(ret_ty) else {
         bug!("first argument should be a return pointer");
     };
-    let TypeKind::Enum(enum_handle) = module.ty[pointee_ty] else {
+    let TypeKind::Enum(option_enum) = &*module.ty.kind(pointee_ty) else {
         bug!("`Option` type should be represented in SLIR by an enum`");
     };
-    let option_enum = &module.enums[enum_handle];
-    let some_variant = option_enum.variants[1];
-    let some_variant_ty = module.ty.register(TypeKind::Struct(some_variant));
+    let some_variant_ty = option_enum.variants[1];
     let some_variant_ptr_ty = module.ty.register(TypeKind::Ptr(some_variant_ty));
-    let some_struct_data = &module.structs[some_variant];
+    let some_struct_data = module.ty.kind(some_variant_ty);
+    let some_struct_data = some_struct_data.expect_struct();
     let elem_ptr_ty = some_struct_data.fields[0].ty;
     let elem_ptr_ptr_ty = module.ty.register(TypeKind::Ptr(elem_ptr_ty));
-    let TypeKind::Ptr(elem_ty) = module.ty[elem_ptr_ty] else {
+    let TypeKind::Ptr(elem_ty) = *module.ty.kind(elem_ptr_ty) else {
         bug!("`Some` variant payload must be a pointer");
     };
 

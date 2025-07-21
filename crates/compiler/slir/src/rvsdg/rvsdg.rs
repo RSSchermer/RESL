@@ -12,8 +12,8 @@ use crate::ty::{
 };
 use crate::util::thin_set::ThinSet;
 use crate::{
-    thin_set, BinaryOperator, EnumRegistry, Function, Module, StorageBinding, UnaryOperator,
-    UniformBinding, WorkgroupBinding,
+    thin_set, BinaryOperator, Function, Module, StorageBinding, UnaryOperator, UniformBinding,
+    WorkgroupBinding,
 };
 
 pub trait Connectivity {
@@ -1330,7 +1330,7 @@ impl OpApply {
     }
 
     pub fn resolve_fn(&self, module: &Module) -> Function {
-        *module.ty[self.value_inputs[0].ty].expect_fn()
+        *module.ty.kind(self.value_inputs[0].ty).expect_fn()
     }
 }
 
@@ -1882,6 +1882,7 @@ macro_rules! add_const_methods {
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Rvsdg {
+    ty: TypeRegistry,
     regions: SlotMap<Region, RegionData>,
     nodes: SlotMap<Node, NodeData>,
     global_region: Region,
@@ -1889,7 +1890,7 @@ pub struct Rvsdg {
 }
 
 impl Rvsdg {
-    pub fn new() -> Self {
+    pub fn new(type_registry: TypeRegistry) -> Self {
         let mut regions = SlotMap::default();
         let global_region = regions.insert(RegionData {
             owner: None,
@@ -1901,11 +1902,16 @@ impl Rvsdg {
         });
 
         Rvsdg {
+            ty: type_registry,
             regions,
             nodes: Default::default(),
             global_region,
             function_node: Default::default(),
         }
+    }
+
+    pub fn ty(&self) -> &TypeRegistry {
+        &self.ty
     }
 
     pub fn global_region(&self) -> Region {
@@ -2382,14 +2388,8 @@ impl Rvsdg {
         add_const_bool ConstBool bool TY_BOOL,
     }
 
-    pub fn add_const_ptr(
-        &mut self,
-        type_registry: &mut TypeRegistry,
-        region: Region,
-        pointee_ty: Type,
-        base: ValueInput,
-    ) -> Node {
-        let ptr_ty = type_registry.register(TypeKind::Ptr(pointee_ty));
+    pub fn add_const_ptr(&mut self, region: Region, pointee_ty: Type, base: ValueInput) -> Node {
+        let ptr_ty = self.ty.register(TypeKind::Ptr(pointee_ty));
 
         let node = self.nodes.insert(NodeData {
             kind: NodeKind::Simple(
@@ -2426,13 +2426,8 @@ impl Rvsdg {
         node
     }
 
-    pub fn add_op_alloca(
-        &mut self,
-        type_registry: &mut TypeRegistry,
-        region: Region,
-        ty: Type,
-    ) -> Node {
-        let ptr_ty = type_registry.register(TypeKind::Ptr(ty));
+    pub fn add_op_alloca(&mut self, region: Region, ty: Type) -> Node {
+        let ptr_ty = self.ty.register(TypeKind::Ptr(ty));
 
         let node = self.nodes.insert(NodeData {
             kind: NodeKind::Simple(
@@ -2515,7 +2510,6 @@ impl Rvsdg {
 
     pub fn add_op_ptr_element_ptr(
         &mut self,
-        type_registry: &mut TypeRegistry,
         region: Region,
         element_ty: Type,
         ptr_input: ValueInput,
@@ -2531,7 +2525,7 @@ impl Rvsdg {
             inputs.push(input);
         }
 
-        let ptr_ty = type_registry.register(TypeKind::Ptr(element_ty));
+        let ptr_ty = self.ty.register(TypeKind::Ptr(element_ty));
 
         let node = self.nodes.insert(NodeData {
             kind: NodeKind::Simple(
@@ -2573,28 +2567,23 @@ impl Rvsdg {
 
     pub fn add_op_ptr_variant_ptr(
         &mut self,
-        type_registry: &mut TypeRegistry,
-        enum_registry: &EnumRegistry,
         region: Region,
         input: ValueInput,
         variant_index: u32,
     ) -> Node {
         self.validate_node_value_input(region, &input);
 
-        let TypeKind::Ptr(pointee_ty) = type_registry[input.ty] else {
+        let TypeKind::Ptr(pointee_ty) = *self.ty.kind(input.ty) else {
             panic!("`ptr_input` must be of a pointer type")
         };
-        let TypeKind::Enum(enum_handle) = type_registry[pointee_ty] else {
+        let pointee_kind = self.ty.kind(pointee_ty);
+        let TypeKind::Enum(enum_data) = &*pointee_kind else {
             panic!("`ptr_input` must point to an enum type")
         };
 
-        let variants = &enum_registry[enum_handle].variants;
+        let variants = &enum_data.variants;
 
-        let Some(variant) = enum_registry[enum_handle]
-            .variants
-            .get(variant_index as usize)
-            .copied()
-        else {
+        let Some(variant_ty) = variants.get(variant_index as usize).copied() else {
             panic!(
                 "tried to select variant `{}` on an enum that only has {} variants",
                 variant_index,
@@ -2602,8 +2591,7 @@ impl Rvsdg {
             )
         };
 
-        let variant_ty = type_registry.register(TypeKind::Struct(variant));
-        let output_ty = type_registry.register(TypeKind::Ptr(variant_ty));
+        let output_ty = self.ty.register(TypeKind::Ptr(variant_ty));
 
         let node = self.nodes.insert(NodeData {
             kind: NodeKind::Simple(
@@ -2727,7 +2715,8 @@ impl Rvsdg {
         argument_inputs: impl IntoIterator<Item = ValueInput>,
         state_origin: StateOrigin,
     ) -> Node {
-        let function = module.ty[fn_input.ty].expect_fn();
+        let ty_kind = module.ty.kind(fn_input.ty);
+        let function = ty_kind.expect_fn();
         let sig = &module.fn_sigs[*function];
         let ret_ty = sig.ret_ty;
 
@@ -3780,7 +3769,7 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
@@ -3879,7 +3868,7 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
@@ -4014,7 +4003,7 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
@@ -4212,7 +4201,7 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
@@ -4407,14 +4396,14 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let node_0 = rvsdg.add_const_u32(region, 1);
         let node_1 = rvsdg.add_op_load(
             region,
-            ValueInput::argument(module.ty.register(TypeKind::Ptr(TY_U32)), 0),
+            ValueInput::argument(TY_PTR_U32, 0),
             TY_U32,
             StateOrigin::Argument,
         );
@@ -4426,7 +4415,7 @@ mod tests {
         );
         let node_3 = rvsdg.add_op_store(
             region,
-            ValueInput::argument(module.ty.register(TypeKind::Ptr(TY_U32)), 0),
+            ValueInput::argument(TY_PTR_U32, 0),
             ValueInput::output(TY_U32, node_2, 0),
             StateOrigin::Node(node_1),
         );
@@ -4435,7 +4424,7 @@ mod tests {
         assert_eq!(
             rvsdg[region].value_arguments()[0],
             ValueOutput {
-                ty: module.ty.register(TypeKind::Ptr(TY_U32)),
+                ty: TY_PTR_U32,
                 users: thin_set![
                     ValueUser::Input {
                         consumer: node_1,
@@ -4465,7 +4454,7 @@ mod tests {
         // Check node_1 inputs and outputs
         assert_eq!(
             rvsdg[node_1].value_inputs()[0],
-            ValueInput::argument(module.ty.register(TypeKind::Ptr(TY_U32)), 0),
+            ValueInput::argument(TY_PTR_U32, 0),
         );
         assert_eq!(
             rvsdg[node_1].state(),
@@ -4498,7 +4487,7 @@ mod tests {
         // Check node_3 inputs and outputs
         assert_eq!(
             rvsdg[node_3].value_inputs()[0],
-            ValueInput::argument(module.ty.register(TypeKind::Ptr(TY_U32)), 0),
+            ValueInput::argument(TY_PTR_U32, 0),
         );
         assert_eq!(
             rvsdg[node_3].value_inputs()[1],
@@ -4587,7 +4576,7 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (dep_0_node, _) = rvsdg.register_function(&module, dependency_0, iter::empty());
         let (dep_1_node, _) = rvsdg.register_function(&module, dependency_1, iter::empty());

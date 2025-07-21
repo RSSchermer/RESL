@@ -218,12 +218,7 @@ impl MemoryPromoterLegalizer {
         }
     }
 
-    pub fn promote_and_legalize(
-        &mut self,
-        ty: &mut TypeRegistry,
-        rvsdg: &mut Rvsdg,
-        region: Region,
-    ) {
+    pub fn promote_and_legalize(&mut self, rvsdg: &mut Rvsdg, region: Region) {
         // Set the initial state origin to the region's state argument
         self.state_origin = (region, StateOrigin::Argument);
 
@@ -234,10 +229,10 @@ impl MemoryPromoterLegalizer {
         self.owner_stack.clear();
         self.touched_alloca_stack.clear();
 
-        while self.visit_state_user(ty, rvsdg) {}
+        while self.visit_state_user(rvsdg) {}
     }
 
-    fn visit_state_user(&mut self, ty: &mut TypeRegistry, rvsdg: &mut Rvsdg) -> bool {
+    fn visit_state_user(&mut self, rvsdg: &mut Rvsdg) -> bool {
         let (current_region, current_origin) = self.state_origin;
 
         let current_user = match current_origin {
@@ -261,10 +256,10 @@ impl MemoryPromoterLegalizer {
                 use SimpleNode::*;
 
                 match rvsdg[node].kind() {
-                    Switch(_) => self.visit_switch(ty, rvsdg, node),
-                    Loop(_) => self.visit_loop(ty, rvsdg, node),
-                    Simple(OpLoad(_)) => self.visit_op_load(ty, rvsdg, node),
-                    Simple(OpStore(_)) => self.visit_op_store(ty, rvsdg, node),
+                    Switch(_) => self.visit_switch(rvsdg, node),
+                    Loop(_) => self.visit_loop(rvsdg, node),
+                    Simple(OpLoad(_)) => self.visit_op_load(rvsdg, node),
+                    Simple(OpStore(_)) => self.visit_op_store(rvsdg, node),
                     _ => unreachable!("node kind cannot be part of the state chain"),
                 }
 
@@ -273,7 +268,7 @@ impl MemoryPromoterLegalizer {
         }
     }
 
-    fn visit_switch(&mut self, ty: &mut TypeRegistry, rvsdg: &mut Rvsdg, switch_node: Node) {
+    fn visit_switch(&mut self, rvsdg: &mut Rvsdg, switch_node: Node) {
         let region = rvsdg[switch_node].region();
         let switch_data = rvsdg[switch_node].expect_switch();
         let branch_count = switch_data.branches().len();
@@ -285,7 +280,7 @@ impl MemoryPromoterLegalizer {
 
             self.state_origin = (branch, StateOrigin::Argument);
 
-            while self.visit_state_user(ty, rvsdg) {}
+            while self.visit_state_user(rvsdg) {}
         }
 
         let touched_allocas = self
@@ -328,7 +323,7 @@ impl MemoryPromoterLegalizer {
         self.state_origin = (region, StateOrigin::Node(switch_node));
     }
 
-    fn visit_loop(&mut self, ty: &mut TypeRegistry, rvsdg: &mut Rvsdg, loop_node: Node) {
+    fn visit_loop(&mut self, rvsdg: &mut Rvsdg, loop_node: Node) {
         let region = rvsdg[loop_node].region();
         let loop_region = rvsdg[loop_node].expect_loop().loop_region();
 
@@ -336,7 +331,7 @@ impl MemoryPromoterLegalizer {
 
         self.state_origin = (loop_region, StateOrigin::Argument);
 
-        while self.visit_state_user(ty, rvsdg) {}
+        while self.visit_state_user(rvsdg) {}
 
         let touched_allocas = self
             .touched_alloca_stack
@@ -396,7 +391,7 @@ impl MemoryPromoterLegalizer {
         self.state_origin = (region, StateOrigin::Node(loop_node));
     }
 
-    fn visit_op_store(&mut self, ty: &mut TypeRegistry, rvsdg: &mut Rvsdg, op_store: Node) {
+    fn visit_op_store(&mut self, rvsdg: &mut Rvsdg, op_store: Node) {
         let region = rvsdg[op_store].region();
         let store_data = rvsdg[op_store].expect_op_store();
         let pointer_origin = store_data.ptr_input().origin;
@@ -418,7 +413,7 @@ impl MemoryPromoterLegalizer {
                 // `self.state_origin`.
             }
             PointerAction::VariablePointerEmulation => {
-                self.emulation_context.emulate_op_store(ty, rvsdg, op_store);
+                self.emulation_context.emulate_op_store(rvsdg, op_store);
 
                 // Note that emulation will replace the OpStore in the state chain with the
                 // emulation node, so the "visit loop" will automatically visit the emulation node
@@ -431,7 +426,7 @@ impl MemoryPromoterLegalizer {
         }
     }
 
-    fn visit_op_load(&mut self, ty: &mut TypeRegistry, rvsdg: &mut Rvsdg, op_load: Node) {
+    fn visit_op_load(&mut self, rvsdg: &mut Rvsdg, op_load: Node) {
         let region = rvsdg[op_load].region();
         let origin = rvsdg[op_load].expect_op_load().ptr_input().origin;
         let action = self.pointer_analyzer.resolve_action(rvsdg, region, origin);
@@ -454,7 +449,7 @@ impl MemoryPromoterLegalizer {
                 // update `self.state_origin`.
             }
             PointerAction::VariablePointerEmulation => {
-                self.emulation_context.emulate_op_load(ty, rvsdg, op_load);
+                self.emulation_context.emulate_op_load(rvsdg, op_load);
 
                 // Note that emulation will replace the OpLoad in the state chain with the emulation
                 // node, so the "visit loop" will automatically visit the emulation node on the
@@ -594,7 +589,7 @@ pub fn entry_points_memory_promotion_and_legalization(module: &mut Module, rvsdg
             .expect("function should have RVSDG body");
         let body_region = rvsdg[node].expect_function().body_region();
 
-        memory_promoter_legalizer.promote_and_legalize(&mut module.ty, rvsdg, body_region);
+        memory_promoter_legalizer.promote_and_legalize(rvsdg, body_region);
     }
 }
 
@@ -634,13 +629,13 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
-        let alloca_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let alloca_node = rvsdg.add_op_alloca(region, TY_U32);
         let store_0_node = rvsdg.add_op_store(
             region,
             ValueInput::output(ptr_ty, alloca_node, 0),
@@ -683,7 +678,7 @@ mod tests {
 
         let mut promoter_legalizer = MemoryPromoterLegalizer::new();
 
-        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg, region);
+        promoter_legalizer.promote_and_legalize(&mut rvsdg, region);
 
         assert_eq!(
             &rvsdg[region].value_arguments()[0].users,
@@ -754,13 +749,13 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
-        let alloca_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let alloca_node = rvsdg.add_op_alloca(region, TY_U32);
         let store_0_node = rvsdg.add_op_store(
             region,
             ValueInput::output(ptr_ty, alloca_node, 0),
@@ -791,7 +786,7 @@ mod tests {
 
         let mut promoter_legalizer = MemoryPromoterLegalizer::new();
 
-        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg, region);
+        promoter_legalizer.promote_and_legalize(&mut rvsdg, region);
 
         assert!(
             rvsdg[region].value_arguments()[0].users.is_empty(),
@@ -851,13 +846,13 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
-        let alloca_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let alloca_node = rvsdg.add_op_alloca(region, TY_U32);
         let store_node = rvsdg.add_op_store(
             region,
             ValueInput::output(ptr_ty, alloca_node, 0),
@@ -916,7 +911,7 @@ mod tests {
 
         let mut promoter_legalizer = MemoryPromoterLegalizer::new();
 
-        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg, region);
+        promoter_legalizer.promote_and_legalize(&mut rvsdg, region);
 
         assert_eq!(
             &rvsdg[region].value_arguments()[0].users,
@@ -991,14 +986,14 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
         // Create alloca node and store the first function argument to it
-        let alloca_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let alloca_node = rvsdg.add_op_alloca(region, TY_U32);
         let store_node = rvsdg.add_op_store(
             region,
             ValueInput::output(ptr_ty, alloca_node, 0),
@@ -1107,7 +1102,7 @@ mod tests {
 
         let mut promoter_legalizer = MemoryPromoterLegalizer::new();
 
-        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg, region);
+        promoter_legalizer.promote_and_legalize(&mut rvsdg, region);
 
         assert_eq!(
             &rvsdg[region].value_arguments()[0].users,
@@ -1198,13 +1193,13 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
-        let alloca_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let alloca_node = rvsdg.add_op_alloca(region, TY_U32);
         let store_node = rvsdg.add_op_store(
             region,
             ValueInput::output(ptr_ty, alloca_node, 0),
@@ -1252,7 +1247,7 @@ mod tests {
 
         let mut promoter_legalizer = MemoryPromoterLegalizer::new();
 
-        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg, region);
+        promoter_legalizer.promote_and_legalize(&mut rvsdg, region);
 
         assert_eq!(
             &rvsdg[region].value_arguments()[1].users,
@@ -1388,14 +1383,14 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
         // Create alloca node and initial store
-        let alloca_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let alloca_node = rvsdg.add_op_alloca(region, TY_U32);
         let store_node = rvsdg.add_op_store(
             region,
             ValueInput::output(ptr_ty, alloca_node, 0),
@@ -1467,7 +1462,7 @@ mod tests {
 
         let mut promoter_legalizer = MemoryPromoterLegalizer::new();
 
-        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg, region);
+        promoter_legalizer.promote_and_legalize(&mut rvsdg, region);
 
         // Verify that the third function argument (initial stored value) is correctly passed into
         // the outer switch
@@ -1585,13 +1580,13 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
-        let alloca_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let alloca_node = rvsdg.add_op_alloca(region, TY_U32);
         let store_node = rvsdg.add_op_store(
             region,
             ValueInput::output(ptr_ty, alloca_node, 0),
@@ -1673,7 +1668,7 @@ mod tests {
 
         let mut promoter_legalizer = MemoryPromoterLegalizer::new();
 
-        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg, region);
+        promoter_legalizer.promote_and_legalize(&mut rvsdg, region);
 
         assert_eq!(
             &rvsdg[region].value_arguments()[0].users,
@@ -1746,13 +1741,13 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
-        let alloca_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let alloca_node = rvsdg.add_op_alloca(region, TY_U32);
         let outer_store_node = rvsdg.add_op_store(
             region,
             ValueInput::output(ptr_ty, alloca_node, 0),
@@ -1831,7 +1826,7 @@ mod tests {
 
         let mut promoter_legalizer = MemoryPromoterLegalizer::new();
 
-        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg, region);
+        promoter_legalizer.promote_and_legalize(&mut rvsdg, region);
 
         assert_eq!(
             &rvsdg[region].value_arguments()[0].users,
@@ -1909,13 +1904,13 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let ptr_ty = module.ty.register(TypeKind::Ptr(TY_U32));
 
-        let alloca_0_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let alloca_0_node = rvsdg.add_op_alloca(region, TY_U32);
         let store_0_value = rvsdg.add_const_u32(region, 0);
         let store_0_node = rvsdg.add_op_store(
             region,
@@ -1924,7 +1919,7 @@ mod tests {
             StateOrigin::Argument,
         );
 
-        let alloca_1_node = rvsdg.add_op_alloca(&mut module.ty, region, TY_U32);
+        let alloca_1_node = rvsdg.add_op_alloca(region, TY_U32);
         let store_1_value = rvsdg.add_const_u32(region, 1);
         let store_1_node = rvsdg.add_op_store(
             region,
@@ -1970,7 +1965,7 @@ mod tests {
 
         let mut promoter_legalizer = MemoryPromoterLegalizer::new();
 
-        promoter_legalizer.promote_and_legalize(&mut module.ty, &mut rvsdg, region);
+        promoter_legalizer.promote_and_legalize(&mut rvsdg, region);
 
         let ValueOrigin::Output {
             producer: emulation_node,

@@ -1,11 +1,9 @@
 use std::fmt;
 use std::fmt::Display;
 use std::hash::Hash;
-use std::marker::PhantomData;
-use std::ops::{Deref, Index, IndexMut};
+use std::ops::Index;
 
 use indexmap::set::MutableValues;
-use indexmap::IndexSet;
 use internment::Intern;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
@@ -20,36 +18,6 @@ slotmap::new_key_type! {
 }
 
 pub type Symbol = Intern<String>;
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
-pub struct Struct(usize);
-
-impl Struct {
-    pub fn to_usize(&self) -> usize {
-        self.0
-    }
-}
-
-impl From<usize> for Struct {
-    fn from(value: usize) -> Self {
-        Struct(value)
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
-pub struct Enum(usize);
-
-impl Enum {
-    pub fn to_usize(&self) -> usize {
-        self.0
-    }
-}
-
-impl From<usize> for Enum {
-    fn from(value: usize) -> Self {
-        Enum(value)
-    }
-}
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct Function {
@@ -73,80 +41,6 @@ impl From<u64> for ModuleId {
 }
 
 #[derive(Clone, Serialize, Deserialize, Default, Debug)]
-pub struct StructRegistry {
-    store: IndexSet<StructData>,
-}
-
-impl StructRegistry {
-    pub fn register(&mut self, struct_data: StructData) -> Struct {
-        let (index, _) = self.store.insert_full(struct_data);
-
-        Struct(index)
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = Struct> + use<'_> {
-        self.store
-            .iter()
-            .map(|s| Struct(self.store.get_index_of(s).unwrap()))
-    }
-}
-
-impl Index<Struct> for StructRegistry {
-    type Output = StructData;
-
-    fn index(&self, struct_handle: Struct) -> &Self::Output {
-        self.store
-            .get_index(struct_handle.0)
-            .expect("unregistered struct")
-    }
-}
-
-impl IndexMut<Struct> for StructRegistry {
-    fn index_mut(&mut self, struct_handle: Struct) -> &mut Self::Output {
-        self.store
-            .get_index_mut2(struct_handle.0)
-            .expect("unregistered struct")
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize, Default, Debug)]
-pub struct EnumRegistry {
-    store: IndexSet<EnumData>,
-}
-
-impl EnumRegistry {
-    pub fn register(&mut self, enum_data: EnumData) -> Enum {
-        let (index, _) = self.store.insert_full(enum_data);
-
-        Enum(index)
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = Enum> + use<'_> {
-        self.store
-            .iter()
-            .map(|s| Enum(self.store.get_index_of(s).unwrap()))
-    }
-}
-
-impl Index<Enum> for EnumRegistry {
-    type Output = EnumData;
-
-    fn index(&self, enum_handle: Enum) -> &Self::Output {
-        self.store
-            .get_index(enum_handle.0)
-            .expect("unregistered enum")
-    }
-}
-
-impl IndexMut<Enum> for EnumRegistry {
-    fn index_mut(&mut self, enum_handle: Enum) -> &mut Self::Output {
-        self.store
-            .get_index_mut2(enum_handle.0)
-            .expect("unregistered enum")
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize, Default, Debug)]
 pub struct FnSigRegistry {
     store: FxHashMap<Function, FnSig>,
 }
@@ -164,10 +58,6 @@ impl FnSigRegistry {
         self.store.get(&function)
     }
 
-    pub fn get_mut(&mut self, function: Function) -> Option<&mut FnSig> {
-        self.store.get_mut(&function)
-    }
-
     pub fn keys(&self) -> impl Iterator<Item = Function> + use<'_> {
         self.store.keys().copied()
     }
@@ -182,12 +72,6 @@ impl Index<Function> for FnSigRegistry {
 
     fn index(&self, function: Function) -> &Self::Output {
         self.get(function).expect("function not registered")
-    }
-}
-
-impl IndexMut<Function> for FnSigRegistry {
-    fn index_mut(&mut self, function: Function) -> &mut Self::Output {
-        self.get_mut(function).expect("function not registered")
     }
 }
 
@@ -329,8 +213,6 @@ impl EntryPointRegistry {
 pub struct Module {
     pub name: Symbol,
     pub ty: TypeRegistry,
-    pub structs: StructRegistry,
-    pub enums: EnumRegistry,
     pub fn_sigs: FnSigRegistry,
     pub uniform_bindings: UniformBindingRegistry,
     pub storage_bindings: StorageBindingRegistry,
@@ -343,8 +225,6 @@ impl Module {
         Module {
             name,
             ty: Default::default(),
-            structs: Default::default(),
-            enums: Default::default(),
             fn_sigs: Default::default(),
             uniform_bindings: Default::default(),
             storage_bindings: Default::default(),
@@ -366,22 +246,6 @@ pub struct FnSig {
 pub struct FnArg {
     pub ty: Type,
     pub shader_io_binding: Option<ShaderIOBinding>,
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
-pub struct StructData {
-    pub fields: Vec<StructField>,
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
-pub struct EnumData {
-    pub variants: Vec<Struct>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
-pub struct StructField {
-    pub offset: u64,
-    pub ty: Type,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]

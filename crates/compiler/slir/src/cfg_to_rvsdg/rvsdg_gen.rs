@@ -330,9 +330,7 @@ impl<'a> RegionBuilder<'a> {
     }
 
     fn visit_op_alloca(&mut self, op: &OpAlloca) {
-        let node = self
-            .rvsdg
-            .add_op_alloca(&mut self.module.ty, self.region, op.ty);
+        let node = self.rvsdg.add_op_alloca(self.region, op.ty);
 
         self.input_state_tracker
             .insert_value_node(op.result, node, 0);
@@ -379,13 +377,9 @@ impl<'a> RegionBuilder<'a> {
             .copied()
             .map(|v| self.resolve_value(v))
             .collect::<Vec<_>>();
-        let node = self.rvsdg.add_op_ptr_element_ptr(
-            &mut self.module.ty,
-            self.region,
-            op.element_ty,
-            ptr_input,
-            index_inputs,
-        );
+        let node =
+            self.rvsdg
+                .add_op_ptr_element_ptr(self.region, op.element_ty, ptr_input, index_inputs);
 
         self.input_state_tracker
             .insert_value_node(op.result, node, 0);
@@ -394,13 +388,9 @@ impl<'a> RegionBuilder<'a> {
     fn visit_op_ptr_variant_ptr(&mut self, op: &OpPtrVariantPtr) {
         let input = self.resolve_value(op.ptr);
 
-        let node = self.rvsdg.add_op_ptr_variant_ptr(
-            &mut self.module.ty,
-            &self.module.enums,
-            self.region,
-            input,
-            op.variant_index,
-        );
+        let node = self
+            .rvsdg
+            .add_op_ptr_variant_ptr(self.region, input, op.variant_index);
 
         self.input_state_tracker
             .insert_value_node(op.result, node, 0);
@@ -519,12 +509,7 @@ impl<'a> RegionBuilder<'a> {
             InlineConst::Bool(v) => (TY_BOOL, self.rvsdg.add_const_bool(self.region, v)),
             InlineConst::Ptr(ptr) => {
                 let base = self.resolve_root_identifier(ptr.base);
-                let node = self.rvsdg.add_const_ptr(
-                    &mut self.module.ty,
-                    self.region,
-                    ptr.pointee_ty,
-                    base,
-                );
+                let node = self.rvsdg.add_const_ptr(self.region, ptr.pointee_ty, base);
 
                 (self.module.ty.register(TypeKind::Ptr(ptr.pointee_ty)), node)
             }
@@ -660,7 +645,7 @@ fn add_item(
 }
 
 pub fn cfg_to_rvsdg(module: &mut Module, cfg: &Cfg) -> Rvsdg {
-    let mut rvsdg = Rvsdg::new();
+    let mut rvsdg = Rvsdg::new(module.ty.clone());
     let mut visited = FxHashSet::default();
     let mut item_node = FxHashMap::default();
 
@@ -756,7 +741,7 @@ mod tests {
 
         let actual = cfg_to_rvsdg(&mut module, &cfg);
 
-        let mut expected = Rvsdg::new();
+        let mut expected = Rvsdg::new(module.ty.clone());
 
         let (_, region) = expected.register_function(&module, function, iter::empty());
 
@@ -877,7 +862,7 @@ mod tests {
 
         let actual = cfg_to_rvsdg(&mut module, &cfg);
 
-        let mut expected = Rvsdg::new();
+        let mut expected = Rvsdg::new(module.ty.clone());
 
         let (_, region) = expected.register_function(&module, function, iter::empty());
 
@@ -998,7 +983,7 @@ mod tests {
 
         let actual = cfg_to_rvsdg(&mut module, &cfg);
 
-        let mut expected = Rvsdg::new();
+        let mut expected = Rvsdg::new(module.ty.clone());
 
         let (_, region) = expected.register_function(&module, function, iter::empty());
 
@@ -1120,7 +1105,7 @@ mod tests {
 
         let actual = cfg_to_rvsdg(&mut module, &cfg);
 
-        let mut expected = Rvsdg::new();
+        let mut expected = Rvsdg::new(module.ty.clone());
 
         let (_, region) = expected.register_function(&module, function, iter::empty());
 

@@ -3,7 +3,6 @@ use std::cell::RefCell;
 use rustc_hash::FxHashMap;
 use rustc_middle::bug;
 use rustc_smir::rustc_internal::internal;
-use slir::EnumData;
 use stable_mir::abi::{
     FieldsShape, FloatLength, FnAbi, IntegerLength, PassMode, Primitive, ValueAbi, VariantsShape,
     WrappingRange,
@@ -19,7 +18,6 @@ use crate::hir_ext::{
     BlendSrc, FnExt, Interpolation, InterpolationSampling, InterpolationType, ResourceBinding,
     ShaderIOBinding, StaticExt,
 };
-use crate::slir_build::builder::Builder;
 use crate::slir_build::ty::Type;
 use crate::slir_build::value::Value;
 use crate::stable_cg::traits::{
@@ -150,7 +148,7 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
         // primitives (e.g. an Option<T> where T has a "niche"), but we want to explicitly pass
         // those to SLIR as enums regardless.
         if let VariantsShape::Multiple { variants, .. } = &shape.variants {
-            return self.register_enum_ty(variants, layout);
+            return self.register_enum(variants, layout);
         }
 
         match shape.abi {
@@ -171,7 +169,7 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
             FieldsShape::Union(_) => bug!("union types are not supported by RESL"),
             FieldsShape::Array { count, .. } => self.register_array_ty(count, layout),
             FieldsShape::Arbitrary { ref offsets, .. } => {
-                self.register_struct_ty(&shape, offsets, layout)
+                self.register_struct(&shape, offsets, layout)
             }
         }
     }
@@ -217,7 +215,7 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
                         });
 
                         self.module
-                            .borrow_mut()
+                            .borrow()
                             .ty
                             .register(slir::ty::TypeKind::Ptr(pointee_ty))
                     }
@@ -240,23 +238,18 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
         // My understanding from rustc_codegen_llvm is that there is never any padding between
         // the values of a scalar pair (as they are never meant to be stored to memory).
         let fields = vec![
-            slir::StructField { offset: 0, ty: t0 },
-            slir::StructField {
+            slir::ty::StructField { offset: 0, ty: t0 },
+            slir::ty::StructField {
                 offset: s0.size(&MachineInfo::target()).bytes() as u64,
                 ty: t1,
             },
         ];
 
-        let struct_handle = self
-            .module
-            .borrow_mut()
-            .structs
-            .register(slir::StructData { fields });
         let ty = self
             .module
-            .borrow_mut()
+            .borrow()
             .ty
-            .register(slir::ty::TypeKind::Struct(struct_handle));
+            .register(slir::ty::Struct { fields }.into());
 
         self.ty_to_slir.borrow_mut().insert(layout, ty);
 
@@ -272,7 +265,7 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
         let base = self.resolve_scalar_ty(element, layout.field(0));
         let ty = self
             .module
-            .borrow_mut()
+            .borrow()
             .ty
             .register(slir::ty::TypeKind::Array { base, count });
 
@@ -286,7 +279,7 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
         let base = self.ty_and_layout_resolve(element_layout);
         let ty = self
             .module
-            .borrow_mut()
+            .borrow()
             .ty
             .register(slir::ty::TypeKind::Array { base, count });
 
@@ -299,8 +292,8 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
         &self,
         shape: &abi::LayoutShape,
         field_offsets: &[MachineSize],
-        layout: &TyAndLayout,
-    ) -> slir::Struct {
+        layout: TyAndLayout,
+    ) -> slir::ty::Type {
         let fields = shape
             .fields
             .fields_by_offset_order()
@@ -309,38 +302,25 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
                 let layout = layout.field(i);
                 let ty = self.ty_and_layout_resolve(layout);
 
-                slir::StructField {
+                slir::ty::StructField {
                     offset: field_offsets[i].bytes() as u64,
                     ty,
                 }
             })
             .collect();
 
-        self.module
-            .borrow_mut()
-            .structs
-            .register(slir::StructData { fields })
-    }
-
-    fn register_struct_ty(
-        &self,
-        shape: &abi::LayoutShape,
-        field_offsets: &[MachineSize],
-        layout: TyAndLayout,
-    ) -> slir::ty::Type {
-        let struct_handle = self.register_struct(shape, field_offsets, &layout);
         let ty = self
             .module
-            .borrow_mut()
+            .borrow()
             .ty
-            .register(slir::ty::TypeKind::Struct(struct_handle));
+            .register(slir::ty::Struct { fields }.into());
 
         self.ty_to_slir.borrow_mut().insert(layout, ty);
 
         ty
     }
 
-    fn register_enum_ty(
+    fn register_enum(
         &self,
         variant_shapes: &[abi::LayoutShape],
         layout: TyAndLayout,
@@ -357,20 +337,15 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
                     bug!("enum variant should have an arbitrary field shape")
                 };
 
-                self.register_struct(shape, offsets, &variant_layout)
+                self.register_struct(shape, offsets, variant_layout)
             })
             .collect();
 
-        let enum_handle = self
-            .module
-            .borrow_mut()
-            .enums
-            .register(EnumData { variants });
         let ty = self
             .module
-            .borrow_mut()
+            .borrow()
             .ty
-            .register(slir::ty::TypeKind::Enum(enum_handle));
+            .register(slir::ty::Enum { variants }.into());
 
         self.ty_to_slir.borrow_mut().insert(layout, ty);
 

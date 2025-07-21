@@ -3,11 +3,11 @@ use slir::ty::{ScalarKind, TypeKind};
 use thaw::*;
 use urlencoding::encode as urlencode;
 
-use crate::module_explorer::{ModuleData, ENUM_ITEM_LABEL_START, STRUCT_ITEM_LABEL_START};
+use crate::module_explorer::{ModuleData, ADT_ITEM_LABEL_START};
 
 #[component]
 pub fn Type(module: StoredValue<ModuleData>, ty: slir::ty::Type) -> impl IntoView {
-    match &module.read_value().module.ty[ty] {
+    match &*module.read_value().module.ty.kind(ty) {
         TypeKind::Scalar(scalar) => match scalar {
             ScalarKind::I32 => view! {"i32"}.into_any(),
             ScalarKind::U32 => view! {"u32"}.into_any(),
@@ -47,21 +47,21 @@ pub fn Type(module: StoredValue<ModuleData>, ty: slir::ty::Type) -> impl IntoVie
         TypeKind::Array { base, count } => {
             view! { "array<" <Type module ty=*base/> ", " {*count} ">" }.into_any()
         }
-        TypeKind::Struct(s) => {
-            let s = s.to_usize();
+        TypeKind::Struct(_) => {
+            let id = ty.registration_id().unwrap_or_default();
 
             view! {
-                <Link href=format!("/{}/{}{}", urlencode(module.read_value().module.name.as_str()), STRUCT_ITEM_LABEL_START, s)>
-                    {format!("S_{}", s)}
+                <Link href=format!("/{}/{}{}", urlencode(module.read_value().module.name.as_str()), ADT_ITEM_LABEL_START, id)>
+                    {format!("S_{}", id)}
                 </Link>
             }.into_any()
         }
-        TypeKind::Enum(e) => {
-            let e = e.to_usize();
+        TypeKind::Enum(_) => {
+            let id = ty.registration_id().unwrap_or_default();
 
             view! {
-                <Link href=format!("/{}/{}{}", urlencode(module.read_value().module.name.as_str()), ENUM_ITEM_LABEL_START, e)>
-                    {format!("E_{}", e)}
+                <Link href=format!("/{}/{}{}", urlencode(module.read_value().module.name.as_str()), ADT_ITEM_LABEL_START, id)>
+                    {format!("E_{}", id)}
                 </Link>
             }.into_any()
         }

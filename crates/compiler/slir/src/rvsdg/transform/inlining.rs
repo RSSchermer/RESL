@@ -286,8 +286,7 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
         let pointee_ty = data.pointee_ty();
         let base = self.mapped_value_input(data.base());
 
-        self.rvsdg
-            .add_const_ptr(&mut self.module.ty, self.dst_region, pointee_ty, base)
+        self.rvsdg.add_const_ptr(self.dst_region, pointee_ty, base)
     }
 
     fn replicate_const_fallback_node(&mut self, node: Node) -> Node {
@@ -299,8 +298,7 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
     fn replicate_op_alloca_node(&mut self, node: Node) -> Node {
         let ty = self.rvsdg[node].expect_op_alloca().ty();
 
-        self.rvsdg
-            .add_op_alloca(&mut self.module.ty, self.dst_region, ty)
+        self.rvsdg.add_op_alloca(self.dst_region, ty)
     }
 
     fn replicate_op_load_node(&mut self, node: Node) -> Node {
@@ -333,13 +331,8 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
             .map(|input| self.mapped_value_input(input))
             .collect::<Vec<_>>();
 
-        self.rvsdg.add_op_ptr_element_ptr(
-            &mut self.module.ty,
-            self.dst_region,
-            element_ty,
-            ptr_input,
-            index_inputs,
-        )
+        self.rvsdg
+            .add_op_ptr_element_ptr(self.dst_region, element_ty, ptr_input, index_inputs)
     }
 
     fn replicate_op_ptr_discriminant_ptr_node(&mut self, node: Node) -> Node {
@@ -355,13 +348,8 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
         let input = self.mapped_value_input(data.input());
         let variant_index = data.variant_index();
 
-        self.rvsdg.add_op_ptr_variant_ptr(
-            &mut self.module.ty,
-            &self.module.enums,
-            self.dst_region,
-            input,
-            variant_index,
-        )
+        self.rvsdg
+            .add_op_ptr_variant_ptr(self.dst_region, input, variant_index)
     }
 
     fn replicate_op_extract_element(&mut self, node: Node) -> Node {
@@ -375,7 +363,6 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
             .collect::<Vec<_>>();
 
         self.rvsdg.add_op_ptr_element_ptr(
-            &mut self.module.ty,
             self.dst_region,
             element_ty,
             aggregate_input,
@@ -731,7 +718,7 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         // Build inline_target
         let (inline_target_node, src_region) =
@@ -911,7 +898,7 @@ mod tests {
             },
         );
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         // Build inline_target
         let (inline_target_node, src_region) =
@@ -929,7 +916,7 @@ mod tests {
         // Build inline_dst
         let (_, dst_region) = rvsdg.register_function(&module, inline_dst, [inline_target_node]);
 
-        let inline_dst_node_0 = rvsdg.add_op_alloca(&mut module.ty, dst_region, TY_U32);
+        let inline_dst_node_0 = rvsdg.add_op_alloca(dst_region, TY_U32);
         let inline_dst_node_1 = rvsdg.add_op_apply(
             &module,
             dst_region,
@@ -1016,7 +1003,7 @@ mod tests {
             .entry_points
             .register(entry_point, EntryPointKind::Compute(1, 1, 1));
 
-        let mut rvsdg = Rvsdg::new();
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
 
         // Build add_1
         let (add_1_node, add_1_region) = rvsdg.register_function(&module, add_1, iter::empty());

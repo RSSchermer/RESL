@@ -8,6 +8,7 @@ pub mod rvsdg;
 pub mod ty;
 
 mod core;
+mod serde;
 mod util;
 
 pub use self::core::*;

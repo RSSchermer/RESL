@@ -747,16 +747,15 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         let ptr = ptr.expect_value();
         let ptr_ty = body.value_ty(&module, &ptr).unwrap();
 
-        let slir::ty::TypeKind::Ptr(pointee_ty) = module.ty[ptr_ty] else {
+        let slir::ty::TypeKind::Ptr(pointee_ty) = *module.ty.kind(ptr_ty) else {
             bug!("pointer value should have pointer type")
         };
-        let slir::ty::TypeKind::Enum(enum_ty) = module.ty[pointee_ty] else {
+        let slir::ty::TypeKind::Enum(enum_data) = &*module.ty.kind(pointee_ty) else {
             bug!("pointer-variant-pointer should only be called on a pointer to an enum type");
         };
-        let Some(variant) = module.enums[enum_ty].variants.get(variant_index).copied() else {
+        let Some(variant_ty) = enum_data.variants.get(variant_index).copied() else {
             bug!("variant index out of bounds");
         };
-        let variant_ty = module.ty.register(slir::ty::TypeKind::Struct(variant));
         let variant_ptr_ty = module.ty.register(slir::ty::TypeKind::Ptr(variant_ty));
 
         let result = body.local_values.insert(slir::cfg::LocalValueData {

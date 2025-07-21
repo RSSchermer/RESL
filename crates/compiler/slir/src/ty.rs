@@ -1,18 +1,31 @@
-use std::fmt;
-use std::fmt::Formatter;
-use std::ops::{Deref, Index};
+use std::marker::PhantomData;
+use std::ops::Deref;
+use std::sync::{Arc, PoisonError, RwLock};
+use std::{fmt, mem};
 
 use indexmap::IndexSet;
 use serde::{Deserialize, Serialize};
 
-use crate::{Enum, Function, Module, Struct};
+use crate::{Function, Module};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct Type(TypeInner);
 
 impl Type {
+    pub fn registration_id(&self) -> Option<usize> {
+        if let TypeInner::Registered(id) = &self.0 {
+            Some(*id)
+        } else {
+            None
+        }
+    }
+
+    pub fn from_registration_id(id: usize) -> Self {
+        Type(TypeInner::Registered(id))
+    }
+
     pub fn to_string(&self, module: &Module) -> String {
-        module.ty[*self].to_string(module)
+        module.ty.kind(*self).to_string(module)
     }
 }
 
@@ -54,6 +67,22 @@ enum TypeInner {
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
+pub struct Struct {
+    pub fields: Vec<StructField>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
+pub struct Enum {
+    pub variants: Vec<Type>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
+pub struct StructField {
+    pub offset: u64,
+    pub ty: Type,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub enum TypeKind {
     Scalar(ScalarKind),
     Atomic(ScalarKind),
@@ -84,6 +113,22 @@ impl TypeKind {
             function
         } else {
             panic!("not a function type");
+        }
+    }
+
+    pub fn expect_struct(&self) -> &Struct {
+        if let TypeKind::Struct(struct_data) = self {
+            struct_data
+        } else {
+            panic!("not an struct type");
+        }
+    }
+
+    pub fn expect_enum(&self) -> &Enum {
+        if let TypeKind::Enum(enum_data) = self {
+            enum_data
+        } else {
+            panic!("not an enum type");
         }
     }
 
@@ -131,13 +176,25 @@ impl TypeKind {
             TypeKind::Array { base, count, .. } => {
                 format!("array<{}, {}>", base.to_string(module), count)
             }
-            TypeKind::Struct(struct_handle) => format!("Struct_{}", struct_handle.to_usize()),
-            TypeKind::Enum(enum_handle) => format!("Enum_{}", enum_handle.to_usize()),
+            TypeKind::Struct(_) => "struct".to_string(),
+            TypeKind::Enum(_) => "enum".to_string(),
             TypeKind::Ptr(pointee_ty) => format!("ptr<{}>", pointee_ty.to_string(module)),
             TypeKind::Function(f) => format!("Function_{}_{}", f.module, f.name),
             TypeKind::Predicate => format!("predicate"),
             TypeKind::Dummy => "dummy".to_string(),
         }
+    }
+}
+
+impl From<Struct> for TypeKind {
+    fn from(value: Struct) -> Self {
+        TypeKind::Struct(value)
+    }
+}
+
+impl From<Enum> for TypeKind {
+    fn from(value: Enum) -> Self {
+        TypeKind::Enum(value)
     }
 }
 
@@ -317,11 +374,12 @@ pub const TY_DUMMY: Type = Type(TypeInner::Dummy);
 
 #[derive(Clone, Default, Serialize, Deserialize, Debug)]
 pub struct TypeRegistry {
-    store: IndexSet<TypeKind>,
+    #[serde(with = "crate::serde::arc_rwlock")]
+    store: Arc<RwLock<IndexSet<Box<TypeKind>>>>,
 }
 
 impl TypeRegistry {
-    pub fn register(&mut self, ty_kind: TypeKind) -> Type {
+    pub fn register(&self, ty_kind: TypeKind) -> Type {
         match &ty_kind {
             TypeKind::Scalar(ScalarKind::I32) => return TY_I32,
             TypeKind::Scalar(ScalarKind::U32) => return TY_U32,
@@ -431,50 +489,121 @@ impl TypeRegistry {
             _ => (),
         }
 
-        let index = self.store.insert_full(ty_kind).0;
+        // We check if the type kind was already registered via a read lock first. Only if it wasn't
+        // already registered, do we request a write lock.
+        let read_lock = self.store.read().unwrap_or_else(PoisonError::into_inner);
+
+        let index = if let Some(index) = read_lock.get_index_of(&ty_kind) {
+            index
+        } else {
+            // Make sure we drop the read lock before the try to get the write lock, otherwise this
+            // will immediately deadlock.
+            mem::drop(read_lock);
+
+            self.store
+                .write()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert_full(Box::new(ty_kind))
+                .0
+        };
 
         Type(TypeInner::Registered(index))
     }
+
+    pub fn kind(&self, ty: Type) -> KindRef {
+        match ty.0 {
+            TypeInner::U32 => KindRef::from_static(&TY_KIND_U32),
+            TypeInner::I32 => KindRef::from_static(&TY_KIND_I32),
+            TypeInner::F32 => KindRef::from_static(&TY_KIND_F32),
+            TypeInner::Bool => KindRef::from_static(&TY_KIND_BOOL),
+            TypeInner::Vec2U32 => KindRef::from_static(&TY_KIND_VEC2_U32),
+            TypeInner::Vec2I32 => KindRef::from_static(&TY_KIND_VEC2_I32),
+            TypeInner::Vec2F32 => KindRef::from_static(&TY_KIND_VEC2_F32),
+            TypeInner::Vec2Bool => KindRef::from_static(&TY_KIND_VEC2_BOOL),
+            TypeInner::Vec3U32 => KindRef::from_static(&TY_KIND_VEC3_U32),
+            TypeInner::Vec3I32 => KindRef::from_static(&TY_KIND_VEC3_I32),
+            TypeInner::Vec3F32 => KindRef::from_static(&TY_KIND_VEC3_F32),
+            TypeInner::Vec3Bool => KindRef::from_static(&TY_KIND_VEC3_BOOL),
+            TypeInner::Vec4U32 => KindRef::from_static(&TY_KIND_VEC4_U32),
+            TypeInner::Vec4I32 => KindRef::from_static(&TY_KIND_VEC4_I32),
+            TypeInner::Vec4F32 => KindRef::from_static(&TY_KIND_VEC4_F32),
+            TypeInner::Vec4Bool => KindRef::from_static(&TY_KIND_VEC4_BOOL),
+            TypeInner::Mat2x2 => KindRef::from_static(&TY_KIND_MAT2X2),
+            TypeInner::Mat2x3 => KindRef::from_static(&TY_KIND_MAT2X3),
+            TypeInner::Mat2x4 => KindRef::from_static(&TY_KIND_MAT2X4),
+            TypeInner::Mat3x2 => KindRef::from_static(&TY_KIND_MAT3X2),
+            TypeInner::Mat3x3 => KindRef::from_static(&TY_KIND_MAT3X3),
+            TypeInner::Mat3x4 => KindRef::from_static(&TY_KIND_MAT3X4),
+            TypeInner::Mat4x2 => KindRef::from_static(&TY_KIND_MAT4X2),
+            TypeInner::Mat4x3 => KindRef::from_static(&TY_KIND_MAT4X3),
+            TypeInner::Mat4x4 => KindRef::from_static(&TY_KIND_MAT4X4),
+            TypeInner::AtomicU32 => KindRef::from_static(&TY_KIND_ATOMIC_U32),
+            TypeInner::AtomicI32 => KindRef::from_static(&TY_KIND_ATOMIC_I32),
+            TypeInner::AtomicF32 => KindRef::from_static(&TY_KIND_ATOMIC_F32),
+            TypeInner::AtomicBool => KindRef::from_static(&TY_KIND_ATOMIC_BOOL),
+            TypeInner::Predicate => KindRef::from_static(&TY_KIND_PREDICATE),
+            TypeInner::PtrU32 => KindRef::from_static(&TY_KIND_PTR_U32),
+            TypeInner::Dummy => KindRef::from_static(&TY_KIND_DUMMY),
+            TypeInner::Registered(index) => {
+                let store = self.store.read().unwrap_or_else(PoisonError::into_inner);
+                let boxed = store.get_index(index).expect("unregistered type");
+                let ptr = boxed.as_ref() as *const TypeKind;
+
+                KindRef {
+                    ptr,
+                    _marker: Default::default(),
+                }
+            }
+        }
+    }
 }
 
-impl Index<Type> for TypeRegistry {
-    type Output = TypeKind;
+pub struct KindRef<'a> {
+    ptr: *const TypeKind,
+    _marker: PhantomData<&'a TypeKind>,
+}
 
-    fn index(&self, ty: Type) -> &Self::Output {
-        match ty.0 {
-            TypeInner::U32 => &TY_KIND_U32,
-            TypeInner::I32 => &TY_KIND_I32,
-            TypeInner::F32 => &TY_KIND_F32,
-            TypeInner::Bool => &TY_KIND_BOOL,
-            TypeInner::Vec2U32 => &TY_KIND_VEC2_U32,
-            TypeInner::Vec2I32 => &TY_KIND_VEC2_I32,
-            TypeInner::Vec2F32 => &TY_KIND_VEC2_F32,
-            TypeInner::Vec2Bool => &TY_KIND_VEC2_BOOL,
-            TypeInner::Vec3U32 => &TY_KIND_VEC3_U32,
-            TypeInner::Vec3I32 => &TY_KIND_VEC3_I32,
-            TypeInner::Vec3F32 => &TY_KIND_VEC3_F32,
-            TypeInner::Vec3Bool => &TY_KIND_VEC3_BOOL,
-            TypeInner::Vec4U32 => &TY_KIND_VEC4_U32,
-            TypeInner::Vec4I32 => &TY_KIND_VEC4_I32,
-            TypeInner::Vec4F32 => &TY_KIND_VEC4_F32,
-            TypeInner::Vec4Bool => &TY_KIND_VEC4_BOOL,
-            TypeInner::Mat2x2 => &TY_KIND_MAT2X2,
-            TypeInner::Mat2x3 => &TY_KIND_MAT2X3,
-            TypeInner::Mat2x4 => &TY_KIND_MAT2X4,
-            TypeInner::Mat3x2 => &TY_KIND_MAT3X2,
-            TypeInner::Mat3x3 => &TY_KIND_MAT3X3,
-            TypeInner::Mat3x4 => &TY_KIND_MAT3X4,
-            TypeInner::Mat4x2 => &TY_KIND_MAT4X2,
-            TypeInner::Mat4x3 => &TY_KIND_MAT4X3,
-            TypeInner::Mat4x4 => &TY_KIND_MAT4X4,
-            TypeInner::AtomicU32 => &TY_KIND_ATOMIC_U32,
-            TypeInner::AtomicI32 => &TY_KIND_ATOMIC_I32,
-            TypeInner::AtomicF32 => &TY_KIND_ATOMIC_F32,
-            TypeInner::AtomicBool => &TY_KIND_ATOMIC_BOOL,
-            TypeInner::Predicate => &TY_KIND_PREDICATE,
-            TypeInner::PtrU32 => &TY_KIND_PTR_U32,
-            TypeInner::Dummy => &TY_KIND_DUMMY,
-            TypeInner::Registered(index) => self.store.get_index(index).expect("unregistered type"),
+impl KindRef<'static> {
+    fn from_static(kind: &'static TypeKind) -> Self {
+        KindRef {
+            ptr: kind as *const TypeKind,
+            _marker: Default::default(),
         }
+    }
+}
+
+impl Clone for KindRef<'_> {
+    fn clone(&self) -> Self {
+        KindRef {
+            ptr: self.ptr,
+            _marker: Default::default(),
+        }
+    }
+}
+
+impl Copy for KindRef<'_> {}
+
+impl AsRef<TypeKind> for KindRef<'_> {
+    fn as_ref(&self) -> &TypeKind {
+        // SAFETY
+        //
+        // There are 2 ways a `KindRef` can be created:
+        //
+        // 1. From a static reference to a `TypeKind`. In this case the `TypeKind` will never drop
+        //    and the pointer will always remain valid.
+        // 2. By registering with a TypeRegistry. In this case the TyRef's lifetime ensures that the
+        //    `TypeRegistry` store with which it is associated cannot have dropped. As the interface
+        //    does not expose a mechanism for removing registered types from the store, that
+        //    implies that the `Box` the `TyRef`'s pointer points to will also not have dropped.
+        //    Therefore, the pointer must still be valid.
+        unsafe { &*self.ptr }
+    }
+}
+
+impl Deref for KindRef<'_> {
+    type Target = TypeKind;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_ref()
     }
 }

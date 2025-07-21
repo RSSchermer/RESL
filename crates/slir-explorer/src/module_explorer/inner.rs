@@ -9,19 +9,16 @@ use slotmap::{Key, KeyData};
 use thaw::*;
 use urlencoding::{decode as urldecode, encode as urlencode};
 
-use crate::module_explorer::enum_explorer::EnumExplorer;
+use crate::module_explorer::adt_explorer::AdtExplorer;
 use crate::module_explorer::function_explorer::FunctionExplorer;
-use crate::module_explorer::struct_explorer::StructExplorer;
 use crate::module_explorer::{
-    format_function_url, ModuleData, ENUM_ITEM_LABEL_START, FUNCTION_ITEM_LABEL_START,
-    STORAGE_ITEM_LABEL_START, STRUCT_ITEM_LABEL_START, UNIFORM_ITEM_LABEL_START,
-    WORKGROUP_ITEM_LABEL_START,
+    format_function_url, ModuleData, ADT_ITEM_LABEL_START, FUNCTION_ITEM_LABEL_START,
+    STORAGE_ITEM_LABEL_START, UNIFORM_ITEM_LABEL_START, WORKGROUP_ITEM_LABEL_START,
 };
 
 enum Item {
     Function(slir::Function),
-    Struct(slir::Struct),
-    Enum(slir::Enum),
+    Adt(slir::ty::Type),
     UniformBinding(slir::UniformBinding),
     StorageBinding(slir::StorageBinding),
     WorkgroupBinding(slir::WorkgroupBinding),
@@ -46,16 +43,11 @@ impl Item {
                 name: slir::Symbol::from_ref(name),
                 module: slir::Symbol::from_ref(module),
             })
-        } else if label.starts_with(STRUCT_ITEM_LABEL_START) {
-            let index_str = &label[STRUCT_ITEM_LABEL_START.len()..];
-            let index = usize::from_str(index_str).unwrap();
+        } else if label.starts_with(ADT_ITEM_LABEL_START) {
+            let index_str = &label[ADT_ITEM_LABEL_START.len()..];
+            let id = usize::from_str(index_str).unwrap();
 
-            Item::Struct(slir::Struct::from(index))
-        } else if label.starts_with(ENUM_ITEM_LABEL_START) {
-            let index_str = &label[ENUM_ITEM_LABEL_START.len()..];
-            let index = usize::from_str(index_str).unwrap();
-
-            Item::Enum(slir::Enum::from(index))
+            Item::Adt(slir::ty::Type::from_registration_id(id))
         } else if label.starts_with(UNIFORM_ITEM_LABEL_START) {
             let index_str = &label[UNIFORM_ITEM_LABEL_START.len()..];
             let data_ffi = u64::from_str(index_str).unwrap();
@@ -102,34 +94,6 @@ pub fn ModuleExplorerInner(module: ModuleData, item_label: Option<String>) -> im
         <div class="module-explorer-container">
             <div class="module-items-container">
                 <Accordion multiple=true open_items=open_item_categories>
-                    <AccordionItem value="structs">
-                        <AccordionHeader slot>
-                            "Structs"
-                        </AccordionHeader>
-                        <ul class="module-item-list">
-                            {module.read_value().module.structs.iter().map(|s| view! {
-                                <li>
-                                    <Link href=format!("/{}/{}{}", urlencode(module.read_value().module.name.as_str()), STRUCT_ITEM_LABEL_START, s.to_usize())>
-                                        {format!("S_{}", s.to_usize())}
-                                    </Link>
-                                </li>
-                            }).collect_view()}
-                        </ul>
-                    </AccordionItem>
-                    <AccordionItem value="enums">
-                        <AccordionHeader slot>
-                            "Enums"
-                        </AccordionHeader>
-                        <ul class="module-item-list">
-                            {module.read_value().module.enums.iter().map(|e| view! {
-                                <li>
-                                    <Link href=format!("/{}/{}{}", urlencode(module.read_value().module.name.as_str()), ENUM_ITEM_LABEL_START, e.to_usize())>
-                                        {format!("E_{}", e.to_usize())}
-                                    </Link>
-                                </li>
-                            }).collect_view()}
-                        </ul>
-                    </AccordionItem>
                     <AccordionItem value="uniform_bindings">
                         <AccordionHeader slot>
                             "Uniform Bindings"
@@ -193,8 +157,7 @@ pub fn ModuleExplorerInner(module: ModuleData, item_label: Option<String>) -> im
                     if let Some(item_label) = item_label {
                         match Item::from_label(&item_label) {
                             Item::Function(function) => view! { <FunctionExplorer module function/> }.into_any(),
-                            Item::Struct(struct_handle) => view! { <StructExplorer module struct_handle/> }.into_any(),
-                            Item::Enum(enum_handle) => view! { <EnumExplorer module enum_handle/> }.into_any(),
+                            Item::Adt(ty) => view! { <AdtExplorer module ty/> }.into_any(),
                             Item::UniformBinding(b) => view! { "uniform placeholder" }.into_any(),
                             Item::StorageBinding(b) => view! { "storage placeholder" }.into_any(),
                             Item::WorkgroupBinding(b) => view! { "workgroup placeholder" }.into_any(),

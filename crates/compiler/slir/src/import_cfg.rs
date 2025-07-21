@@ -1,31 +1,30 @@
+use std::ops::Deref;
+
 use crate::cfg::Cfg;
 use crate::ty::{Type, TypeKind};
-use crate::{Function, Module, Struct};
+use crate::{Function, Module};
 
-pub fn import_type(from: &Module, to: &mut Module, ty: Type) -> Type {
-    let mut ty_kind = from.ty[ty].clone();
+pub fn import_type(from: &Module, to: &Module, ty: Type) -> Type {
+    let mut ty_kind = from.ty.kind(ty).deref().clone();
 
     match &mut ty_kind {
         TypeKind::Array { base, .. } => {
             *base = import_type(from, to, *base);
         }
-        TypeKind::Struct(s) => {
-            *s = import_struct(from, to, *s);
+        TypeKind::Struct(struct_data) => {
+            for field in &mut struct_data.fields {
+                field.ty = import_type(from, to, field.ty);
+            }
+        }
+        TypeKind::Enum(enum_data) => {
+            for variant in &mut enum_data.variants {
+                *variant = import_type(from, to, *variant);
+            }
         }
         _ => (),
     }
 
     to.ty.register(ty_kind)
-}
-
-pub fn import_struct(from: &Module, to: &mut Module, struct_handle: Struct) -> Struct {
-    let mut struct_data = from.structs[struct_handle].clone();
-
-    for field in &mut struct_data.fields {
-        field.ty = import_type(from, to, field.ty);
-    }
-
-    to.structs.register(struct_data)
 }
 
 pub fn import_fn_cfg(from: (&Module, &Cfg), to: (&mut Module, &mut Cfg), function: Function) {
