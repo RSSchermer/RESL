@@ -3411,12 +3411,12 @@ impl Rvsdg {
                 }
 
                 if let Some(output) = producer.value_outputs().get(*output as usize) {
-                    // if value_input.ty != output.ty {
-                    //     panic!(
-                    //         "cannot connect a node input of type `{:?}` to an output of type `{:?}",
-                    //         value_input.ty, output.ty
-                    //     );
-                    // }
+                    if !self.ty.is_compatible(value_input.ty, output.ty) {
+                        panic!(
+                            "cannot connect a node input of type `{:?}` to an output of type `{:?}",
+                            value_input.ty, output.ty
+                        );
+                    }
                 } else {
                     panic!(
                         "tried to connect to node output `{}`, but the target only has {} outputs",

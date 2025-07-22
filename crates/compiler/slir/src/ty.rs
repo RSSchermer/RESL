@@ -6,6 +6,8 @@ use std::{fmt, mem};
 use indexmap::IndexSet;
 use serde::{Deserialize, Serialize};
 
+use crate::ty::ScalarKind::Bool;
+use crate::ty::TypeKind::Predicate;
 use crate::{Function, Module};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
@@ -554,6 +556,29 @@ impl TypeRegistry {
                     _marker: Default::default(),
                 }
             }
+        }
+    }
+
+    pub fn is_compatible(&self, t0: Type, t1: Type) -> bool {
+        if t0 == t1 {
+            // A type is always compatible with itself
+            return true;
+        }
+
+        use ScalarKind::*;
+        use TypeKind::*;
+
+        let k0 = self.kind(t0);
+        let k1 = self.kind(t1);
+
+        match (&*k0, &*k1) {
+            // TODO: the predicate compatibilities are a bit of a stop-gap. I think the predicate
+            // type itself needs to be rethought.
+            (Predicate, Scalar(U32))
+            | (Scalar(U32), Predicate)
+            | (Predicate, Scalar(Bool))
+            | (Scalar(Bool), Predicate) => true,
+            _ => false,
         }
     }
 }
