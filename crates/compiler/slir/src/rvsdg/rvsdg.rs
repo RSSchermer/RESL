@@ -1880,8 +1880,17 @@ macro_rules! add_const_methods {
     };
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, Deserialize, Debug)]
+pub struct RvsdgData {
+    regions: SlotMap<Region, RegionData>,
+    nodes: SlotMap<Node, NodeData>,
+    global_region: Region,
+    function_node: FxHashMap<Function, Node>,
+}
+
+#[derive(Clone, Serialize, Debug)]
 pub struct Rvsdg {
+    #[serde(skip_serializing)]
     ty: TypeRegistry,
     regions: SlotMap<Region, RegionData>,
     nodes: SlotMap<Node, NodeData>,
@@ -1907,6 +1916,23 @@ impl Rvsdg {
             nodes: Default::default(),
             global_region,
             function_node: Default::default(),
+        }
+    }
+
+    pub fn from_ty_and_data(ty: TypeRegistry, data: RvsdgData) -> Self {
+        let RvsdgData {
+            regions,
+            nodes,
+            global_region,
+            function_node,
+        } = data;
+
+        Rvsdg {
+            ty,
+            regions,
+            nodes,
+            global_region,
+            function_node,
         }
     }
 

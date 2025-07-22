@@ -113,21 +113,23 @@ pub fn ModuleExplorer() -> impl IntoView {
                         }
 
                         if entry.header().identifier() == "rvsdg_initial".as_bytes() {
-                            let decoded: slir::rvsdg::Rvsdg = bincode::serde::decode_from_std_read(
-                                &mut entry,
-                                bincode::config::standard(),
-                            )
-                            .expect("RSVDG-initial encoding was invalid");
+                            let decoded: slir::rvsdg::RvsdgData =
+                                bincode::serde::decode_from_std_read(
+                                    &mut entry,
+                                    bincode::config::standard(),
+                                )
+                                .expect("RSVDG-initial encoding was invalid");
 
                             rvsdg_initial = Some(decoded);
                         }
 
                         if entry.header().identifier() == "rvsdg_transformed".as_bytes() {
-                            let decoded: slir::rvsdg::Rvsdg = bincode::serde::decode_from_std_read(
-                                &mut entry,
-                                bincode::config::standard(),
-                            )
-                            .expect("RSVDG-transformed encoding was invalid");
+                            let decoded: slir::rvsdg::RvsdgData =
+                                bincode::serde::decode_from_std_read(
+                                    &mut entry,
+                                    bincode::config::standard(),
+                                )
+                                .expect("RSVDG-transformed encoding was invalid");
 
                             rvsdg_transformed = Some(decoded);
                         }
@@ -136,6 +138,10 @@ pub fn ModuleExplorer() -> impl IntoView {
                     let module =
                         module.expect("SLIR arfifact should always contain a `module` entry");
                     let cfg = cfg.expect("SLIR arfifact should always contain a `cfg` entry");
+                    let rvsdg_initial = rvsdg_initial
+                        .map(|data| slir::rvsdg::Rvsdg::from_ty_and_data(module.ty.clone(), data));
+                    let rvsdg_transformed = rvsdg_transformed
+                        .map(|data| slir::rvsdg::Rvsdg::from_ty_and_data(module.ty.clone(), data));
 
                     ModuleData {
                         module,
