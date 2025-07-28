@@ -1,3 +1,4 @@
+use std::mem;
 use std::ops::{Deref, Range};
 
 use rustc_middle::bug;
@@ -875,11 +876,38 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
     }
 
     fn extract_value(&mut self, agg_val: Self::Value, idx: u64) -> Self::Value {
-        todo!()
+        let module = self.module.borrow();
+        let mut cfg = self.cfg.borrow_mut();
+
+        let body = &mut cfg.function_body[self.function];
+
+        let agg_val = agg_val.expect_value();
+        let agg_ty = body
+            .value_ty(&module, &agg_val)
+            .expect("value must be typed");
+        let agg_ty_kind = module.ty.kind(agg_ty);
+        let slir::ty::TypeKind::Ptr(pointee_ty) = *agg_ty_kind else {
+            bug!("can only extract value from a pointer to a struct type");
+        };
+        let pointee_ty_kind = module.ty.kind(pointee_ty);
+        let slir::ty::TypeKind::Struct(struct_data) = &*pointee_ty_kind else {
+            bug!("can only extract value from a pointer to a struct type");
+        };
+
+        let val_ty = struct_data.fields[idx as usize].ty;
+        let index = slir::cfg::InlineConst::U32(idx as u32);
+
+        mem::drop(module);
+        mem::drop(cfg);
+
+        let val_ptr = self.ptr_element_ptr(val_ty.into(), agg_val.into(), &[index.into()]);
+
+        self.load(val_ty.into(), val_ptr, 0)
     }
 
     fn insert_value(&mut self, agg_val: Self::Value, elt: Self::Value, idx: u64) -> Self::Value {
-        todo!()
+        // TODO: this is a placeholder for testing
+        slir::cfg::InlineConst::U32(0).into()
     }
 
     fn atomic_cmpxchg(

@@ -8,7 +8,9 @@ pub fn import_type(from: &Module, to: &Module, ty: Type) -> Type {
     let mut ty_kind = from.ty.kind(ty).deref().clone();
 
     match &mut ty_kind {
-        TypeKind::Array { base, .. } => {
+        TypeKind::Array {
+            element_ty: base, ..
+        } => {
             *base = import_type(from, to, *base);
         }
         TypeKind::Struct(struct_data) => {

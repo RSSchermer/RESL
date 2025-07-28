@@ -263,11 +263,10 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
         layout: TyAndLayout,
     ) -> slir::ty::Type {
         let base = self.resolve_scalar_ty(element, layout.field(0));
-        let ty = self
-            .module
-            .borrow()
-            .ty
-            .register(slir::ty::TypeKind::Array { base, count });
+        let ty = self.module.borrow().ty.register(slir::ty::TypeKind::Array {
+            element_ty: base,
+            count,
+        });
 
         self.ty_to_slir.borrow_mut().insert(layout, ty);
 
@@ -277,11 +276,17 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
     fn register_array_ty(&self, count: u64, layout: TyAndLayout) -> slir::ty::Type {
         let element_layout = layout.field(0);
         let base = self.ty_and_layout_resolve(element_layout);
-        let ty = self
-            .module
-            .borrow()
-            .ty
-            .register(slir::ty::TypeKind::Array { base, count });
+
+        let kind = if layout.ty.kind().is_slice() {
+            slir::ty::TypeKind::Slice { element_ty: base }
+        } else {
+            slir::ty::TypeKind::Array {
+                element_ty: base,
+                count,
+            }
+        };
+
+        let ty = self.module.borrow().ty.register(kind);
 
         self.ty_to_slir.borrow_mut().insert(layout, ty);
 

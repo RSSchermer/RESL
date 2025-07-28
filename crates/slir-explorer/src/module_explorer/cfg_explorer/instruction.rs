@@ -35,6 +35,9 @@ pub fn Instruction(
         slir::cfg::Statement::OpSetDiscriminant(op) => {
             view! { <OpSetDiscriminant module function op highlight/> }.into_any()
         }
+        slir::cfg::Statement::OpOffsetSlicePtr(op) => {
+            view! { <OpOffsetSlicePtr module function op highlight/> }.into_any()
+        }
         slir::cfg::Statement::OpUnary(op) => {
             view! { <OpUnary module function op highlight/> }.into_any()
         }
@@ -169,6 +172,22 @@ pub fn OpSetDiscriminant(
         {op.variant_index}
         " on "
         <Value module function value=op.ptr highlight/>
+    }
+}
+
+#[component]
+pub fn OpOffsetSlicePtr(
+    module: StoredValue<ModuleData>,
+    function: slir::Function,
+    op: slir::cfg::OpOffsetSlicePtr,
+    highlight: HighlightSignal,
+) -> impl IntoView {
+    view! {
+        <Value module function value=op.result.into() highlight/>
+        " = offset "
+        <Value module function value=op.slice_ptr highlight/>
+        " by "
+        <Value module function value=op.offset highlight/>
     }
 }
 

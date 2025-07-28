@@ -1539,7 +1539,7 @@ mod tests {
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let array_ty = module.ty.register(TypeKind::Array {
-            base: TY_U32,
+            element_ty: TY_U32,
             count: 2,
         });
         let array_ptr_ty = module.ty.register(TypeKind::Ptr(array_ty));
@@ -1768,7 +1768,7 @@ mod tests {
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let array_ty = module.ty.register(TypeKind::Array {
-            base: TY_U32,
+            element_ty: TY_U32,
             count: 2,
         });
         let array_ptr_ty = module.ty.register(TypeKind::Ptr(array_ty));
@@ -2011,11 +2011,11 @@ mod tests {
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let array_ty = module.ty.register(TypeKind::Array {
-            base: TY_U32,
+            element_ty: TY_U32,
             count: 2,
         });
         let array_of_array_ty = module.ty.register(TypeKind::Array {
-            base: array_ty,
+            element_ty: array_ty,
             count: 2,
         });
         let array_ptr_ty = module.ty.register(TypeKind::Ptr(array_ty));
@@ -3043,11 +3043,11 @@ mod tests {
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let array_ty = module.ty.register(TypeKind::Array {
-            base: TY_U32,
+            element_ty: TY_U32,
             count: 2,
         });
         let array_of_array_ty = module.ty.register(TypeKind::Array {
-            base: array_ty,
+            element_ty: array_ty,
             count: 2,
         });
         let array_ptr_ty = module.ty.register(TypeKind::Ptr(array_ty));

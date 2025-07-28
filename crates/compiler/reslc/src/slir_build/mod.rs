@@ -7,12 +7,12 @@ use rustc_smir::rustc_internal::stable;
 use crate::context::ReslContext;
 use crate::slir_build::builder::Builder;
 use crate::slir_build::context::CodegenContext;
-use crate::slir_build::special_cases::maybe_define_special_case;
+use crate::slir_build::shims::maybe_define_special_case;
 use crate::stable_cg::MonoItemExt;
 
 pub mod builder;
 pub mod context;
-mod special_cases;
+mod shims;
 pub mod ty;
 pub mod value;
 

@@ -3,6 +3,7 @@ mod enum_replacement;
 pub mod inlining;
 mod memory_promotion_and_legalization;
 pub mod proxy_node_elimination;
+mod ptr_offset_elaboration;
 pub mod scalar_replacement;
 mod variable_pointer_emulation;
 

@@ -2,10 +2,9 @@ use std::collections::VecDeque;
 
 use rustc_hash::FxHashMap;
 
-use crate::cfg::OpSetDiscriminant;
 use crate::rvsdg::{
-    Connectivity, Node, NodeKind, OpCaseToSwitchPredicate, OpGetDiscriminant, OpPtrDiscriminantPtr,
-    Region, Rvsdg, SimpleNode, StateOrigin, ValueInput, ValueOrigin, ValueOutput, ValueUser,
+    Connectivity, Node, NodeKind, Region, Rvsdg, SimpleNode, StateOrigin, ValueInput, ValueOrigin,
+    ValueOutput, ValueUser,
 };
 use crate::Module;
 
@@ -140,6 +139,7 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
             Simple(OpExtractElement(_)) => self.replicate_op_extract_element(node),
             Simple(OpGetDiscriminant(_)) => self.replicate_op_get_discriminant_node(node),
             Simple(OpSetDiscriminant(_)) => self.replicate_op_set_discriminant_node(node),
+            Simple(OpOffsetSlicePtr(_)) => self.replicate_op_offset_slice_ptr_node(node),
             Simple(OpApply(_)) => self.replicate_op_apply_node(node),
             Simple(OpUnary(_)) => self.replicate_op_unary_node(node),
             Simple(OpBinary(_)) => self.replicate_op_binary_node(node),
@@ -387,6 +387,15 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
 
         self.rvsdg
             .add_op_set_discriminant(self.dst_region, ptr_input, variant_index, state_origin)
+    }
+
+    fn replicate_op_offset_slice_ptr_node(&mut self, node: Node) -> Node {
+        let data = self.rvsdg[node].expect_op_offset_slice_ptr();
+        let slice_ptr = self.mapped_value_input(data.slice_ptr());
+        let offset = self.mapped_value_input(data.offset());
+
+        self.rvsdg
+            .add_op_offset_slice_ptr(self.dst_region, slice_ptr, offset)
     }
 
     fn replicate_op_apply_node(&mut self, node: Node) -> Node {

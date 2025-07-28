@@ -49,7 +49,10 @@ fn ty_str(module: &Module, ty: Type) -> String {
                 format!("mat{}x{}<bool>", columns.to_u32(), rows.to_u32())
             }
         },
-        TypeKind::Array { base, count } => format!("array<{}, count>", ty_str(module, *base)),
+        TypeKind::Array { element_ty, count } => {
+            format!("array<{}, {}>", ty_str(module, *element_ty), count)
+        }
+        TypeKind::Slice { element_ty } => format!("array<{}>", ty_str(module, *element_ty)),
         TypeKind::Struct(_) => {
             format!("S_{}", ty.registration_id().unwrap_or_default())
         }

@@ -98,8 +98,11 @@ pub enum TypeKind {
         scalar: ScalarKind,
     },
     Array {
-        base: Type,
+        element_ty: Type,
         count: u64,
+    },
+    Slice {
+        element_ty: Type,
     },
     Struct(Struct),
     Enum(Enum),
@@ -175,8 +178,11 @@ impl TypeKind {
                 (VectorSize::Four, VectorSize::Three) => format!("mat4x3<{}>", scalar),
                 (VectorSize::Four, VectorSize::Four) => format!("mat4x4<{}>", scalar),
             },
-            TypeKind::Array { base, count, .. } => {
-                format!("array<{}, {}>", base.to_string(module), count)
+            TypeKind::Array { element_ty, count } => {
+                format!("array<{}, {}>", element_ty.to_string(module), count)
+            }
+            TypeKind::Slice { element_ty } => {
+                format!("array<{}>", element_ty.to_string(module))
             }
             TypeKind::Struct(_) => "struct".to_string(),
             TypeKind::Enum(_) => "enum".to_string(),
@@ -565,6 +571,8 @@ impl TypeRegistry {
             return true;
         }
 
+        return true;
+
         use ScalarKind::*;
         use TypeKind::*;
 
@@ -577,9 +585,11 @@ impl TypeRegistry {
             (Predicate, Scalar(U32))
             | (Scalar(U32), Predicate)
             | (Predicate, Scalar(Bool))
-            | (Scalar(Bool), Predicate) => true,
-            _ => false,
+            | (Scalar(Bool), Predicate) => return true,
+            _ => {}
         }
+
+        false
     }
 }
 

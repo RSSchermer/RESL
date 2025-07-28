@@ -191,7 +191,11 @@ impl AllocaReplacer<'_> {
         let mut scalar_replacements = Vec::new();
 
         match self.rvsdg.ty().clone().kind(ty).deref() {
-            TypeKind::Array { base, count, .. } => {
+            TypeKind::Array {
+                element_ty: base,
+                count,
+                ..
+            } => {
                 let element_ptr_ty = self.rvsdg.ty().register(TypeKind::Ptr(*base));
 
                 for _ in 0..*count {
@@ -624,7 +628,11 @@ impl AllocaReplacer<'_> {
         }
 
         match self.rvsdg.ty().clone().kind(value_input.ty).deref() {
-            TypeKind::Array { base, count, .. } => {
+            TypeKind::Array {
+                element_ty: base,
+                count,
+                ..
+            } => {
                 // We iterate the element indices in reverse due to the way we link the load and
                 // store nodes we create into the state chain: we repeatedly reuse the state_origin
                 // from the original unsplit store node. This means that adding the lowest index
@@ -879,7 +887,11 @@ impl AllocaReplacer<'_> {
         // `split_outputs`.
         match ty_reg.kind(value_input.ty).deref() {
             TypeKind::Ptr(pointee_ty) => match ty_reg.kind(*pointee_ty).deref() {
-                TypeKind::Array { base, count, .. } => {
+                TypeKind::Array {
+                    element_ty: base,
+                    count,
+                    ..
+                } => {
                     for i in 0..*count {
                         let ptr_ty = ty_reg.register(TypeKind::Ptr(*base));
                         let index = self.rvsdg.add_const_u32(region, i as u32);
@@ -933,7 +945,11 @@ impl AllocaReplacer<'_> {
                 }
                 _ => panic!("pointee type is not an aggregate"),
             },
-            TypeKind::Array { base, count, .. } => {
+            TypeKind::Array {
+                element_ty: base,
+                count,
+                ..
+            } => {
                 for i in 0..*count {
                     let index = self.rvsdg.add_const_u32(region, i as u32);
                     let element = self.rvsdg.add_op_extract_element(
@@ -1049,7 +1065,11 @@ impl AllocaReplacer<'_> {
 
         match ty_reg.kind(original_input.ty).deref() {
             TypeKind::Ptr(pointee_ty) => match ty_reg.kind(*pointee_ty).deref() {
-                TypeKind::Array { base, count, .. } => {
+                TypeKind::Array {
+                    element_ty: base,
+                    count,
+                    ..
+                } => {
                     for i in 0..*count {
                         let index_node = self.rvsdg.add_const_u32(region, i as u32);
                         let split_node = self.rvsdg.add_op_ptr_element_ptr(
@@ -1093,7 +1113,11 @@ impl AllocaReplacer<'_> {
                 }
                 _ => unreachable!("pointee type is not an aggregate"),
             },
-            TypeKind::Array { base, count, .. } => {
+            TypeKind::Array {
+                element_ty: base,
+                count,
+                ..
+            } => {
                 for i in 0..*count {
                     let index_node = self.rvsdg.add_const_u32(region, i as u32);
                     let split_node = self.rvsdg.add_op_extract_element(
@@ -1223,7 +1247,7 @@ mod tests {
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let ty = module.ty.register(TypeKind::Array {
-            base: TY_U32,
+            element_ty: TY_U32,
             count: 2,
         });
         let ptr_ty = module.ty.register(TypeKind::Ptr(ty));
@@ -1314,7 +1338,7 @@ mod tests {
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let ty = module.ty.register(TypeKind::Array {
-            base: TY_U32,
+            element_ty: TY_U32,
             count: 2,
         });
         let ptr_ty = module.ty.register(TypeKind::Ptr(ty));
@@ -1484,7 +1508,7 @@ mod tests {
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let ty = module.ty.register(TypeKind::Array {
-            base: TY_U32,
+            element_ty: TY_U32,
             count: 2,
         });
         let ptr_ty = module.ty.register(TypeKind::Ptr(ty));
@@ -1591,7 +1615,7 @@ mod tests {
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let ty = module.ty.register(TypeKind::Array {
-            base: TY_U32,
+            element_ty: TY_U32,
             count: 2,
         });
         let ptr_ty = module.ty.register(TypeKind::Ptr(ty));
@@ -1799,7 +1823,7 @@ mod tests {
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let ty = module.ty.register(TypeKind::Array {
-            base: TY_U32,
+            element_ty: TY_U32,
             count: 2,
         });
         let ptr_ty = module.ty.register(TypeKind::Ptr(ty));
@@ -2017,7 +2041,7 @@ mod tests {
         let (_, region) = rvsdg.register_function(&module, function, iter::empty());
 
         let ty = module.ty.register(TypeKind::Array {
-            base: TY_U32,
+            element_ty: TY_U32,
             count: 2,
         });
         let ptr_ty = module.ty.register(TypeKind::Ptr(ty));

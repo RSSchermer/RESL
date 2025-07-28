@@ -2,8 +2,8 @@ use indexmap::IndexSet;
 
 use crate::cfg::{
     BasicBlock, Body, LocalValue, OpAlloca, OpAssign, OpBinary, OpBoolToBranchPredicate, OpCall,
-    OpCaseToBranchPredicate, OpGetDiscriminant, OpLoad, OpPtrElementPtr, OpPtrVariantPtr,
-    OpSetDiscriminant, OpStore, OpUnary, Statement, Terminator, Value,
+    OpCaseToBranchPredicate, OpGetDiscriminant, OpLoad, OpOffsetSlicePtr, OpPtrElementPtr,
+    OpPtrVariantPtr, OpSetDiscriminant, OpStore, OpUnary, Statement, Terminator, Value,
 };
 use crate::cfg_to_rvsdg::control_tree::control_tree::{
     BranchingNode, ControlTree, ControlTreeNode, ControlTreeNodeKind, LinearNode, LoopNode,
@@ -89,6 +89,16 @@ impl WithReadValues for OpSetDiscriminant {
     }
 }
 
+impl WithReadValues for OpOffsetSlicePtr {
+    fn with_read_values<F>(&self, mut f: F)
+    where
+        F: FnMut(&Value),
+    {
+        f(&self.slice_ptr);
+        f(&self.offset);
+    }
+}
+
 impl WithReadValues for OpUnary {
     fn with_read_values<F>(&self, mut f: F)
     where
@@ -159,6 +169,7 @@ impl_with_read_values_statement! {
     OpPtrVariantPtr,
     OpGetDiscriminant,
     OpSetDiscriminant,
+    OpOffsetSlicePtr,
     OpUnary,
     OpBinary,
     OpCall,
@@ -221,6 +232,7 @@ impl_with_written_values_op! {
     OpPtrElementPtr,
     OpPtrVariantPtr,
     OpGetDiscriminant,
+    OpOffsetSlicePtr,
     OpUnary,
     OpBinary,
     OpCaseToBranchPredicate,
@@ -251,6 +263,7 @@ impl_with_written_values_statement! {
     OpPtrVariantPtr,
     OpGetDiscriminant,
     OpSetDiscriminant,
+    OpOffsetSlicePtr,
     OpUnary,
     OpBinary,
     OpCall,

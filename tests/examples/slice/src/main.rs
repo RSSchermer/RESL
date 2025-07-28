@@ -9,14 +9,16 @@ pub mod shader {
     fn main() {
         let data = [10, 20, 30, 40];
 
-        let value = if let Some(element) = data.get(1) {
-            *element
-        } else {
-            0
-        };
+        if let Some(slice) = data.get(1..3) {
+            let value = if let Some(element) = slice.get(1) {
+                *element
+            } else {
+                0
+            };
 
-        unsafe {
-            VALUE = value;
+            unsafe {
+                VALUE = value;
+            }
         }
     }
 }

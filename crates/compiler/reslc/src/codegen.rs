@@ -122,7 +122,7 @@ pub fn codegen_shader_modules(cx: &Cx) -> (slir::Module, slir::cfg::Cfg) {
 
             artifact_builder.maybe_append_rvsdg_initial(&rvsdg);
 
-            rvsdg::transform::transform(&mut module, &mut rvsdg);
+            // rvsdg::transform::transform(&mut module, &mut rvsdg);
 
             artifact_builder.maybe_append_rvsdg_transformed(&rvsdg);
             artifact_builder.finish(&module);

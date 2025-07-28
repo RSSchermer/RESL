@@ -268,6 +268,13 @@ pub struct OpSetDiscriminant {
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OpOffsetSlicePtr {
+    pub slice_ptr: Value,
+    pub offset: Value,
+    pub result: LocalValue,
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct OpUnary {
     pub operator: UnaryOperator,
     pub value: Value,
@@ -337,6 +344,7 @@ gen_statement! {
     OpPtrVariantPtr,
     OpGetDiscriminant,
     OpSetDiscriminant,
+    OpOffsetSlicePtr,
     OpUnary,
     OpBinary,
     OpCall,

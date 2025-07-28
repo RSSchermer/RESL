@@ -44,8 +44,11 @@ pub fn Type(module: StoredValue<ModuleData>, ty: slir::ty::Type) -> impl IntoVie
                 view! {{format!("mat{}x{}<bool>", columns.to_u32(), rows.to_u32())}}.into_any()
             }
         },
-        TypeKind::Array { base, count } => {
-            view! { "array<" <Type module ty=*base/> ", " {*count} ">" }.into_any()
+        TypeKind::Array { element_ty, count } => {
+            view! { "array<" <Type module ty=*element_ty/> ", " {*count} ">" }.into_any()
+        }
+        TypeKind::Slice { element_ty } => {
+            view! { "array<" <Type module ty=*element_ty/> ">" }.into_any()
         }
         TypeKind::Struct(_) => {
             let id = ty.registration_id().unwrap_or_default();

@@ -536,6 +536,18 @@ impl NodeData {
         }
     }
 
+    pub fn is_op_offset_slice_ptr(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::OpOffsetSlicePtr(_)))
+    }
+
+    pub fn expect_op_offset_slice_ptr(&self) -> &OpOffsetSlicePtr {
+        if let NodeKind::Simple(SimpleNode::OpOffsetSlicePtr(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be a `offset-slice-ptr` operation")
+        }
+    }
+
     pub fn is_op_apply(&self) -> bool {
         matches!(self.kind, NodeKind::Simple(SimpleNode::OpApply(_)))
     }
@@ -1314,6 +1326,52 @@ impl Connectivity for OpSetDiscriminant {
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OpOffsetSlicePtr {
+    inputs: [ValueInput; 2],
+    output: ValueOutput,
+}
+
+impl OpOffsetSlicePtr {
+    pub fn slice_ptr(&self) -> &ValueInput {
+        &self.inputs[0]
+    }
+
+    pub fn offset(&self) -> &ValueInput {
+        &self.inputs[1]
+    }
+
+    pub fn output(&self) -> &ValueOutput {
+        &self.output
+    }
+}
+
+impl Connectivity for OpOffsetSlicePtr {
+    fn value_inputs(&self) -> &[ValueInput] {
+        &self.inputs
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        &mut self.inputs
+    }
+
+    fn value_outputs(&self) -> &[ValueOutput] {
+        slice::from_ref(&self.output)
+    }
+
+    fn value_outputs_mut(&mut self) -> &mut [ValueOutput] {
+        slice::from_mut(&mut self.output)
+    }
+
+    fn state(&self) -> Option<&State> {
+        None
+    }
+
+    fn state_mut(&mut self) -> Option<&mut State> {
+        None
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct OpApply {
     value_inputs: Vec<ValueInput>,
     value_output: Option<ValueOutput>,
@@ -1848,6 +1906,7 @@ gen_simple_node! {
     OpExtractElement,
     OpGetDiscriminant,
     OpSetDiscriminant,
+    OpOffsetSlicePtr,
     OpApply,
     OpUnary,
     OpBinary,
@@ -2727,6 +2786,32 @@ impl Rvsdg {
         });
 
         self.link_state(region, node, state_origin);
+        self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
+
+        node
+    }
+
+    pub fn add_op_offset_slice_ptr(
+        &mut self,
+        region: Region,
+        slice_ptr: ValueInput,
+        offset: ValueInput,
+    ) -> Node {
+        self.validate_node_value_input(region, &slice_ptr);
+        self.validate_node_value_input(region, &offset);
+
+        let node = self.nodes.insert(NodeData {
+            kind: NodeKind::Simple(
+                OpOffsetSlicePtr {
+                    inputs: [slice_ptr, offset],
+                    output: ValueOutput::new(slice_ptr.ty),
+                }
+                .into(),
+            ),
+            region: Some(region),
+        });
+
         self.regions[region].nodes.insert(node);
         self.connect_node_value_inputs(node);
 

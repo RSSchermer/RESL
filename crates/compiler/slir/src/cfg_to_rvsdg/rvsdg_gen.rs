@@ -6,8 +6,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::cfg::{
     BasicBlock, Body, Cfg, InlineConst, LocalValue, OpAlloca, OpAssign, OpBinary,
     OpBoolToBranchPredicate, OpCall, OpCaseToBranchPredicate, OpGetDiscriminant, OpLoad,
-    OpPtrElementPtr, OpPtrVariantPtr, OpSetDiscriminant, OpStore, OpUnary, RootIdentifier,
-    Statement, Terminator, Value,
+    OpOffsetSlicePtr, OpPtrElementPtr, OpPtrVariantPtr, OpSetDiscriminant, OpStore, OpUnary,
+    RootIdentifier, Statement, Terminator, Value,
 };
 use crate::cfg_to_rvsdg::control_flow_restructuring::{
     restructure_branches, restructure_loops, Graph,
@@ -321,6 +321,7 @@ impl<'a> RegionBuilder<'a> {
             Statement::OpPtrVariantPtr(op) => self.visit_op_ptr_variant_ptr(op),
             Statement::OpGetDiscriminant(op) => self.visit_op_get_discriminant(op),
             Statement::OpSetDiscriminant(op) => self.visit_op_set_discriminant(op),
+            Statement::OpOffsetSlicePtr(op) => self.visit_op_offset_slice_ptr(op),
             Statement::OpUnary(op) => self.visit_op_unary(op),
             Statement::OpBinary(op) => self.visit_op_binary(op),
             Statement::OpCall(op) => self.visit_op_call(op),
@@ -418,6 +419,18 @@ impl<'a> RegionBuilder<'a> {
         );
 
         self.state_origin = StateOrigin::Node(node);
+    }
+
+    fn visit_op_offset_slice_ptr(&mut self, op: &OpOffsetSlicePtr) {
+        let slice_ptr = self.resolve_value(op.slice_ptr);
+        let offset = self.resolve_value(op.offset);
+
+        let node = self
+            .rvsdg
+            .add_op_offset_slice_ptr(self.region, slice_ptr, offset);
+
+        self.input_state_tracker
+            .insert_value_node(op.result, node, 0);
     }
 
     fn visit_op_unary(&mut self, op: &OpUnary) {

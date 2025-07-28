@@ -3,8 +3,8 @@ use rustc_hash::FxHashMap;
 
 use crate::cfg::{
     BasicBlockData, Body, Cfg, InlineConst, OpAlloca, OpAssign, OpBinary, OpBoolToBranchPredicate,
-    OpCall, OpCaseToBranchPredicate, OpGetDiscriminant, OpLoad, OpPtrElementPtr, OpPtrVariantPtr,
-    OpSetDiscriminant, OpStore, OpUnary, RootIdentifier, Statement, Value,
+    OpCall, OpCaseToBranchPredicate, OpGetDiscriminant, OpLoad, OpOffsetSlicePtr, OpPtrElementPtr,
+    OpPtrVariantPtr, OpSetDiscriminant, OpStore, OpUnary, RootIdentifier, Statement, Value,
 };
 use crate::ty::Type;
 use crate::{Function, Module, StorageBinding, UniformBinding, WorkgroupBinding};
@@ -138,6 +138,16 @@ impl WithItemDependencies for OpSetDiscriminant {
     }
 }
 
+impl WithItemDependencies for OpOffsetSlicePtr {
+    fn with_item_dependencies<F>(&self, mut f: F)
+    where
+        F: FnMut(Item),
+    {
+        self.slice_ptr.with_item_dependencies(&mut f);
+        self.offset.with_item_dependencies(&mut f);
+    }
+}
+
 impl WithItemDependencies for OpUnary {
     fn with_item_dependencies<F>(&self, mut f: F)
     where
@@ -209,6 +219,7 @@ impl_collect_dependencies_statement! {
     OpPtrVariantPtr,
     OpGetDiscriminant,
     OpSetDiscriminant,
+    OpOffsetSlicePtr,
     OpUnary,
     OpBinary,
     OpCall,
