@@ -10,6 +10,7 @@ use crate::rvsdg::{
 };
 use crate::ty::{Type, TypeKind, TypeRegistry, TY_PREDICATE, TY_U32};
 use crate::{Function, Module};
+use crate::rvsdg::transform::enum_replacement::{replace_enum_alloca, EnumAllocaReplacer};
 
 /// Collects all [OpAlloca] nodes of aggregate types in a region and all sub-regions (e.g. a switch
 /// node branch region) into a queue of candidates for scalar replacement.
@@ -188,9 +189,13 @@ impl AllocaReplacer<'_> {
         let node_data = node_data.expect_op_alloca();
         let ty = node_data.ty();
 
-        let mut scalar_replacements = Vec::new();
+        let mut replacements = Vec::new();
 
         match self.rvsdg.ty().clone().kind(ty).deref() {
+            TypeKind::Enum(_) => {
+                // Enum replacement is handled separately
+                return replace_enum_alloca(&mut self.rvsdg, node);
+            }
             TypeKind::Array {
                 element_ty: base,
                 count,
@@ -201,7 +206,7 @@ impl AllocaReplacer<'_> {
                 for _ in 0..*count {
                     let scalar_node = self.rvsdg.add_op_alloca(region, *base);
 
-                    scalar_replacements.push(ValueInput {
+                    replacements.push(ValueInput {
                         ty: element_ptr_ty,
                         origin: ValueOrigin::Output {
                             producer: scalar_node,
@@ -216,7 +221,7 @@ impl AllocaReplacer<'_> {
                     let field_ptr_ty = self.rvsdg.ty().register(TypeKind::Ptr(field_ty));
                     let scalar_node = self.rvsdg.add_op_alloca(region, field_ty);
 
-                    scalar_replacements.push(ValueInput {
+                    replacements.push(ValueInput {
                         ty: field_ptr_ty,
                         origin: ValueOrigin::Output {
                             producer: scalar_node,
@@ -228,7 +233,7 @@ impl AllocaReplacer<'_> {
             _ => unreachable!("type is not an aggregate, node should not have been a candidate"),
         }
 
-        self.visit_users(node, 0, &scalar_replacements);
+        self.visit_users(node, 0, &replacements);
 
         // The OpAlloca node now should not have any users left, so we can remove it
         self.rvsdg.remove_node(node);
@@ -283,6 +288,8 @@ impl AllocaReplacer<'_> {
             Simple(OpStore(_)) => self.split_op_store(node, input, split_input),
             Simple(OpPtrElementPtr(_)) => self.visit_op_ptr_element_ptr(node, split_input),
             Simple(OpExtractElement(_)) => self.visit_op_extract_element(node, split_input),
+            Simple(OpAddPtrOffset(_)) => self.visit_users(node, 0, split_input),
+            Simple(OpGetPtrOffset(_)) => (),
             Simple(ValueProxy(_)) => self.visit_value_proxy(node, split_input),
             _ => unreachable!("node kind cannot take a pointer or aggregate value as input"),
         }

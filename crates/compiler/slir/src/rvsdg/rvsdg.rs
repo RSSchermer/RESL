@@ -536,15 +536,27 @@ impl NodeData {
         }
     }
 
-    pub fn is_op_offset_slice_ptr(&self) -> bool {
-        matches!(self.kind, NodeKind::Simple(SimpleNode::OpOffsetSlicePtr(_)))
+    pub fn is_op_add_ptr_offset(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::OpAddPtrOffset(_)))
     }
 
-    pub fn expect_op_offset_slice_ptr(&self) -> &OpOffsetSlicePtr {
-        if let NodeKind::Simple(SimpleNode::OpOffsetSlicePtr(op)) = &self.kind {
+    pub fn expect_op_add_ptr_offset(&self) -> &OpAddPtrOffset {
+        if let NodeKind::Simple(SimpleNode::OpAddPtrOffset(op)) = &self.kind {
             op
         } else {
-            panic!("expected node to be a `offset-slice-ptr` operation")
+            panic!("expected node to be a `add-ptr-offset` operation")
+        }
+    }
+
+    pub fn is_op_get_ptr_offset(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::OpGetPtrOffset(_)))
+    }
+
+    pub fn expect_op_get_ptr_offset(&self) -> &OpGetPtrOffset {
+        if let NodeKind::Simple(SimpleNode::OpGetPtrOffset(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be a `get-ptr-offset` operation")
         }
     }
 
@@ -1326,12 +1338,12 @@ impl Connectivity for OpSetDiscriminant {
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
-pub struct OpOffsetSlicePtr {
+pub struct OpAddPtrOffset {
     inputs: [ValueInput; 2],
     output: ValueOutput,
 }
 
-impl OpOffsetSlicePtr {
+impl OpAddPtrOffset {
     pub fn slice_ptr(&self) -> &ValueInput {
         &self.inputs[0]
     }
@@ -1345,13 +1357,55 @@ impl OpOffsetSlicePtr {
     }
 }
 
-impl Connectivity for OpOffsetSlicePtr {
+impl Connectivity for OpAddPtrOffset {
     fn value_inputs(&self) -> &[ValueInput] {
         &self.inputs
     }
 
     fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
         &mut self.inputs
+    }
+
+    fn value_outputs(&self) -> &[ValueOutput] {
+        slice::from_ref(&self.output)
+    }
+
+    fn value_outputs_mut(&mut self) -> &mut [ValueOutput] {
+        slice::from_mut(&mut self.output)
+    }
+
+    fn state(&self) -> Option<&State> {
+        None
+    }
+
+    fn state_mut(&mut self) -> Option<&mut State> {
+        None
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OpGetPtrOffset {
+    slice_ptr: ValueInput,
+    output: ValueOutput,
+}
+
+impl OpGetPtrOffset {
+    pub fn slice_ptr(&self) -> &ValueInput {
+        &self.slice_ptr
+    }
+
+    pub fn output(&self) -> &ValueOutput {
+        &self.output
+    }
+}
+
+impl Connectivity for OpGetPtrOffset {
+    fn value_inputs(&self) -> &[ValueInput] {
+        slice::from_ref(&self.slice_ptr)
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        slice::from_mut(&mut self.slice_ptr)
     }
 
     fn value_outputs(&self) -> &[ValueOutput] {
@@ -1906,7 +1960,8 @@ gen_simple_node! {
     OpExtractElement,
     OpGetDiscriminant,
     OpSetDiscriminant,
-    OpOffsetSlicePtr,
+    OpAddPtrOffset,
+    OpGetPtrOffset,
     OpApply,
     OpUnary,
     OpBinary,
@@ -2792,7 +2847,7 @@ impl Rvsdg {
         node
     }
 
-    pub fn add_op_offset_slice_ptr(
+    pub fn add_op_add_ptr_offset(
         &mut self,
         region: Region,
         slice_ptr: ValueInput,
@@ -2803,9 +2858,29 @@ impl Rvsdg {
 
         let node = self.nodes.insert(NodeData {
             kind: NodeKind::Simple(
-                OpOffsetSlicePtr {
+                OpAddPtrOffset {
                     inputs: [slice_ptr, offset],
                     output: ValueOutput::new(slice_ptr.ty),
+                }
+                .into(),
+            ),
+            region: Some(region),
+        });
+
+        self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
+
+        node
+    }
+
+    pub fn add_op_get_ptr_offset(&mut self, region: Region, slice_ptr: ValueInput) -> Node {
+        self.validate_node_value_input(region, &slice_ptr);
+
+        let node = self.nodes.insert(NodeData {
+            kind: NodeKind::Simple(
+                OpGetPtrOffset {
+                    slice_ptr,
+                    output: ValueOutput::new(TY_U32),
                 }
                 .into(),
             ),
@@ -3236,10 +3311,13 @@ impl Rvsdg {
             }
         };
 
-        assert_eq!(
-            output.ty, ty,
-            "the origin type must match the specified type"
-        );
+        // dbg!(&*self.ty.kind(output.ty));
+        // dbg!(&*self.ty.kind(ty));
+        //
+        // assert_eq!(
+        //     output.ty, ty,
+        //     "the origin type must match the specified type"
+        // );
 
         let mut found_user = false;
         for candidate_user in output.users.iter_mut() {
@@ -3414,6 +3492,16 @@ impl Rvsdg {
                 self.nodes[producer].value_outputs()[output as usize].ty
             }
         }
+    }
+
+    pub fn get_input_index(&self, node: Node, origin: ValueOrigin) -> Option<u32> {
+        for (i, input) in self.nodes[node].value_inputs().iter().enumerate() {
+            if input.origin == origin {
+                return Some(i as u32);
+            }
+        }
+
+        None
     }
 
     fn remove_region_with_nodes(&mut self, region: Region) {

@@ -128,6 +128,10 @@ impl TypeKind {
             panic!("not an struct type");
         }
     }
+    
+    pub fn is_enum(&self) -> bool {
+        matches!(self, TypeKind::Enum(_))
+    }
 
     pub fn expect_enum(&self) -> &Enum {
         if let TypeKind::Enum(enum_data) = self {
@@ -138,18 +142,18 @@ impl TypeKind {
     }
 
     pub fn is_ptr(&self) -> bool {
-        if let TypeKind::Ptr(_) = self {
-            true
-        } else {
-            false
-        }
+        matches!(self, TypeKind::Ptr(_))
     }
 
     pub fn is_aggregate(&self) -> bool {
-        match self {
-            TypeKind::Struct(_) | TypeKind::Enum(_) | TypeKind::Array { .. } => true,
-            _ => false,
-        }
+        matches!(
+            self,
+            TypeKind::Struct(_) | TypeKind::Enum(_) | TypeKind::Array { .. }
+        )
+    }
+
+    pub fn is_slice(&self) -> bool {
+        matches!(self, TypeKind::Slice { .. })
     }
 }
 

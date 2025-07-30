@@ -98,7 +98,8 @@ impl PointerAnalyzer {
         match rvsdg[node].kind() {
             Switch(_) | Loop(_) => PointerAction::VariablePointerEmulation,
             Simple(OpAlloca(_)) if !element_access => PointerAction::Promotion(node),
-            Simple(OpPtrElementPtr(op)) => Self::analyze_input(rvsdg, node, 0, true),
+            Simple(OpPtrElementPtr(_)) => Self::analyze_input(rvsdg, node, 0, true),
+            Simple(OpAddPtrOffset(_)) => Self::analyze_input(rvsdg, node, 0, element_access),
             Simple(OpAlloca(_) | ConstPtr(_) | ConstFallback(_) | OpLoad(_)) => {
                 PointerAction::Nothing
             }

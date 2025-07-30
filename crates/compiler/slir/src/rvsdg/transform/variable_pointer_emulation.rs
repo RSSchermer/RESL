@@ -420,6 +420,7 @@ impl EmulationContext {
                 Simple(OpPtrElementPtr(_)) => self.create_ptr_element_ptr_info(rvsdg, producer),
                 Simple(OpAlloca(_)) => self.create_alloca_info(rvsdg, producer),
                 Simple(ConstFallback(_)) => self.create_fallback_info(rvsdg, producer),
+                Simple(OpAddPtrOffset(_)) => self.create_add_ptr_offset_info(rvsdg, producer),
                 Simple(OpLoad(_)) => panic!(
                     "cannot emulate a pointer for which the access chain \
                 information cannot be tracked through value-flow"
@@ -839,6 +840,19 @@ impl EmulationContext {
             pointer_ty: rvsdg[const_fallback].expect_const_fallback().ty(),
             emulation_root: emulation_root.into(),
         }
+    }
+
+    fn create_add_ptr_offset_info(
+        &mut self,
+        rvsdg: &mut Rvsdg,
+        op_add_ptr_offset: Node,
+    ) -> PointerEmulationInfo {
+        let region = rvsdg[op_add_ptr_offset].region();
+        let add_ptr_offset = rvsdg[op_add_ptr_offset].expect_op_add_ptr_offset();
+        let ptr_origin = add_ptr_offset.slice_ptr().origin;
+
+        self.resolve_pointer_emulation_info(rvsdg, region, ptr_origin)
+            .clone()
     }
 }
 

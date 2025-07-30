@@ -427,7 +427,7 @@ impl<'a> RegionBuilder<'a> {
 
         let node = self
             .rvsdg
-            .add_op_offset_slice_ptr(self.region, slice_ptr, offset);
+            .add_op_add_ptr_offset(self.region, slice_ptr, offset);
 
         self.input_state_tracker
             .insert_value_node(op.result, node, 0);

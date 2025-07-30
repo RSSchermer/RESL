@@ -6,84 +6,30 @@ use crate::rvsdg::{
 use crate::ty::{Type, TypeKind, TypeRegistry, TY_PTR_U32, TY_U32};
 use crate::{Function, Module};
 
-pub struct EnumAllocaReplacer {
-    variant_node_buffer: Vec<Node>,
-}
-
-impl EnumAllocaReplacer {
-    pub fn new() -> Self {
-        EnumAllocaReplacer {
-            variant_node_buffer: vec![],
-        }
-    }
-
-    pub fn replace_in_fn(&mut self, rvsdg: &mut Rvsdg, function: Function) {
-        let node = rvsdg
-            .get_function_node(function)
-            .expect("function should have RVSDG body");
-        let body_region = rvsdg[node].expect_function().body_region();
-
-        self.visit_region(rvsdg, body_region);
-    }
-
-    fn visit_region(&mut self, rvsdg: &mut Rvsdg, region: Region) {
-        use NodeKind::*;
-        use SimpleNode::*;
-
-        let node_count = rvsdg[region].nodes().len();
-
-        for i in 0..node_count {
-            let node = rvsdg[region].nodes()[i];
-
-            match rvsdg[node].kind() {
-                Simple(OpAlloca(_)) => self.visit_alloca_node(rvsdg, node),
-                Switch(_) => self.visit_switch_node(rvsdg, node),
-                Loop(_) => self.visit_switch_node(rvsdg, node),
-                _ => {}
-            }
-        }
-    }
-
-    fn visit_alloca_node(&mut self, rvsdg: &mut Rvsdg, alloca_node: Node) {
-        let ty = rvsdg[alloca_node].expect_op_alloca().ty();
-
-        if let TypeKind::Enum(_) = rvsdg.ty().kind(ty).deref() {
-            let mut replacer = AllocaReplacer {
-                ty: rvsdg.ty().clone(),
-                rvsdg,
-                enum_ty: ty,
-            };
-
-            replacer.replace_alloca(alloca_node);
-        }
-    }
-
-    fn visit_switch_node(&mut self, rvsdg: &mut Rvsdg, node: Node) {
-        let branch_count = rvsdg[node].expect_switch().branches().len();
-
-        for i in 0..branch_count {
-            let branch = rvsdg[node].expect_switch().branches()[i];
-
-            self.visit_region(rvsdg, branch);
-        }
-    }
-
-    fn visit_loop_node(&mut self, rvsdg: &mut Rvsdg, node: Node) {
-        let loop_region = rvsdg[node].expect_loop().loop_region();
-
-        self.visit_region(rvsdg, loop_region);
-    }
-}
-
-struct AllocaReplacer<'a> {
+pub struct EnumAllocaReplacer<'a> {
     rvsdg: &'a mut Rvsdg,
+    node: Node,
     ty: TypeRegistry,
     enum_ty: Type,
 }
 
-impl<'a> AllocaReplacer<'a> {
-    fn replace_alloca(&mut self, node: Node) {
-        let node_data = &self.rvsdg[node];
+impl<'a> EnumAllocaReplacer<'a> {
+    pub fn new(rvsdg: &'a mut Rvsdg, node: Node) -> Self {
+        let enum_ty = rvsdg[node].expect_op_alloca().ty();
+        let ty_registry = rvsdg.ty().clone();
+        
+        assert!(ty_registry.kind(enum_ty).is_enum());
+
+        EnumAllocaReplacer {
+            ty: rvsdg.ty().clone(),
+            rvsdg,
+            enum_ty,
+            node,
+        }
+    }
+    
+    pub fn replace_alloca(&mut self) {
+        let node_data = &self.rvsdg[self.node];
         let region = node_data.region();
         let discriminant_node = self.rvsdg.add_op_alloca(region, TY_U32);
 
@@ -112,10 +58,10 @@ impl<'a> AllocaReplacer<'a> {
             }
         }));
 
-        self.visit_users(node, 0, &replacements);
+        self.visit_users(self.node, 0, &replacements);
 
         // The OpAlloca node now should not have any users left, so we can remove it
-        self.rvsdg.remove_node(node);
+        self.rvsdg.remove_node(self.node);
     }
 
     fn visit_users(&mut self, node: Node, output: u32, split_inputs: &[ValueInput]) {
@@ -562,18 +508,8 @@ impl<'a> AllocaReplacer<'a> {
     }
 }
 
-pub fn entry_points_enum_replacement(module: &Module, rvsdg: &mut Rvsdg) {
-    let mut replacer = EnumAllocaReplacer::new();
-
-    let entry_points = module
-        .entry_points
-        .iter()
-        .map(|(f, _)| f)
-        .collect::<Vec<_>>();
-
-    for entry_point in entry_points {
-        replacer.replace_in_fn(rvsdg, entry_point);
-    }
+pub fn replace_enum_alloca(rvsdg: &mut Rvsdg, node: Node) {
+    EnumAllocaReplacer::new(rvsdg, node).replace_alloca()
 }
 
 #[cfg(test)]
@@ -784,10 +720,8 @@ mod tests {
                 output: 0,
             },
         );
-
-        let mut replacer = EnumAllocaReplacer::new();
-
-        replacer.replace_in_fn(&mut rvsdg, function);
+        
+        replace_enum_alloca(&mut rvsdg, alloca_node);
 
         let switch_0_data = rvsdg[switch_0_node].expect_switch();
 

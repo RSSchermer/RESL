@@ -164,14 +164,6 @@ fn define_usize_slice_index_get(instance: Instance, cx: &CodegenContext) {
 }
 
 fn define_range_usize_slice_index_get(instance: Instance, cx: &CodegenContext) {
-    let mir = if let Some(body) = instance.body() {
-        body
-    } else {
-        return;
-    };
-
-    mir.dump(&mut io::stdout(), instance.name().as_str());
-
     let function = cx.get_fn(&instance);
     let mut module = cx.module.borrow_mut();
     let ret_ty = module.fn_sigs[function].args[0].ty;

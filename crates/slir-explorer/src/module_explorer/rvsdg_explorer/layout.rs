@@ -981,9 +981,8 @@ impl NodeLayout {
                 SimpleNode::OpSetDiscriminant(op) => {
                     NodeContent::PlainText(format!("set-discr:{}", op.variant_index()).into())
                 }
-                SimpleNode::OpOffsetSlicePtr(_) => {
-                    NodeContent::PlainText("offset-slice-ptr".into())
-                }
+                SimpleNode::OpAddPtrOffset(_) => NodeContent::PlainText("add-ptr-offset".into()),
+                SimpleNode::OpGetPtrOffset(_) => NodeContent::PlainText("get-ptr-offset".into()),
                 SimpleNode::OpExtractElement(_) => NodeContent::PlainText("extract".into()),
                 SimpleNode::OpApply(op) => {
                     NodeContent::FnApply("apply".into(), op.resolve_fn(module))

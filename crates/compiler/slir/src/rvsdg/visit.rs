@@ -1,6 +1,6 @@
 use crate::rvsdg::{
-    Connectivity, Node, Region, RegionData, Rvsdg, SimpleNode, StateOrigin, StateUser, ValueInput,
-    ValueOrigin, ValueOutput, ValueUser,
+    Connectivity, Node, NodeKind, Region, RegionData, Rvsdg, SimpleNode, StateOrigin, StateUser,
+    ValueInput, ValueOrigin, ValueOutput, ValueUser,
 };
 
 pub trait TopDownRegionVisitor: Sized {
@@ -50,6 +50,18 @@ pub fn visit_region_top_down<V: TopDownRegionVisitor>(
 
 pub fn visit_node_top_down<V: TopDownRegionVisitor>(visitor: &mut V, rvsdg: &Rvsdg, node: Node) {
     let data = &rvsdg[node];
+
+    match data.kind() {
+        NodeKind::Switch(n) => {
+            for branch in n.branches() {
+                visit_region_top_down(visitor, rvsdg, *branch);
+            }
+        }
+        NodeKind::Loop(n) => {
+            visit_region_top_down(visitor, rvsdg, n.loop_region());
+        }
+        _ => (),
+    }
 
     visit_value_outputs(visitor, rvsdg, data.value_outputs());
 
@@ -103,6 +115,18 @@ pub fn visit_region_bottom_up<V: BottomUpRegionVisitor>(
 
 pub fn visit_node_bottom_up<V: BottomUpRegionVisitor>(visitor: &mut V, rvsdg: &Rvsdg, node: Node) {
     let data = &rvsdg[node];
+
+    match data.kind() {
+        NodeKind::Switch(n) => {
+            for branch in n.branches() {
+                visit_region_bottom_up(visitor, rvsdg, *branch);
+            }
+        }
+        NodeKind::Loop(n) => {
+            visit_region_bottom_up(visitor, rvsdg, n.loop_region());
+        }
+        _ => (),
+    }
 
     visit_value_inputs(visitor, rvsdg, data.value_inputs());
 
