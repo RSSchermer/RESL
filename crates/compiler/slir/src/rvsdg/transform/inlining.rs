@@ -1,10 +1,11 @@
 use std::collections::VecDeque;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::rvsdg::visit::{visit_node_bottom_up, BottomUpRegionVisitor};
 use crate::rvsdg::{
-    Connectivity, Node, NodeKind, Region, Rvsdg, SimpleNode, StateOrigin, ValueInput, ValueOrigin,
-    ValueOutput, ValueUser,
+    Connectivity, FunctionNode, Node, NodeKind, OpAddPtrOffset, Region, Rvsdg, SimpleNode,
+    StateOrigin, ValueInput, ValueOrigin, ValueOutput, ValueUser,
 };
 use crate::Module;
 
@@ -139,7 +140,8 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
             Simple(OpExtractElement(_)) => self.replicate_op_extract_element(node),
             Simple(OpGetDiscriminant(_)) => self.replicate_op_get_discriminant_node(node),
             Simple(OpSetDiscriminant(_)) => self.replicate_op_set_discriminant_node(node),
-            Simple(OpOffsetSlicePtr(_)) => self.replicate_op_offset_slice_ptr_node(node),
+            Simple(OpAddPtrOffset(_)) => self.replicate_op_add_ptr_offset_node(node),
+            Simple(OpGetPtrOffset(_)) => self.replicate_op_get_ptr_offset_node(node),
             Simple(OpApply(_)) => self.replicate_op_apply_node(node),
             Simple(OpUnary(_)) => self.replicate_op_unary_node(node),
             Simple(OpBinary(_)) => self.replicate_op_binary_node(node),
@@ -389,13 +391,20 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
             .add_op_set_discriminant(self.dst_region, ptr_input, variant_index, state_origin)
     }
 
-    fn replicate_op_offset_slice_ptr_node(&mut self, node: Node) -> Node {
-        let data = self.rvsdg[node].expect_op_offset_slice_ptr();
+    fn replicate_op_add_ptr_offset_node(&mut self, node: Node) -> Node {
+        let data = self.rvsdg[node].expect_op_add_ptr_offset();
         let slice_ptr = self.mapped_value_input(data.slice_ptr());
         let offset = self.mapped_value_input(data.offset());
 
         self.rvsdg
-            .add_op_offset_slice_ptr(self.dst_region, slice_ptr, offset)
+            .add_op_add_ptr_offset(self.dst_region, slice_ptr, offset)
+    }
+
+    fn replicate_op_get_ptr_offset_node(&mut self, node: Node) -> Node {
+        let data = self.rvsdg[node].expect_op_get_ptr_offset();
+        let slice_ptr = self.mapped_value_input(data.slice_ptr());
+
+        self.rvsdg.add_op_get_ptr_offset(self.dst_region, slice_ptr)
     }
 
     fn replicate_op_apply_node(&mut self, node: Node) -> Node {
@@ -522,27 +531,130 @@ pub fn replicate_region(
     region_replicator.replicate_region()
 }
 
+/// Adds missing dependencies to the function we're inlining into.
+///
+/// Call [route] to ensure a dependency is made available to a specific region, either by finding
+/// a pre-existing argument that represents the dependency, or by creating a new input and routing
+/// the dependency from the function's root region.
+struct DependencyResolver<'a> {
+    rvsdg: &'a mut Rvsdg,
+    dependencies: Vec<ValueInput>,
+    region_owner_stack: Vec<Node>,
+}
+
+impl<'a> DependencyResolver<'a> {
+    fn new(rvsdg: &'a mut Rvsdg, function_node: Node) -> Self {
+        let dependencies = rvsdg[function_node]
+            .expect_function()
+            .dependencies()
+            .to_vec();
+
+        Self {
+            rvsdg,
+            dependencies,
+            region_owner_stack: Vec::new(),
+        }
+    }
+
+    fn route(mut self, region: Region) -> Vec<ValueInput> {
+        self.visit_region_owner(region);
+
+        self.dependencies
+    }
+
+    fn visit_region_owner(&mut self, region: Region) {
+        let owner = self.rvsdg[region].owner();
+
+        match self.rvsdg[owner].kind() {
+            NodeKind::Switch(_) | NodeKind::Loop(_) => {
+                self.region_owner_stack.push(owner);
+                self.visit_region_owner(self.rvsdg[owner].region());
+            }
+            NodeKind::Function(_) => {
+                self.resolve_global_dependencies(owner);
+                self.consume_owner_stack();
+            }
+            _ => unreachable!("node kind cannot own a region"),
+        }
+    }
+
+    fn resolve_global_dependencies(&mut self, dest_function_node: Node) {
+        for dependency in &mut self.dependencies {
+            let ValueOrigin::Output {
+                producer,
+                output: 0,
+            } = dependency.origin
+            else {
+                panic!("expect dependency input to connect to output `0` or a producer node");
+            };
+
+            // Note that `add_function_dependency` will only insert a dependency if the
+            // `dest_function_node` (the function we're inlining into) does not already have that
+            // dependency; if it does not yet have the dependency, then the dependency is inserted
+            // at an argument index that is greater than the index of the pre-existing dependencies.
+            // This is important because otherwise the argument indices in the mapping we are 
+            // building might get invalidated by the argument indices shifting as a result of 
+            // insertions.
+            let arg_index = self
+                .rvsdg
+                .add_function_dependency(dest_function_node, producer);
+
+            dependency.origin = ValueOrigin::Argument(arg_index);
+        }
+    }
+
+    fn consume_owner_stack(&mut self) {
+        if let Some(owner) = self.region_owner_stack.pop() {
+            for dependency in &mut self.dependencies {
+                let input = self
+                    .rvsdg
+                    .get_input_index(owner, dependency.origin)
+                    .unwrap_or_else(|| match self.rvsdg[owner].kind() {
+                        NodeKind::Switch(_) => self.rvsdg.add_switch_input(owner, *dependency),
+                        NodeKind::Loop(_) => self.rvsdg.add_loop_input(owner, *dependency),
+                        _ => unreachable!("only switch and loop have been pushed to the stack"),
+                    });
+
+                let arg = match self.rvsdg[owner].kind() {
+                    NodeKind::Switch(_) => input - 1,
+                    NodeKind::Loop(_) => input,
+                    _ => unreachable!("only switch and loop have been pushed to the stack"),
+                };
+
+                dependency.origin = ValueOrigin::Argument(arg);
+            }
+
+            self.consume_owner_stack();
+        }
+    }
+}
+
+fn resolve_dependencies(rvsdg: &mut Rvsdg, function_node: Node, region: Region) -> Vec<ValueInput> {
+    let mut resolver = DependencyResolver::new(rvsdg, function_node);
+
+    resolver.route(region)
+}
+
 pub fn inline_function(module: &mut Module, rvsdg: &mut Rvsdg, apply_node: Node) {
     let node_data = &rvsdg[apply_node];
 
     let dst_region = node_data.region();
-    let dst_owner_node = rvsdg[dst_region].owner();
 
     let value_output_count = node_data.value_outputs().len();
-    let apply_site = node_data.expect_op_apply();
+    let apply_data = node_data.expect_op_apply();
 
-    let function = apply_site.resolve_fn(module);
+    let function = apply_data.resolve_fn(module);
     let function_node = rvsdg
         .get_function_node(function)
         .expect("cannot apply an unregistered function");
     let function_node_data = rvsdg[function_node].expect_function();
     let src_region = function_node_data.body_region();
     let dependency_count = function_node_data.dependencies().len();
-    let function_argument_count = apply_site.argument_inputs().len();
+    let function_argument_count = apply_data.argument_inputs().len();
     let region_argument_count = dependency_count + function_argument_count;
 
     // The state origin to which the inlined region's state argument maps in the destination region.
-    let state_argument_mapping = apply_site.state().map(|state| state.origin);
+    let state_argument_mapping = apply_data.state().map(|state| state.origin);
 
     // We also have to construct a mapping that maps each of the non-state arguments to origins in
     // the destination region. These will first map the inlined function's dependencies (if any),
@@ -550,26 +662,12 @@ pub fn inline_function(module: &mut Module, rvsdg: &mut Rvsdg, apply_node: Node)
     // are organized).
     let mut argument_mapping = Vec::with_capacity(region_argument_count);
 
-    // We first add the mappings for the inlined function's dependencies.
-    for i in 0..dependency_count {
-        let ValueOrigin::Output {
-            producer,
-            output: 0,
-        } = rvsdg[function_node].expect_function().dependencies()[i].origin
-        else {
-            panic!("expect dependency input to connect to output `0` or a producer node");
-        };
-
-        // Note that `add_function_dependency` will only insert a dependency if the
-        // `dst_owner_node` (the function we're inlining into) does not already have that
-        // dependency; if it does not yet have the dependency, then the dependency is inserted
-        // at an argument index that is greater than the index of the pre-existing dependencies.
-        // This is important because otherwise the argument indices in the mapping we are building
-        // might get invalidated by the argument indices shifting as a result of insertions.
-        let arg_index = rvsdg.add_function_dependency(dst_owner_node, producer);
-
-        argument_mapping.push(ValueOrigin::Argument(arg_index));
-    }
+    // Resolve and add the dependencies.
+    argument_mapping.extend(
+        resolve_dependencies(rvsdg, function_node, dst_region)
+            .iter()
+            .map(|input| input.origin),
+    );
 
     // Then add mappings for the call arguments.
     argument_mapping.extend(
@@ -617,6 +715,30 @@ pub fn inline_function(module: &mut Module, rvsdg: &mut Rvsdg, apply_node: Node)
     rvsdg.remove_node(apply_node);
 }
 
+struct ApplyNodeCollector {
+    seen: FxHashSet<Node>,
+    queue: VecDeque<Node>,
+}
+
+impl ApplyNodeCollector {
+    fn new() -> Self {
+        Self {
+            seen: Default::default(),
+            queue: VecDeque::new(),
+        }
+    }
+}
+
+impl BottomUpRegionVisitor for ApplyNodeCollector {
+    fn visit_node(&mut self, rvsdg: &Rvsdg, node: Node) {
+        if rvsdg[node].is_op_apply() && self.seen.insert(node) {
+            self.queue.push_back(node);
+        }
+
+        visit_node_bottom_up(self, rvsdg, node);
+    }
+}
+
 /// For all entry points in the given `module`, finds all "apply" nodes and inlines the
 /// corresponding function, iteratively inlining any new "apply" amongst the inlined nodes until
 /// the entry points no longer contain any apply operations for user-defined functions.
@@ -627,35 +749,29 @@ pub fn entry_points_inline_exhaustive(module: &mut Module, rvsdg: &mut Rvsdg) {
         .map(|(f, _)| f)
         .collect::<Vec<_>>();
 
-    let mut apply_node_queue = VecDeque::new();
+    let mut collector = ApplyNodeCollector::new();
 
     for entry_point in entry_points {
         if let Some(function_node) = rvsdg.get_function_node(entry_point) {
             let body_region = rvsdg[function_node].expect_function().body_region();
 
-            for node in rvsdg[body_region].nodes() {
-                if rvsdg[*node].is_op_apply() {
-                    apply_node_queue.push_back(*node);
-                }
-            }
+            collector.visit_region(rvsdg, body_region);
 
             // Inline the nodes currently in the queue, then check for new apply nodes and add them
             // to the queue; keep iterating until the queue is empty.
-            while !apply_node_queue.is_empty() {
-                while let Some(node) = apply_node_queue.pop_front() {
+            while !collector.queue.is_empty() {
+                while let Some(node) = collector.queue.pop_front() {
                     inline_function(module, rvsdg, node);
                 }
 
-                // We may be able to do something more efficient here by keeping track of which
-                // nodes are getting inlined and only checking for new apply nodes on those nodes.
-                // That would, however, increase the complexity of the inlining algorithm, and I'm
-                // not sure if this search contributes significantly to the overall compile time, so
-                // we'd have to measure whether that's worth it.
-                for node in rvsdg[body_region].nodes() {
-                    if rvsdg[*node].is_op_apply() {
-                        apply_node_queue.push_back(*node);
-                    }
-                }
+                // Inlining may have added more apply nodes to the function, so search the body
+                // again.
+                // TODO: revisiting every single node in the body region again is not exactly the
+                // most efficient way to find new apply nodes, though I'm also not sure how much
+                // this contributes to the overall compile time; doing the simple thing for now,
+                // but we may want to measure this at some point and perhaps find a way to restrict
+                // the search to only the newly inlined nodes.
+                collector.visit_region(rvsdg, body_region);
             }
 
             // Any function dependencies that were inlined will now be unused, so clean up the entry
@@ -867,7 +983,7 @@ mod tests {
             .copied()
             .any(|n| rvsdg[n].is_op_apply()));
     }
-
+    
     #[test]
     fn test_inline_function_stateful() {
         let mut module = Module::new(Symbol::from_ref(""));
