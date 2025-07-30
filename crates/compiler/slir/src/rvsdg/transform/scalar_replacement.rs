@@ -4,13 +4,13 @@ use std::ops::{Deref, Range};
 use rustc_hash::FxHashSet;
 
 use crate::rvsdg::analyse::element_index::ElementIndex;
+use crate::rvsdg::transform::enum_replacement::{replace_enum_alloca, EnumAllocaReplacer};
 use crate::rvsdg::{
     Connectivity, LoopNode, Node, NodeKind, OpAlloca, OpLoad, Region, Rvsdg, SimpleNode,
     StateOrigin, SwitchNode, ValueInput, ValueOrigin, ValueOutput, ValueUser,
 };
 use crate::ty::{Type, TypeKind, TypeRegistry, TY_PREDICATE, TY_U32};
 use crate::{Function, Module};
-use crate::rvsdg::transform::enum_replacement::{replace_enum_alloca, EnumAllocaReplacer};
 
 /// Collects all [OpAlloca] nodes of aggregate types in a region and all sub-regions (e.g. a switch
 /// node branch region) into a queue of candidates for scalar replacement.

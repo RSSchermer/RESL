@@ -17,7 +17,7 @@ impl<'a> EnumAllocaReplacer<'a> {
     pub fn new(rvsdg: &'a mut Rvsdg, node: Node) -> Self {
         let enum_ty = rvsdg[node].expect_op_alloca().ty();
         let ty_registry = rvsdg.ty().clone();
-        
+
         assert!(ty_registry.kind(enum_ty).is_enum());
 
         EnumAllocaReplacer {
@@ -27,7 +27,7 @@ impl<'a> EnumAllocaReplacer<'a> {
             node,
         }
     }
-    
+
     pub fn replace_alloca(&mut self) {
         let node_data = &self.rvsdg[self.node];
         let region = node_data.region();
@@ -720,7 +720,7 @@ mod tests {
                 output: 0,
             },
         );
-        
+
         replace_enum_alloca(&mut rvsdg, alloca_node);
 
         let switch_0_data = rvsdg[switch_0_node].expect_switch();

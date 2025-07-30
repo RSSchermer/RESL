@@ -592,8 +592,8 @@ impl<'a> DependencyResolver<'a> {
             // `dest_function_node` (the function we're inlining into) does not already have that
             // dependency; if it does not yet have the dependency, then the dependency is inserted
             // at an argument index that is greater than the index of the pre-existing dependencies.
-            // This is important because otherwise the argument indices in the mapping we are 
-            // building might get invalidated by the argument indices shifting as a result of 
+            // This is important because otherwise the argument indices in the mapping we are
+            // building might get invalidated by the argument indices shifting as a result of
             // insertions.
             let arg_index = self
                 .rvsdg
@@ -983,7 +983,7 @@ mod tests {
             .copied()
             .any(|n| rvsdg[n].is_op_apply()));
     }
-    
+
     #[test]
     fn test_inline_function_stateful() {
         let mut module = Module::new(Symbol::from_ref(""));

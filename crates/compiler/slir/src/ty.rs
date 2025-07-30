@@ -128,7 +128,7 @@ impl TypeKind {
             panic!("not an struct type");
         }
     }
-    
+
     pub fn is_enum(&self) -> bool {
         matches!(self, TypeKind::Enum(_))
     }

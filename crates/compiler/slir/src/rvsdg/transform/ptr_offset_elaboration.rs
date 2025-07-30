@@ -1,5 +1,9 @@
-use crate::rvsdg::transform::scalar_replacement::ScalarReplacer;
-use crate::rvsdg::{Node, NodeKind, Rvsdg, SimpleNode, ValueInput, ValueOrigin};
+use rustc_hash::FxHashSet;
+
+use crate::rvsdg::visit::{visit_node_bottom_up, BottomUpRegionVisitor};
+use crate::rvsdg::NodeKind::Simple;
+use crate::rvsdg::SimpleNode::OpPtrElementPtr;
+use crate::rvsdg::{Node, Region, Rvsdg, ValueInput, ValueOrigin};
 use crate::ty::{Type, TypeKind, TypeRegistry, TY_U32};
 use crate::{BinaryOperator, Function, Module};
 
@@ -35,31 +39,69 @@ fn elaborate_ptr_element_ptr_input(rvsdg: &mut Rvsdg, node: Node) {
     );
 }
 
-pub fn elaborate_ptr_offset_in_fn(rvsdg: &mut Rvsdg, function: Function) {
-    let body_region = rvsdg
-        .get_function_node(function)
-        .map(|n| rvsdg[n].expect_function().body_region());
+struct Collector {
+    seen: FxHashSet<Node>,
+    queue: Vec<Node>,
+}
 
-    if let Some(body_region) = body_region {
-        let node_count = rvsdg[body_region].nodes().len();
+impl Collector {
+    pub fn new() -> Self {
+        Self {
+            seen: Default::default(),
+            queue: Vec::new(),
+        }
+    }
 
-        for i in 0..node_count {
-            use NodeKind::*;
-            use SimpleNode::*;
+    pub fn collect(&mut self, rvsdg: &Rvsdg, region: Region) {
+        self.queue.clear();
+        self.seen.clear();
+        self.visit_region(rvsdg, region);
+    }
+}
 
-            let node = rvsdg[body_region].nodes()[i];
+impl BottomUpRegionVisitor for Collector {
+    fn visit_node(&mut self, rvsdg: &Rvsdg, node: Node) {
+        if let Simple(OpPtrElementPtr(op)) = rvsdg[node].kind()
+            && is_slice_ptr_ty(rvsdg.ty(), op.ptr_input().ty)
+            && self.seen.insert(node)
+        {
+            self.queue.push(node);
+        }
 
-            if let Simple(OpPtrElementPtr(op)) = rvsdg[node].kind()
-                && is_slice_ptr_ty(rvsdg.ty(), op.ptr_input().ty)
-            {
-                elaborate_ptr_element_ptr_input(rvsdg, node)
+        visit_node_bottom_up(self, rvsdg, node);
+    }
+}
+
+pub struct PtrOffsetElaborator {
+    collector: Collector,
+}
+
+impl PtrOffsetElaborator {
+    pub fn new() -> Self {
+        PtrOffsetElaborator {
+            collector: Collector::new(),
+        }
+    }
+
+    pub fn elaborate_ptr_offset_in_fn(&mut self, rvsdg: &mut Rvsdg, function: Function) {
+        let body_region = rvsdg
+            .get_function_node(function)
+            .map(|n| rvsdg[n].expect_function().body_region());
+
+        if let Some(body_region) = body_region {
+            self.collector.collect(rvsdg, body_region);
+
+            while let Some(node) = self.collector.queue.pop() {
+                elaborate_ptr_element_ptr_input(rvsdg, node);
             }
         }
     }
 }
 
 pub fn entry_points_ptr_offset_elaboration(module: &Module, rvsdg: &mut Rvsdg) {
+    let mut elaborator = PtrOffsetElaborator::new();
+
     for (entry_point, _) in module.entry_points.iter() {
-        elaborate_ptr_offset_in_fn(rvsdg, entry_point);
+        elaborator.elaborate_ptr_offset_in_fn(rvsdg, entry_point);
     }
 }
