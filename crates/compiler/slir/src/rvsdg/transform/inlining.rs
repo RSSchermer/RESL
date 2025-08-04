@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::rvsdg::visit::{visit_node_bottom_up, BottomUpRegionVisitor};
+use crate::rvsdg::visit::bottom_up::{visit_node_bottom_up, BottomUpVisitor};
 use crate::rvsdg::{
     Connectivity, FunctionNode, Node, NodeKind, OpAddPtrOffset, Region, Rvsdg, SimpleNode,
     StateOrigin, ValueInput, ValueOrigin, ValueOutput, ValueUser,
@@ -729,7 +729,7 @@ impl ApplyNodeCollector {
     }
 }
 
-impl BottomUpRegionVisitor for ApplyNodeCollector {
+impl BottomUpVisitor for ApplyNodeCollector {
     fn visit_node(&mut self, rvsdg: &Rvsdg, node: Node) {
         if rvsdg[node].is_op_apply() && self.seen.insert(node) {
             self.queue.push_back(node);

@@ -28,7 +28,10 @@ impl<'a> EnumAllocaReplacer<'a> {
         }
     }
 
-    pub fn replace_alloca(&mut self) {
+    pub fn replace_alloca<F>(&mut self, mut with_replacements: F)
+    where
+        F: FnMut(Node, Type),
+    {
         let node_data = &self.rvsdg[self.node];
         let region = node_data.region();
         let discriminant_node = self.rvsdg.add_op_alloca(region, TY_U32);
@@ -48,6 +51,8 @@ impl<'a> EnumAllocaReplacer<'a> {
         replacements.extend(ty_kind.expect_enum().variants.iter().copied().map(|ty| {
             let ptr_ty = self.ty.register(TypeKind::Ptr(ty));
             let variant_node = self.rvsdg.add_op_alloca(region, ty);
+
+            with_replacements(variant_node, ty);
 
             ValueInput {
                 ty: ptr_ty,
@@ -508,8 +513,11 @@ impl<'a> EnumAllocaReplacer<'a> {
     }
 }
 
-pub fn replace_enum_alloca(rvsdg: &mut Rvsdg, node: Node) {
-    EnumAllocaReplacer::new(rvsdg, node).replace_alloca()
+pub fn replace_enum_alloca<F>(rvsdg: &mut Rvsdg, node: Node, with_replacements: F)
+where
+    F: FnMut(Node, Type),
+{
+    EnumAllocaReplacer::new(rvsdg, node).replace_alloca(with_replacements)
 }
 
 #[cfg(test)]
@@ -721,7 +729,7 @@ mod tests {
             },
         );
 
-        replace_enum_alloca(&mut rvsdg, alloca_node);
+        replace_enum_alloca(&mut rvsdg, alloca_node, |_, _| ());
 
         let switch_0_data = rvsdg[switch_0_node].expect_switch();
 

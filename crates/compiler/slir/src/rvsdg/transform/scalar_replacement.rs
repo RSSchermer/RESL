@@ -5,9 +5,10 @@ use rustc_hash::FxHashSet;
 
 use crate::rvsdg::analyse::element_index::ElementIndex;
 use crate::rvsdg::transform::enum_replacement::{replace_enum_alloca, EnumAllocaReplacer};
+use crate::rvsdg::visit::value_flow::ValueFlowVisitor;
 use crate::rvsdg::{
-    Connectivity, LoopNode, Node, NodeKind, OpAlloca, OpLoad, Region, Rvsdg, SimpleNode,
-    StateOrigin, SwitchNode, ValueInput, ValueOrigin, ValueOutput, ValueUser,
+    visit, Connectivity, LoopNode, Node, NodeKind, OpAlloca, OpLoad, OpPtrDiscriminantPtr, Region,
+    Rvsdg, SimpleNode, StateOrigin, SwitchNode, ValueInput, ValueOrigin, ValueOutput, ValueUser,
 };
 use crate::ty::{Type, TypeKind, TypeRegistry, TY_PREDICATE, TY_U32};
 use crate::{Function, Module};
@@ -54,59 +55,147 @@ impl<'a, 'b> CandidateAllocaCollector<'a, 'b> {
     }
 }
 
-/// Analyzes whether an [OpAlloca] of an aggregate should be replaced with multiple [OpAlloca]s, one
-/// for each of the aggregate's elements.
+fn collect_candidate_allocas(rvsdg: &Rvsdg, region: Region, queue: &mut VecDeque<Node>) {
+    CandidateAllocaCollector::new(rvsdg, queue).visit_region(region);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AnalysisResult {
+    Replace,
+    NeedsPromotionPass,
+    Ignore,
+}
+
+/// Analyzes an [OpAlloca] of an aggregate value can be replaced by its parts now, after memory
+/// promotion, or should be ignored entirely and never replaced.
 ///
-/// We generally want to replace as many [OpAlloca]s of aggregates as possible: scalar values are
-/// much easier to reason about, and as such most other transforms (including legalizing
-/// transforms), only operate on scalar values. Our primary compilation target (WGSL) also does not
-/// permit pointer type elements in aggregate; in these cases, scalar replacement is itself a
-/// legalizing transform. As such, scalar replacement is treated as the default outcome, and this
-/// analysis is instead focussed on identifying cases in which we should not or cannot perform a
-/// scalar replacement.
-struct Analyzer {
-    visited: FxHashSet<Node>,
-}
-
-impl Analyzer {
-    fn should_replace(&mut self, rvsdg: &Rvsdg, node: Node, function_body_region: Region) -> bool {
-        let mut non_local_use_analyzer = NonlocalUseAnalyzer {
-            rvsdg,
-            visited: &mut self.visited,
-            node,
-            function_body_region,
-        };
-
-        !non_local_use_analyzer.has_nonlocal_use()
-    }
-}
-
-/// Analyzes whether an [OpAlloca] escapes its local function context.
+/// # Escape analysis
 ///
 /// An [OpAlloca] of aggregate (a struct or array) escapes if the output pointer, or a load of the
 /// output pointer, is passed whole as a call argument input to an [OpApply] node, or is returned as
 /// a result from the local function region.
 ///
 /// For the [OpAlloca] to be found to escape, it must the whole pointer to the full aggregate, or
-/// the whole unsplit loaded value, that is passed to an [OpApply] node or returned  as a result.
-/// Passing or returning sub-elements of the aggregate, obtained via an [OpPtrElementPtr] or an
-/// [OpExtractElement], does not constitute an escape, as in these cases scalar replacement will
-/// only require local modifications (the [OpPtrElementPtr] or [OpExtractElement] can be adjusted
-/// such that any [OpApply] user or result user can remain unchanged).
-struct NonlocalUseAnalyzer<'a, 'b> {
+/// the whole unsplit loaded value, that is passed to an [OpApply] node or returned as a result.
+/// Passing or returning sub-elements of the aggregate, obtained via e.g. an [OpPtrElementPtr], does
+/// not constitute an escape, as in these cases scalar replacement will only require local
+/// modifications (the [OpPtrElementPtr] can be adjusted such that any [OpApply] user or result user
+/// can remain unchanged).
+///
+/// # Stored-value analysis
+///
+/// While we can replace cases where a pointer to an alloca of aggregate is used as the "pointer"
+/// input to on [OpStore], if it is used as the "value" input to an [OpStore] we cannot. However,
+/// such [OpStore] may be "promoted" away by a [memory_promotion_and_legalization] pass, so such
+/// an [OpAlloca] may be retried later.
+struct AggregateAllocaAnalyzer {
+    visited: FxHashSet<(Region, ValueUser)>,
+    was_loaded: bool,
+    has_nonlocal_use: bool,
+    is_stored_value: bool,
+}
+
+impl AggregateAllocaAnalyzer {
+    fn new() -> Self {
+        Self {
+            visited: FxHashSet::default(),
+            was_loaded: false,
+            has_nonlocal_use: false,
+            is_stored_value: false,
+        }
+    }
+
+    fn analyze_alloca_node(&mut self, rvsdg: &Rvsdg, alloca_node: Node) -> AnalysisResult {
+        // Reset
+        self.visited.clear();
+        self.has_nonlocal_use = false;
+        self.is_stored_value = false;
+        self.was_loaded = false;
+
+        // Perform the analysis
+        self.visit_value_output(rvsdg, alloca_node, 0);
+
+        // Summarize the analysis result
+        if self.has_nonlocal_use {
+            AnalysisResult::Ignore
+        } else if self.is_stored_value {
+            AnalysisResult::NeedsPromotionPass
+        } else {
+            AnalysisResult::Replace
+        }
+    }
+}
+
+impl ValueFlowVisitor for AggregateAllocaAnalyzer {
+    fn should_visit(&mut self, region: Region, user: ValueUser) -> bool {
+        // Don't do duplicate visits and we can stop early if we've already found a non-local use.
+        !self.has_nonlocal_use && self.visited.insert((region, user))
+    }
+
+    fn visit_region_result(&mut self, rvsdg: &Rvsdg, region: Region, result: u32) {
+        let owner = rvsdg[region].owner();
+
+        if let NodeKind::Function(_) = rvsdg[owner].kind() {
+            self.has_nonlocal_use = true;
+        } else {
+            visit::value_flow::visit_region_result(self, rvsdg, region, result);
+        }
+    }
+
+    fn visit_value_input(&mut self, rvsdg: &Rvsdg, node: Node, input: u32) {
+        use NodeKind::*;
+        use SimpleNode::*;
+
+        match rvsdg[node].kind() {
+            Simple(OpApply(_)) => {
+                self.has_nonlocal_use = true;
+            }
+            Simple(OpLoad(_)) => {
+                // Do propagate the search past an OpLoad for non-local use analysis, but once the
+                // value has been loaded, the value should no longer affect stored-value analysis.
+                self.was_loaded = true;
+
+                visit::value_flow::visit_value_input(self, rvsdg, node, input);
+            }
+            Simple(OpStore(_)) if input == 1 && !self.was_loaded => {
+                self.is_stored_value = true;
+
+                // We do continue searching for non-local uses, as non-local will cause an alloca
+                // to be ignored entirely, which supersedes retrying after memory promotion.
+                visit::value_flow::visit_value_input(self, rvsdg, node, input);
+            }
+            Simple(OpStore(_))
+            | Simple(OpPtrElementPtr(_))
+            | Simple(OpPtrVariantPtr(_))
+            | Simple(OpExtractElement(_))
+            | Simple(OpPtrDiscriminantPtr(_))
+            | Simple(OpGetDiscriminant(_))
+            | Simple(OpSetDiscriminant(_))
+            | Simple(OpGetPtrOffset(_)) => {
+                // These operations take a pointer to an aggregate as input, but splitting does not
+                // propagate past these node kinds, so we end the search
+            }
+            Switch(_) | Loop(_) | Simple(OpAddPtrOffset(_)) => {
+                visit::value_flow::visit_value_input(self, rvsdg, node, input);
+            }
+            _ => unreachable!("node kind cannot take (a pointer to) an aggregate value as input"),
+        }
+    }
+}
+
+/// Analyzes whether a pointer to an alloca'd aggregate is used as the value input to an [OpStore].
+struct StoredValueAnalyzer<'a, 'b> {
     rvsdg: &'a Rvsdg,
     visited: &'b mut FxHashSet<Node>,
     node: Node,
     function_body_region: Region,
 }
 
-impl<'a, 'b> NonlocalUseAnalyzer<'a, 'b> {
-    fn reset(&mut self) {
-        self.visited.clear();
-    }
+impl<'a, 'b> StoredValueAnalyzer<'a, 'b> {
+    // TODO: loop results should check loop inputs
 
-    fn has_nonlocal_use(&mut self) -> bool {
-        self.reset();
+    fn is_stored_value(&mut self) -> bool {
+        self.visited.clear();
 
         let node_data = &self.rvsdg[self.node];
         let region = node_data.region();
@@ -183,7 +272,10 @@ struct AllocaReplacer<'a> {
 }
 
 impl AllocaReplacer<'_> {
-    fn replace_alloca(&mut self, node: Node) {
+    fn replace_alloca<F>(&mut self, node: Node, mut with_replacements: F)
+    where
+        F: FnMut(Node, Type),
+    {
         let node_data = &self.rvsdg[node];
         let region = node_data.region();
         let node_data = node_data.expect_op_alloca();
@@ -194,7 +286,7 @@ impl AllocaReplacer<'_> {
         match self.rvsdg.ty().clone().kind(ty).deref() {
             TypeKind::Enum(_) => {
                 // Enum replacement is handled separately
-                return replace_enum_alloca(&mut self.rvsdg, node);
+                return replace_enum_alloca(&mut self.rvsdg, node, with_replacements);
             }
             TypeKind::Array {
                 element_ty: base,
@@ -213,6 +305,8 @@ impl AllocaReplacer<'_> {
                             output: 0,
                         },
                     });
+
+                    with_replacements(scalar_node, *base);
                 }
             }
             TypeKind::Struct(struct_data) => {
@@ -228,6 +322,8 @@ impl AllocaReplacer<'_> {
                             output: 0,
                         },
                     });
+
+                    with_replacements(scalar_node, field_ty);
                 }
             }
             _ => unreachable!("type is not an aggregate, node should not have been a candidate"),
@@ -1173,53 +1269,89 @@ impl AllocaReplacer<'_> {
     }
 }
 
-pub struct ScalarReplacer {
-    candidate_queue: VecDeque<Node>,
-    analyzer: Analyzer,
+pub fn replace_alloca_of_aggregate<F>(rvsdg: &mut Rvsdg, alloca_node: Node, with_replacement: F)
+where
+    F: FnMut(Node, Type),
+{
+    let mut replacer = AllocaReplacer { rvsdg };
+
+    replacer.replace_alloca(alloca_node, with_replacement);
 }
 
-impl ScalarReplacer {
+pub struct AggregateReplacementContext {
+    analyzer: AggregateAllocaAnalyzer,
+    queue: VecDeque<Node>,
+    candidates: VecDeque<Node>,
+}
+
+impl AggregateReplacementContext {
     pub fn new() -> Self {
-        ScalarReplacer {
-            candidate_queue: Default::default(),
-            analyzer: Analyzer {
-                visited: Default::default(),
-            },
+        Self {
+            analyzer: AggregateAllocaAnalyzer::new(),
+            queue: VecDeque::new(),
+            candidates: VecDeque::new(),
         }
     }
 
-    pub fn replace_in_fn(&mut self, module: &mut Module, rvsdg: &mut Rvsdg, function: Function) {
-        let node = rvsdg
-            .get_function_node(function)
-            .expect("function should have RVSDG body");
-        let body_region = rvsdg[node].expect_function().body_region();
+    pub fn for_region(&mut self, rvsdg: &Rvsdg, region: Region) -> RegionReplacementContext {
+        self.queue.clear();
+        self.candidates.clear();
 
-        let mut candidate_collector =
-            CandidateAllocaCollector::new(rvsdg, &mut self.candidate_queue);
+        collect_candidate_allocas(rvsdg, region, &mut self.candidates);
 
-        candidate_collector.visit_region(body_region);
+        RegionReplacementContext { cx: self }
+    }
 
-        while let Some(candidate) = self.candidate_queue.pop_front() {
-            if self.analyzer.should_replace(rvsdg, candidate, body_region) {
-                let mut replacer = AllocaReplacer { rvsdg };
+    fn try_enqueue_candidates(&mut self, rvsdg: &Rvsdg, start: usize) {
+        let mut i = start;
 
-                replacer.replace_alloca(candidate);
+        while i < self.candidates.len() {
+            let candidate = self.candidates[i];
+
+            match self.analyzer.analyze_alloca_node(rvsdg, candidate) {
+                AnalysisResult::Replace => {
+                    self.queue.push_back(candidate);
+                    self.candidates.swap_remove_back(i);
+                }
+                AnalysisResult::NeedsPromotionPass => i += 1,
+                AnalysisResult::Ignore => {
+                    self.candidates.swap_remove_back(i);
+                }
             }
         }
     }
 }
 
-pub fn entry_points_scalar_replacement(module: &mut Module, rvsdg: &mut Rvsdg) {
-    let mut replacer = ScalarReplacer::new();
+pub struct RegionReplacementContext<'a> {
+    cx: &'a mut AggregateReplacementContext,
+}
 
-    let entry_points = module
-        .entry_points
-        .iter()
-        .map(|(f, _)| f)
-        .collect::<Vec<_>>();
+impl RegionReplacementContext<'_> {
+    pub fn replace(&mut self, rvsdg: &mut Rvsdg) -> bool {
+        self.cx.try_enqueue_candidates(rvsdg, 0);
 
-    for entry_point in entry_points {
-        replacer.replace_in_fn(module, rvsdg, entry_point);
+        if self.cx.queue.is_empty() {
+            false
+        } else {
+            let ty_registry = rvsdg.ty().clone();
+
+            while let Some(node) = self.cx.queue.pop_front() {
+                let prior_candidate_count = self.cx.candidates.len();
+
+                replace_alloca_of_aggregate(rvsdg, node, |replacement, ty| {
+                    if ty_registry.kind(ty).is_aggregate() {
+                        self.cx.candidates.push_back(replacement);
+                    }
+                });
+
+                // Attempt to add any newly added candidates to the end of the queue *during* this
+                // current replacement iteration. This helps minimize the number of
+                // promotion/legalization passes we'll have to run.
+                self.cx.try_enqueue_candidates(rvsdg, prior_candidate_count);
+            }
+
+            true
+        }
     }
 }
 
@@ -1284,9 +1416,10 @@ mod tests {
             },
         );
 
-        let mut transform = ScalarReplacer::new();
+        let mut cx = AggregateReplacementContext::new();
+        let mut rcx = cx.for_region(&rvsdg, region);
 
-        transform.replace_in_fn(&mut module, &mut rvsdg, function);
+        rcx.replace(&mut rvsdg);
 
         assert_eq!(
             rvsdg[region].value_results()[0].origin,
@@ -1374,9 +1507,10 @@ mod tests {
             },
         );
 
-        let mut transform = ScalarReplacer::new();
+        let mut cx = AggregateReplacementContext::new();
+        let mut rcx = cx.for_region(&rvsdg, region);
 
-        transform.replace_in_fn(&mut module, &mut rvsdg, function);
+        rcx.replace(&mut rvsdg);
 
         assert_eq!(
             rvsdg[region].value_results()[0].origin,
@@ -1545,9 +1679,10 @@ mod tests {
             },
         );
 
-        let mut transform = ScalarReplacer::new();
+        let mut cx = AggregateReplacementContext::new();
+        let mut rcx = cx.for_region(&rvsdg, region);
 
-        transform.replace_in_fn(&mut module, &mut rvsdg, function);
+        rcx.replace(&mut rvsdg);
 
         let result_input = rvsdg[region].value_results()[0];
 
@@ -1642,9 +1777,10 @@ mod tests {
             StateOrigin::Node(op_load),
         );
 
-        let mut transform = ScalarReplacer::new();
+        let mut cx = AggregateReplacementContext::new();
+        let mut rcx = cx.for_region(&rvsdg, region);
 
-        transform.replace_in_fn(&mut module, &mut rvsdg, function);
+        rcx.replace(&mut rvsdg);
 
         let StateOrigin::Node(store_element_1_node) = *rvsdg[region].state_result() else {
             panic!("the state origin should be a node output")
@@ -1904,9 +2040,10 @@ mod tests {
             },
         );
 
-        let mut transform = ScalarReplacer::new();
+        let mut cx = AggregateReplacementContext::new();
+        let mut rcx = cx.for_region(&rvsdg, region);
 
-        transform.replace_in_fn(&mut module, &mut rvsdg, function);
+        rcx.replace(&mut rvsdg);
 
         let result_input = rvsdg[region].value_results()[0];
 
@@ -2127,9 +2264,10 @@ mod tests {
         rvsdg.reconnect_region_result(loop_region, 2, ValueOrigin::Argument(1));
         rvsdg.reconnect_region_result(loop_region, 3, ValueOrigin::Argument(2));
 
-        let mut transform = ScalarReplacer::new();
+        let mut cx = AggregateReplacementContext::new();
+        let mut rcx = cx.for_region(&rvsdg, region);
 
-        transform.replace_in_fn(&mut module, &mut rvsdg, function);
+        rcx.replace(&mut rvsdg);
 
         let loop_data = rvsdg[loop_node].expect_loop();
         let loop_region = loop_data.loop_region();

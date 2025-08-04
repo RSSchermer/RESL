@@ -1,13 +1,14 @@
 use indexmap::IndexSet;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use slotmap::KeyData;
 
 use crate::cfg::OpAlloca;
-use crate::rvsdg::transform::scalar_replacement::ScalarReplacer;
 use crate::rvsdg::transform::variable_pointer_emulation::EmulationContext;
+use crate::rvsdg::visit::reverse_value_flow::ReverseValueFlowVisitor;
+use crate::rvsdg::NodeKind::{Loop, Switch};
 use crate::rvsdg::{
-    Connectivity, Node, NodeKind, Region, Rvsdg, SimpleNode, StateOrigin, StateUser, ValueInput,
-    ValueOrigin, ValueUser,
+    visit, Connectivity, Node, NodeKind, Region, Rvsdg, SimpleNode, StateOrigin, StateUser,
+    ValueInput, ValueOrigin, ValueUser,
 };
 use crate::ty::TypeRegistry;
 use crate::Module;
@@ -30,12 +31,14 @@ enum PointerAction {
 
 struct PointerAnalyzer {
     cache: FxHashMap<(Region, ValueOrigin), PointerAction>,
+    visitor: PointerOriginVisitor,
 }
 
 impl PointerAnalyzer {
     fn new() -> Self {
         PointerAnalyzer {
             cache: Default::default(),
+            visitor: PointerOriginVisitor::new(),
         }
     }
 
@@ -48,67 +51,97 @@ impl PointerAnalyzer {
         *self
             .cache
             .entry((region, pointer_origin))
-            .or_insert_with(|| Self::analyze_origin(rvsdg, region, pointer_origin, false))
+            .or_insert_with(|| {
+                self.visitor
+                    .analyze_pointer_origin(rvsdg, region, pointer_origin)
+            })
     }
 
-    fn analyze_origin(
+    fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+}
+
+pub struct PointerOriginVisitor {
+    visited: FxHashSet<(Region, ValueOrigin)>,
+    promotion_candidate: Option<Node>,
+    can_promote: bool,
+    needs_emulation: bool,
+    can_emulate: bool,
+}
+
+impl PointerOriginVisitor {
+    fn new() -> Self {
+        PointerOriginVisitor {
+            visited: Default::default(),
+            promotion_candidate: None,
+            can_promote: true,
+            needs_emulation: false,
+            can_emulate: true,
+        }
+    }
+
+    fn analyze_pointer_origin(
+        &mut self,
         rvsdg: &Rvsdg,
         region: Region,
         pointer_origin: ValueOrigin,
-        element_access: bool,
     ) -> PointerAction {
-        match pointer_origin {
-            ValueOrigin::Argument(argument) => {
-                Self::analyze_argument(rvsdg, region, argument, element_access)
-            }
-            ValueOrigin::Output { producer, .. } => {
-                Self::analyze_output(rvsdg, producer, element_access)
-            }
+        self.visited.clear();
+        self.promotion_candidate = None;
+        self.can_promote = true;
+        self.needs_emulation = false;
+        self.can_emulate = true;
+
+        self.visit_value_origin(rvsdg, region, pointer_origin);
+
+        if self.needs_emulation && self.can_emulate {
+            PointerAction::VariablePointerEmulation
+        } else if let Some(candidate) = self.promotion_candidate
+            && self.can_promote
+        {
+            PointerAction::Promotion(candidate)
+        } else {
+            PointerAction::Nothing
         }
     }
+}
 
-    fn analyze_argument(
-        rvsdg: &Rvsdg,
-        region: Region,
-        argument: u32,
-        element_access: bool,
-    ) -> PointerAction {
-        let owner = rvsdg[region].owner();
-
-        match rvsdg[owner].kind() {
-            NodeKind::Switch(_) => Self::analyze_input(rvsdg, owner, argument + 1, element_access),
-            NodeKind::Loop(_) => Self::analyze_input(rvsdg, owner, argument, element_access),
-            NodeKind::Function(_) => PointerAction::Nothing,
-            _ => unreachable!("node kind cannot be a region owner"),
-        }
+impl ReverseValueFlowVisitor for PointerOriginVisitor {
+    fn should_visit(&mut self, region: Region, origin: ValueOrigin) -> bool {
+        self.visited.insert((region, origin))
     }
 
-    fn analyze_input(rvsdg: &Rvsdg, node: Node, input: u32, element_access: bool) -> PointerAction {
-        let node_data = &rvsdg[node];
-        let region = node_data.region();
-        let origin = node_data.value_inputs()[input as usize].origin;
-
-        Self::analyze_origin(rvsdg, region, origin, element_access)
-    }
-
-    fn analyze_output(rvsdg: &Rvsdg, node: Node, element_access: bool) -> PointerAction {
+    fn visit_value_output(&mut self, rvsdg: &Rvsdg, node: Node, output: u32) {
         use NodeKind::*;
         use SimpleNode::*;
 
         match rvsdg[node].kind() {
-            Switch(_) | Loop(_) => PointerAction::VariablePointerEmulation,
-            Simple(OpAlloca(_)) if !element_access => PointerAction::Promotion(node),
-            Simple(OpPtrElementPtr(_)) => Self::analyze_input(rvsdg, node, 0, true),
-            Simple(OpAddPtrOffset(_)) => Self::analyze_input(rvsdg, node, 0, element_access),
-            Simple(OpAlloca(_) | ConstPtr(_) | ConstFallback(_) | OpLoad(_)) => {
-                PointerAction::Nothing
+            Switch(_) | Loop(_) => {
+                self.needs_emulation = true;
+                self.can_promote = false;
+
+                visit::reverse_value_flow::visit_value_output(self, rvsdg, node, output);
             }
+            Simple(OpAlloca(op)) => {
+                self.promotion_candidate = Some(node);
+                self.can_promote &= !rvsdg.ty().kind(op.ty()).is_aggregate();
+            }
+            Simple(OpPtrElementPtr(_)) => {
+                self.can_promote = false;
+
+                visit::reverse_value_flow::visit_value_input(self, rvsdg, node, 0);
+            }
+            Simple(OpLoad(_) | OpPtrVariantPtr(_) | OpPtrDiscriminantPtr(_)) => {
+                self.can_promote = false;
+                self.can_emulate = false;
+            }
+            Simple(OpAddPtrOffset(_) | ValueProxy(_)) => {
+                visit::reverse_value_flow::visit_value_input(self, rvsdg, node, 0);
+            }
+            Simple(ConstPtr(_) | ConstFallback(_)) => (),
             _ => unreachable!("node kind cannot output a pointer"),
         }
-    }
-
-    fn clear(&mut self) {
-        self.cache.clear();
     }
 }
 
@@ -162,7 +195,7 @@ impl TouchedAllocaStack {
 /// Promotes and legalizes all pointer-mediated memory operations (loads and stores) in a function
 /// body region.
 ///
-/// Memory promotion pertains to replacing loads of memory that originates from an [OpAlloca], with
+/// Memory promotion pertains to replacing a load of memory that originates from an [OpAlloca], with
 /// the latest (as per the state chain) value stored into that memory. This kind of transform is
 /// sometimes also referred to as a "memory to register" transform or "mem2reg". Our RVSDG
 /// abstraction is not really explicitly concerned with the concept of registers, so here we'll
@@ -225,7 +258,7 @@ impl MemoryPromoterLegalizer {
 
         // Clear any state set by a previous promote-and-legalize run
         self.emulation_context.clear();
-        self.pointer_analyzer.clear();
+        self.pointer_analyzer.clear_cache();
         self.value_availability.clear();
         self.owner_stack.clear();
         self.touched_alloca_stack.clear();

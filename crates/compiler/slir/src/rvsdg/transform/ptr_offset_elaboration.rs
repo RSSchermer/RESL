@@ -1,6 +1,6 @@
 use rustc_hash::FxHashSet;
 
-use crate::rvsdg::visit::{visit_node_bottom_up, BottomUpRegionVisitor};
+use crate::rvsdg::visit::bottom_up::{visit_node_bottom_up, BottomUpVisitor};
 use crate::rvsdg::NodeKind::Simple;
 use crate::rvsdg::SimpleNode::OpPtrElementPtr;
 use crate::rvsdg::{Node, Region, Rvsdg, ValueInput, ValueOrigin};
@@ -59,7 +59,7 @@ impl Collector {
     }
 }
 
-impl BottomUpRegionVisitor for Collector {
+impl BottomUpVisitor for Collector {
     fn visit_node(&mut self, rvsdg: &Rvsdg, node: Node) {
         if let Simple(OpPtrElementPtr(op)) = rvsdg[node].kind()
             && is_slice_ptr_ty(rvsdg.ty(), op.ptr_input().ty)
