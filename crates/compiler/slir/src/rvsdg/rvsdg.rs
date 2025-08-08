@@ -5,6 +5,7 @@ use indexmap::IndexSet;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
+use thiserror::Error;
 
 use crate::cfg::OpCaseToBranchPredicate;
 use crate::ty::{
@@ -645,11 +646,31 @@ impl NodeData {
         matches!(self.kind, NodeKind::Simple(SimpleNode::ValueProxy(_)))
     }
 
+    pub fn is_switch_output_replacement_marker(&self) -> bool {
+        if let NodeKind::Simple(SimpleNode::ValueProxy(proxy)) = &self.kind {
+            proxy.proxy_kind().is_switch_output_replacement_marker()
+        } else {
+            false
+        }
+    }
+
     pub fn expect_value_proxy(&self) -> &ValueProxy {
         if let NodeKind::Simple(SimpleNode::ValueProxy(proxy)) = &self.kind {
             proxy
         } else {
             panic!("expected node to be a value-proxy node")
+        }
+    }
+
+    pub fn is_reaggregation(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::Reaggregation(_)))
+    }
+
+    pub fn expect_reaggregation(&self) -> &Reaggregation {
+        if let NodeKind::Simple(SimpleNode::Reaggregation(node)) = &self.kind {
+            node
+        } else {
+            panic!("expected node to be a reaggregation node")
         }
     }
 }
@@ -1849,13 +1870,31 @@ impl Connectivity for OpU32ToSwitchPredicate {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default, Debug)]
+pub enum ProxyKind {
+    #[default]
+    Generic,
+    SwitchOutputReplacementMarker,
+}
+
+impl ProxyKind {
+    pub fn is_switch_output_replacement_marker(&self) -> bool {
+        *self == ProxyKind::SwitchOutputReplacementMarker
+    }
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct ValueProxy {
+    proxy_kind: ProxyKind,
     input: ValueInput,
     output: ValueOutput,
 }
 
 impl ValueProxy {
+    pub fn proxy_kind(&self) -> ProxyKind {
+        self.proxy_kind
+    }
+
     pub fn input(&self) -> &ValueInput {
         &self.input
     }
@@ -1872,6 +1911,63 @@ impl Connectivity for ValueProxy {
 
     fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
         slice::from_mut(&mut self.input)
+    }
+
+    fn value_outputs(&self) -> &[ValueOutput] {
+        slice::from_ref(&self.output)
+    }
+
+    fn value_outputs_mut(&mut self) -> &mut [ValueOutput] {
+        slice::from_mut(&mut self.output)
+    }
+
+    fn state(&self) -> Option<&State> {
+        None
+    }
+
+    fn state_mut(&mut self) -> Option<&mut State> {
+        None
+    }
+}
+
+/// Re-aggregates a set of pointers or values to the individual parts of an aggregate into a single
+/// pointer or value.
+///
+/// This is a temporary node that acts as a pause/continue point for aggregate-replacement; it
+/// allows us to run e.g. a memory-promotion-and-legalization pass midway through the replacement
+/// pass. We also use this when an aggregate pointer is the result of a [Switch] node to pause at
+/// the end of each branch, until all other branches have also split the corresponding result.
+///
+/// This "operation" is not implementable on any back-end; it is only to be used as a temporary node
+/// during RVSDG transformation, and no nodes of this kind should be left in the graph when
+/// transformation is complete.
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct Reaggregation {
+    inputs: Vec<ValueInput>,
+    output: ValueOutput,
+}
+
+impl Reaggregation {
+    pub fn original(&self) -> &ValueInput {
+        &self.inputs[0]
+    }
+
+    pub fn parts(&self) -> &[ValueInput] {
+        &self.inputs[1..]
+    }
+
+    pub fn output(&self) -> &ValueOutput {
+        &self.output
+    }
+}
+
+impl Connectivity for Reaggregation {
+    fn value_inputs(&self) -> &[ValueInput] {
+        &self.inputs
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        &mut self.inputs
     }
 
     fn value_outputs(&self) -> &[ValueOutput] {
@@ -1969,6 +2065,7 @@ gen_simple_node! {
     OpBoolToSwitchPredicate,
     OpU32ToSwitchPredicate,
     ValueProxy,
+    Reaggregation,
 }
 
 macro_rules! add_const_methods {
@@ -3106,14 +3203,51 @@ impl Rvsdg {
         node
     }
 
-    pub fn add_value_proxy(&mut self, region: Region, input: ValueInput) -> Node {
+    pub fn add_value_proxy(
+        &mut self,
+        region: Region,
+        input: ValueInput,
+        proxy_kind: ProxyKind,
+    ) -> Node {
         self.validate_node_value_input(region, &input);
 
         let node = self.nodes.insert(NodeData {
             kind: NodeKind::Simple(
                 ValueProxy {
+                    proxy_kind,
                     input,
                     output: ValueOutput::new(input.ty),
+                }
+                .into(),
+            ),
+            region: Some(region),
+        });
+
+        self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
+
+        node
+    }
+
+    pub fn add_reaggregation(
+        &mut self,
+        region: Region,
+        original: ValueInput,
+        parts: impl IntoIterator<Item = ValueInput>,
+    ) -> Node {
+        let mut inputs = vec![original];
+
+        inputs.extend(parts);
+
+        for input in &inputs {
+            self.validate_node_value_input(region, input);
+        }
+
+        let node = self.nodes.insert(NodeData {
+            kind: NodeKind::Simple(
+                Reaggregation {
+                    inputs,
+                    output: ValueOutput::new(original.ty),
                 }
                 .into(),
             ),
@@ -3209,14 +3343,19 @@ impl Rvsdg {
     ///
     /// The node should not have any users for any of its value outputs, will panic otherwise.
     pub fn remove_node(&mut self, node: Node) {
+        self.try_remove_node(node).unwrap()
+    }
+
+    /// Removes the given `node` from the RVSDG if it has no value-users, or returns an error
+    /// otherwise.
+    pub fn try_remove_node(&mut self, node: Node) -> Result<(), RemoveNodeError> {
         let data = &self.nodes[node];
 
         for (i, output) in data.value_outputs().iter().enumerate() {
             if !output.users.is_empty() {
-                panic!(
-                    "cannot remove a node that still has users (output {} has users)",
-                    i
-                );
+                return Err(RemoveNodeError {
+                    output_with_users: i as u32,
+                });
             }
         }
 
@@ -3257,6 +3396,8 @@ impl Rvsdg {
         }
 
         self.nodes.remove(node);
+
+        Ok(())
     }
 
     /// Inserts a proxy node into the given `region` in between the `origin` and the `user`.
@@ -3281,10 +3422,12 @@ impl Rvsdg {
         ty: Type,
         origin: ValueOrigin,
         user: ValueUser,
+        proxy_kind: ProxyKind,
     ) -> Node {
         let proxy = self.nodes.insert(NodeData {
             kind: NodeKind::Simple(
                 ValueProxy {
+                    proxy_kind,
                     input: ValueInput { ty, origin },
                     output: ValueOutput {
                         ty,
@@ -3310,14 +3453,6 @@ impl Rvsdg {
                 &mut producer.value_outputs_mut()[output as usize]
             }
         };
-
-        // dbg!(&*self.ty.kind(output.ty));
-        // dbg!(&*self.ty.kind(ty));
-        //
-        // assert_eq!(
-        //     output.ty, ty,
-        //     "the origin type must match the specified type"
-        // );
 
         let mut found_user = false;
         for candidate_user in output.users.iter_mut() {
@@ -3361,6 +3496,90 @@ impl Rvsdg {
         self.regions[region].nodes.insert(proxy);
 
         proxy
+    }
+
+    pub fn proxy_origin_users(
+        &mut self,
+        region: Region,
+        ty: Type,
+        origin: ValueOrigin,
+        proxy_kind: ProxyKind,
+    ) -> Node {
+        let output = match origin {
+            ValueOrigin::Argument(arg) => &mut self.regions[region].value_arguments[arg as usize],
+            ValueOrigin::Output { producer, output } => {
+                let producer = &mut self.nodes[producer];
+
+                assert_eq!(
+                    producer.region(),
+                    region,
+                    "origin must be in the specified region"
+                );
+
+                &mut producer.value_outputs_mut()[output as usize]
+            }
+        };
+
+        let users = output.users.clone();
+
+        let proxy = self.nodes.insert(NodeData {
+            kind: NodeKind::Simple(
+                ValueProxy {
+                    proxy_kind,
+                    input: ValueInput { ty, origin },
+                    output: ValueOutput {
+                        ty,
+                        users: thin_set![],
+                    },
+                }
+                .into(),
+            ),
+            region: Some(region),
+        });
+
+        for user in users.iter().copied() {
+            let input = match user {
+                ValueUser::Result(res) => &mut self.regions[region].value_results[res as usize],
+                ValueUser::Input { consumer, input } => {
+                    let consumer = &mut self.nodes[consumer];
+
+                    assert_eq!(
+                        consumer.region(),
+                        region,
+                        "origin must be in the specified region"
+                    );
+
+                    &mut consumer.value_inputs_mut()[input as usize]
+                }
+            };
+
+            assert_eq!(input.ty, ty, "the user type must match the specified type");
+
+            input.origin = ValueOrigin::Output {
+                producer: proxy,
+                output: 0,
+            };
+        }
+
+        self.nodes[proxy].value_outputs_mut()[0].users = users;
+        self.regions[region].nodes.insert(proxy);
+
+        proxy
+    }
+
+    pub fn dissolve_value_proxy(&mut self, proxy_node: Node) {
+        let region = self.nodes[proxy_node].region();
+        let data = self.nodes[proxy_node].expect_value_proxy();
+        let proxied_origin = data.input().origin;
+        let user_count = data.output().users.len();
+
+        for i in (0..user_count).rev() {
+            let user = self.nodes[proxy_node].expect_value_proxy().output().users[i];
+
+            self.reconnect_value_user(region, user, proxied_origin);
+        }
+
+        self.remove_node(proxy_node);
     }
 
     /// Adds a dependency on the given `dependency` node to the `function_node`.
@@ -3931,6 +4150,12 @@ impl PartialEq for Rvsdg {
 
         true
     }
+}
+
+#[derive(Error, Debug)]
+#[error("cannot remove a node that still has users (output {output_with_users} has users)")]
+pub struct RemoveNodeError {
+    output_with_users: u32,
 }
 
 #[cfg(test)]

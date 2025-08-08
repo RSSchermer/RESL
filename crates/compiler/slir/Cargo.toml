@@ -15,3 +15,4 @@ serde = { workspace = true }
 slotmap = { workspace = true, features = ["serde"] }
 smallvec = { workspace = true, features = ["serde"] }
 thin-vec = { workspace = true, features = ["serde"] }
+thiserror = { workspace = true }

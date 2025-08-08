@@ -999,6 +999,7 @@ impl NodeLayout {
                 }
                 SimpleNode::OpU32ToSwitchPredicate(_) => NodeContent::PlainText("pred-u32".into()),
                 SimpleNode::ValueProxy(_) => NodeContent::PlainText("proxy".into()),
+                SimpleNode::Reaggregation(_) => NodeContent::PlainText("reaggregation".into()),
             },
             _ => panic!("node kind not allowed inside a region"),
         };

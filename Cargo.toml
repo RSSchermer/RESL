@@ -43,3 +43,4 @@ slir = { path = "./crates/compiler/slir", version = "0.1.0" }
 slotmap = "1.0"
 smallvec = "1.13"
 thin-vec = "0.2"
+thiserror = "2.0"

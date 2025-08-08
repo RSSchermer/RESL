@@ -99,7 +99,11 @@ mod tests {
 
         let node_0 = rvsdg.add_const_u32(region, 0);
         let node_1 = rvsdg.add_const_u32(region, 1);
-        let proxy = rvsdg.add_value_proxy(region, ValueInput::output(TY_U32, node_0, 0));
+        let proxy = rvsdg.add_value_proxy(
+            region,
+            ValueInput::output(TY_U32, node_0, 0),
+            Default::default(),
+        );
         let add = rvsdg.add_op_binary(
             region,
             BinaryOperator::Add,
@@ -170,7 +174,11 @@ mod tests {
         let branch_0 = rvsdg.add_switch_branch(switch_node);
 
         let branch_0_node_0 = rvsdg.add_const_u32(branch_0, 0);
-        let proxy = rvsdg.add_value_proxy(branch_0, ValueInput::output(TY_U32, branch_0_node_0, 0));
+        let proxy = rvsdg.add_value_proxy(
+            branch_0,
+            ValueInput::output(TY_U32, branch_0_node_0, 0),
+            Default::default(),
+        );
 
         rvsdg.reconnect_region_result(
             branch_0,

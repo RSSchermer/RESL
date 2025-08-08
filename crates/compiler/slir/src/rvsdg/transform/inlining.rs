@@ -155,6 +155,7 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
                 self.replicate_op_u32_to_switch_predicate_node(node)
             }
             Simple(ValueProxy(_)) => self.replicate_value_proxy_node(node),
+            Simple(Reaggregation(_)) => self.replicate_reaggregation_node(node),
             Function(_) | UniformBinding(_) | StorageBinding(_) | WorkgroupBinding(_) => {
                 panic!("node kind should not appear inside a region")
             }
@@ -472,9 +473,24 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
 
     fn replicate_value_proxy_node(&mut self, node: Node) -> Node {
         let data = self.rvsdg[node].expect_value_proxy();
+        let proxy_kind = data.proxy_kind();
         let input = self.mapped_value_input(data.input());
 
-        self.rvsdg.add_value_proxy(self.dst_region, input)
+        self.rvsdg
+            .add_value_proxy(self.dst_region, input, proxy_kind)
+    }
+
+    fn replicate_reaggregation_node(&mut self, node: Node) -> Node {
+        let data = self.rvsdg[node].expect_reaggregation();
+        let original_input = self.mapped_value_input(data.original());
+        let part_inputs = data
+            .parts()
+            .iter()
+            .map(|input| self.mapped_value_input(input))
+            .collect::<Vec<_>>();
+
+        self.rvsdg
+            .add_reaggregation(self.dst_region, original_input, part_inputs)
     }
 
     fn mapped_value_input(&self, input: &ValueInput) -> ValueInput {
