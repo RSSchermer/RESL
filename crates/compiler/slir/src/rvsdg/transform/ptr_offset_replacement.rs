@@ -383,9 +383,9 @@ mod tests {
     use std::iter;
 
     use super::*;
-    use crate::rvsdg::StateOrigin;
-    use crate::ty::{TypeKind, TY_DUMMY, TY_PTR_U32};
-    use crate::{FnSig, Symbol};
+    use crate::rvsdg::{StateOrigin, ValueOutput, ValueUser};
+    use crate::ty::{TypeKind, TY_DUMMY, TY_PREDICATE, TY_PTR_U32};
+    use crate::{thin_set, FnArg, FnSig, Symbol};
 
     #[test]
     fn test_single_op_add_ptr_offset() {
@@ -591,6 +591,380 @@ mod tests {
             }
         );
 
+        assert!(!rvsdg.is_live_node(add_offset_0_node));
+        assert!(!rvsdg.is_live_node(add_offset_1_node));
+        assert!(!rvsdg.is_live_node(get_offset_node));
+    }
+
+    #[test]
+    fn test_add_offset_then_add_offset_in_switch() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![FnArg {
+                    ty: TY_PREDICATE,
+                    shader_io_binding: None,
+                }],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+        let array_ty = module.ty.register(TypeKind::Array {
+            element_ty: TY_U32,
+            count: 4,
+        });
+        let array_ptr_ty = module.ty.register(TypeKind::Ptr(array_ty));
+
+        let array_node = rvsdg.add_op_alloca(region, array_ty);
+        let offset_0_node = rvsdg.add_const_u32(region, 1);
+        let add_offset_0_node = rvsdg.add_op_add_ptr_offset(
+            region,
+            ValueInput::output(array_ptr_ty, array_node, 0),
+            ValueInput::output(TY_U32, offset_0_node, 0),
+        );
+
+        let switch_node = rvsdg.add_switch(
+            region,
+            vec![
+                ValueInput::argument(TY_PREDICATE, 0),
+                ValueInput::output(array_ptr_ty, add_offset_0_node, 0),
+            ],
+            vec![ValueOutput::new(array_ptr_ty)],
+            None,
+        );
+
+        let branch_0 = rvsdg.add_switch_branch(switch_node);
+
+        let offset_1_node = rvsdg.add_const_u32(branch_0, 1);
+        let add_offset_1_node = rvsdg.add_op_add_ptr_offset(
+            branch_0,
+            ValueInput::argument(array_ptr_ty, 0),
+            ValueInput::output(TY_U32, offset_1_node, 0),
+        );
+
+        rvsdg.reconnect_region_result(
+            branch_0,
+            0,
+            ValueOrigin::Output {
+                producer: add_offset_1_node,
+                output: 0,
+            },
+        );
+
+        let branch_1 = rvsdg.add_switch_branch(switch_node);
+
+        rvsdg.reconnect_region_result(branch_1, 0, ValueOrigin::Argument(0));
+
+        let get_offset_node =
+            rvsdg.add_op_get_ptr_offset(region, ValueInput::output(array_ptr_ty, switch_node, 0));
+        let index_node = rvsdg.add_const_u32(region, 1);
+        let index_add_node = rvsdg.add_op_binary(
+            region,
+            BinaryOperator::Add,
+            ValueInput::output(TY_U32, get_offset_node, 0),
+            ValueInput::output(TY_U32, index_node, 0),
+        );
+        let ptr_element_ptr_node = rvsdg.add_op_ptr_element_ptr(
+            region,
+            TY_U32,
+            ValueInput::output(array_ptr_ty, switch_node, 0),
+            [ValueInput::output(TY_U32, index_add_node, 0)],
+        );
+        let load_node = rvsdg.add_op_load(
+            region,
+            ValueInput::output(TY_PTR_U32, ptr_element_ptr_node, 0),
+            TY_U32,
+            StateOrigin::Argument,
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: load_node,
+                output: 0,
+            },
+        );
+
+        let mut replacer = PtrOffsetReplacer::new();
+
+        replacer.replace_in_fn(&mut rvsdg, function);
+
+        assert_eq!(
+            rvsdg[switch_node].expect_switch().value_inputs().len(),
+            3,
+            "should have added an additional input to the switch node"
+        );
+        assert_eq!(
+            rvsdg[switch_node].expect_switch().value_inputs()[2].origin,
+            ValueOrigin::Output {
+                producer: offset_0_node,
+                output: 0,
+            }
+        );
+
+        assert_eq!(
+            &rvsdg[branch_0].value_arguments()[0].users,
+            &thin_set![ValueUser::Result(0)],
+            "the first branch's pointer argument should connect directly to the branch's first \
+            result"
+        );
+        assert_eq!(
+            rvsdg[branch_0].value_arguments()[1].users.len(),
+            1,
+            "the first branch's offset argument should have one user"
+        );
+
+        let ValueUser::Input {
+            consumer: offset_add_node,
+            input: 0,
+        } = rvsdg[branch_0].value_arguments()[1].users[0]
+        else {
+            panic!("the first branch's the offset argument should have a user")
+        };
+
+        let offset_add_data = rvsdg[offset_add_node].expect_op_binary();
+
+        assert_eq!(offset_add_data.operator(), BinaryOperator::Add);
+        assert_eq!(offset_add_data.lhs_input().origin, ValueOrigin::Argument(1));
+        assert_eq!(
+            offset_add_data.rhs_input().origin,
+            ValueOrigin::Output {
+                producer: offset_1_node,
+                output: 0,
+            }
+        );
+        assert_eq!(
+            &offset_add_data.output().users,
+            &thin_set![ValueUser::Result(1)],
+            "the offset-add-node's output should connect directly to the branch's second result"
+        );
+
+        assert_eq!(
+            &rvsdg[branch_1].value_arguments()[0].users,
+            &thin_set![ValueUser::Result(0)],
+            "the second branch's pointer argument should connect directly to the branch's first \
+            result"
+        );
+        assert_eq!(&rvsdg[branch_1].value_arguments()[1].users, &thin_set![
+            ValueUser::Result(1)
+        ], "the second branch's new offset argument should connect directly to the branch's second \
+            result"
+        );
+
+        assert_eq!(
+            rvsdg[index_add_node].expect_op_binary().lhs_input().origin,
+            ValueOrigin::Output {
+                producer: switch_node,
+                output: 1,
+            },
+            "the index-add-node's LHS should be connected to the offset output of the switch node"
+        );
+        assert_eq!(
+            rvsdg[ptr_element_ptr_node]
+                .expect_op_ptr_element_ptr()
+                .ptr_input()
+                .origin,
+            ValueOrigin::Output {
+                producer: switch_node,
+                output: 0,
+            },
+            "the ptr-element-ptr-node's pointer input should be connected to the pointer output of \
+            the switch node"
+        );
+
+        assert!(!rvsdg.is_live_node(add_offset_0_node));
+        assert!(!rvsdg.is_live_node(add_offset_1_node));
+        assert!(!rvsdg.is_live_node(get_offset_node));
+    }
+
+    #[test]
+    fn test_add_offset_then_add_offset_in_loop() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![FnArg {
+                    ty: TY_PREDICATE,
+                    shader_io_binding: None,
+                }],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+        let array_ty = module.ty.register(TypeKind::Array {
+            element_ty: TY_U32,
+            count: 4,
+        });
+        let array_ptr_ty = module.ty.register(TypeKind::Ptr(array_ty));
+
+        let array_node = rvsdg.add_op_alloca(region, array_ty);
+        let offset_0_node = rvsdg.add_const_u32(region, 1);
+        let add_offset_0_node = rvsdg.add_op_add_ptr_offset(
+            region,
+            ValueInput::output(array_ptr_ty, array_node, 0),
+            ValueInput::output(TY_U32, offset_0_node, 0),
+        );
+
+        let (loop_node, loop_region) = rvsdg.add_loop(
+            region,
+            vec![ValueInput::output(array_ptr_ty, add_offset_0_node, 0)],
+            None,
+        );
+
+        let reentry_predicate_node = rvsdg.add_const_bool(loop_region, false);
+        let offset_1_node = rvsdg.add_const_u32(loop_region, 1);
+        let add_offset_1_node = rvsdg.add_op_add_ptr_offset(
+            loop_region,
+            ValueInput::argument(array_ptr_ty, 0),
+            ValueInput::output(TY_U32, offset_1_node, 0),
+        );
+
+        rvsdg.reconnect_region_result(
+            loop_region,
+            0,
+            ValueOrigin::Output {
+                producer: reentry_predicate_node,
+                output: 0,
+            },
+        );
+        rvsdg.reconnect_region_result(
+            loop_region,
+            1,
+            ValueOrigin::Output {
+                producer: add_offset_1_node,
+                output: 0,
+            },
+        );
+
+        let get_offset_node =
+            rvsdg.add_op_get_ptr_offset(region, ValueInput::output(array_ptr_ty, loop_node, 0));
+        let index_node = rvsdg.add_const_u32(region, 1);
+        let index_add_node = rvsdg.add_op_binary(
+            region,
+            BinaryOperator::Add,
+            ValueInput::output(TY_U32, get_offset_node, 0),
+            ValueInput::output(TY_U32, index_node, 0),
+        );
+        let ptr_element_ptr_node = rvsdg.add_op_ptr_element_ptr(
+            region,
+            TY_U32,
+            ValueInput::output(array_ptr_ty, loop_node, 0),
+            [ValueInput::output(TY_U32, index_add_node, 0)],
+        );
+        let load_node = rvsdg.add_op_load(
+            region,
+            ValueInput::output(TY_PTR_U32, ptr_element_ptr_node, 0),
+            TY_U32,
+            StateOrigin::Argument,
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: load_node,
+                output: 0,
+            },
+        );
+
+        let mut replacer = PtrOffsetReplacer::new();
+
+        replacer.replace_in_fn(&mut rvsdg, function);
+
+        assert_eq!(
+            rvsdg[loop_node].expect_loop().value_inputs().len(),
+            2,
+            "should have added an additional input to the loop node"
+        );
+        assert_eq!(
+            rvsdg[loop_node].expect_loop().value_inputs()[1].origin,
+            ValueOrigin::Output {
+                producer: offset_0_node,
+                output: 0,
+            }
+        );
+
+        assert_eq!(
+            &rvsdg[loop_region].value_arguments()[0].users,
+            &thin_set![ValueUser::Result(1)],
+            "the loop region's pointer argument should connect directly to the region's second \
+            result"
+        );
+        assert_eq!(
+            rvsdg[loop_region].value_arguments()[1].users.len(),
+            1,
+            "the lopp region's offset argument should have one user"
+        );
+
+        let ValueUser::Input {
+            consumer: offset_add_node,
+            input: 0,
+        } = rvsdg[loop_region].value_arguments()[1].users[0]
+        else {
+            panic!("the first branch's the offset argument should have a user")
+        };
+
+        let offset_add_data = rvsdg[offset_add_node].expect_op_binary();
+
+        assert_eq!(offset_add_data.operator(), BinaryOperator::Add);
+        assert_eq!(offset_add_data.lhs_input().origin, ValueOrigin::Argument(1));
+        assert_eq!(
+            offset_add_data.rhs_input().origin,
+            ValueOrigin::Output {
+                producer: offset_1_node,
+                output: 0,
+            }
+        );
+        assert_eq!(
+            &offset_add_data.output().users,
+            &thin_set![ValueUser::Result(2)],
+            "the offset-add-node's output should connect directly to the loop region's third result"
+        );
+
+        assert_eq!(
+            rvsdg[index_add_node].expect_op_binary().lhs_input().origin,
+            ValueOrigin::Output {
+                producer: loop_node,
+                output: 1,
+            },
+            "the index-add-node's LHS should be connected to the offset output of the loop node"
+        );
+        assert_eq!(
+            rvsdg[ptr_element_ptr_node]
+                .expect_op_ptr_element_ptr()
+                .ptr_input()
+                .origin,
+            ValueOrigin::Output {
+                producer: loop_node,
+                output: 0,
+            },
+            "the ptr-element-ptr-node's pointer input should be connected to the pointer output of \
+            the loop node"
+        );
+
+        assert!(!rvsdg.is_live_node(add_offset_0_node));
         assert!(!rvsdg.is_live_node(add_offset_1_node));
         assert!(!rvsdg.is_live_node(get_offset_node));
     }
