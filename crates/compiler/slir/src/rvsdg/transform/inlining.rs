@@ -403,7 +403,7 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
 
     fn replicate_op_get_ptr_offset_node(&mut self, node: Node) -> Node {
         let data = self.rvsdg[node].expect_op_get_ptr_offset();
-        let slice_ptr = self.mapped_value_input(data.slice_ptr());
+        let slice_ptr = self.mapped_value_input(data.ptr());
 
         self.rvsdg.add_op_get_ptr_offset(self.dst_region, slice_ptr)
     }

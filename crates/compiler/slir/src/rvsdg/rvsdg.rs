@@ -1411,7 +1411,7 @@ pub struct OpGetPtrOffset {
 }
 
 impl OpGetPtrOffset {
-    pub fn slice_ptr(&self) -> &ValueInput {
+    pub fn ptr(&self) -> &ValueInput {
         &self.slice_ptr
     }
 
