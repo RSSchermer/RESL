@@ -998,6 +998,9 @@ impl NodeLayout {
                     NodeContent::PlainText("pred-bool".into())
                 }
                 SimpleNode::OpU32ToSwitchPredicate(_) => NodeContent::PlainText("pred-u32".into()),
+                SimpleNode::OpSwitchPredicateToCase(_) => {
+                    NodeContent::PlainText("case-pred".into())
+                }
                 SimpleNode::ValueProxy(_) => NodeContent::PlainText("proxy".into()),
                 SimpleNode::Reaggregation(_) => NodeContent::PlainText("reaggregation".into()),
             },

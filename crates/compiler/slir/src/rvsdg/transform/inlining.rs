@@ -4,8 +4,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::rvsdg::visit::bottom_up::{visit_node_bottom_up, BottomUpVisitor};
 use crate::rvsdg::{
-    Connectivity, FunctionNode, Node, NodeKind, OpAddPtrOffset, Region, Rvsdg, SimpleNode,
-    StateOrigin, ValueInput, ValueOrigin, ValueOutput, ValueUser,
+    Connectivity, FunctionNode, Node, NodeKind, OpAddPtrOffset, OpSwitchPredicateToCase, Region,
+    Rvsdg, SimpleNode, StateOrigin, ValueInput, ValueOrigin, ValueOutput, ValueUser,
 };
 use crate::Module;
 
@@ -153,6 +153,9 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
             }
             Simple(OpU32ToSwitchPredicate(_)) => {
                 self.replicate_op_u32_to_switch_predicate_node(node)
+            }
+            Simple(OpSwitchPredicateToCase(_)) => {
+                self.replicate_op_switch_predicate_to_case_node(node)
             }
             Simple(ValueProxy(_)) => self.replicate_value_proxy_node(node),
             Simple(Reaggregation(_)) => self.replicate_reaggregation_node(node),
@@ -469,6 +472,15 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
 
         self.rvsdg
             .add_op_u32_to_switch_predicate(self.dst_region, branch_count, input)
+    }
+
+    fn replicate_op_switch_predicate_to_case_node(&mut self, node: Node) -> Node {
+        let data = self.rvsdg[node].expect_op_switch_predicate_to_case();
+        let input = self.mapped_value_input(data.input());
+        let cases = data.cases().to_vec();
+
+        self.rvsdg
+            .add_op_switch_predicate_to_case(self.dst_region, input, cases)
     }
 
     fn replicate_value_proxy_node(&mut self, node: Node) -> Node {

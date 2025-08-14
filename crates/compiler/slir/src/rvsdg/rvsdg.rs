@@ -642,6 +642,21 @@ impl NodeData {
         }
     }
 
+    pub fn is_op_switch_predicate_case(&self) -> bool {
+        matches!(
+            self.kind,
+            NodeKind::Simple(SimpleNode::OpSwitchPredicateToCase(_))
+        )
+    }
+
+    pub fn expect_op_switch_predicate_to_case(&self) -> &OpSwitchPredicateToCase {
+        if let NodeKind::Simple(SimpleNode::OpSwitchPredicateToCase(proxy)) = &self.kind {
+            proxy
+        } else {
+            panic!("expected node to be an op-switch-predicate-to-case node")
+        }
+    }
+
     pub fn is_value_proxy(&self) -> bool {
         matches!(self.kind, NodeKind::Simple(SimpleNode::ValueProxy(_)))
     }
@@ -1870,6 +1885,53 @@ impl Connectivity for OpU32ToSwitchPredicate {
     }
 }
 
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OpSwitchPredicateToCase {
+    cases: Vec<u32>,
+    input: ValueInput,
+    output: ValueOutput,
+}
+
+impl OpSwitchPredicateToCase {
+    pub fn cases(&self) -> &[u32] {
+        &self.cases
+    }
+
+    pub fn input(&self) -> &ValueInput {
+        &self.input
+    }
+
+    pub fn output(&self) -> &ValueOutput {
+        &self.output
+    }
+}
+
+impl Connectivity for OpSwitchPredicateToCase {
+    fn value_inputs(&self) -> &[ValueInput] {
+        slice::from_ref(&self.input)
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        slice::from_mut(&mut self.input)
+    }
+
+    fn value_outputs(&self) -> &[ValueOutput] {
+        slice::from_ref(&self.output)
+    }
+
+    fn value_outputs_mut(&mut self) -> &mut [ValueOutput] {
+        slice::from_mut(&mut self.output)
+    }
+
+    fn state(&self) -> Option<&State> {
+        None
+    }
+
+    fn state_mut(&mut self) -> Option<&mut State> {
+        None
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default, Debug)]
 pub enum ProxyKind {
     #[default]
@@ -2064,6 +2126,7 @@ gen_simple_node! {
     OpCaseToSwitchPredicate,
     OpBoolToSwitchPredicate,
     OpU32ToSwitchPredicate,
+    OpSwitchPredicateToCase,
     ValueProxy,
     Reaggregation,
 }
@@ -3203,6 +3266,33 @@ impl Rvsdg {
         node
     }
 
+    pub fn add_op_switch_predicate_to_case(
+        &mut self,
+        region: Region,
+        input: ValueInput,
+        cases: impl IntoIterator<Item = u32>,
+    ) -> Node {
+        self.validate_node_value_input(region, &input);
+        assert_eq!(input.ty, TY_PREDICATE, "input must by a `predicate` value");
+
+        let node = self.nodes.insert(NodeData {
+            kind: NodeKind::Simple(
+                OpSwitchPredicateToCase {
+                    cases: cases.into_iter().collect(),
+                    input,
+                    output: ValueOutput::new(TY_PREDICATE),
+                }
+                .into(),
+            ),
+            region: Some(region),
+        });
+
+        self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
+
+        node
+    }
+
     pub fn add_value_proxy(
         &mut self,
         region: Region,
@@ -3336,6 +3426,36 @@ impl Rvsdg {
             ValueUser::Input { consumer, input } => {
                 self.reconnect_value_input(consumer, input, origin)
             }
+        }
+    }
+
+    pub fn reconnect_value_users(
+        &mut self,
+        region: Region,
+        original_origin: ValueOrigin,
+        new_origin: ValueOrigin,
+    ) {
+        let user_count = match original_origin {
+            ValueOrigin::Argument(a) => self.regions[region].value_arguments()[a as usize]
+                .users
+                .len(),
+            ValueOrigin::Output { producer, output } => self.nodes[producer].value_outputs()
+                [output as usize]
+                .users
+                .len(),
+        };
+
+        for i in (0..user_count).rev() {
+            let user = match original_origin {
+                ValueOrigin::Argument(a) => {
+                    self.regions[region].value_arguments()[a as usize].users[i]
+                }
+                ValueOrigin::Output { producer, output } => {
+                    self.nodes[producer].value_outputs()[output as usize].users[i]
+                }
+            };
+
+            self.reconnect_value_user(region, user, new_origin);
         }
     }
 
