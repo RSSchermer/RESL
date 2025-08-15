@@ -396,6 +396,18 @@ impl NodeData {
         }
     }
 
+    pub fn is_const_predicate(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::ConstPredicate(_)))
+    }
+
+    pub fn expect_const_predicate(&self) -> &ConstPredicate {
+        if let NodeKind::Simple(SimpleNode::ConstPredicate(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be a `predicate` constant")
+        }
+    }
+
     pub fn is_const_ptr(&self) -> bool {
         matches!(self.kind, NodeKind::Simple(SimpleNode::ConstPtr(_)))
     }
@@ -892,6 +904,10 @@ pub struct SwitchNode {
 impl SwitchNode {
     pub fn predicate(&self) -> &ValueInput {
         &self.value_inputs[0]
+    }
+
+    pub fn entry_inputs(&self) -> &[ValueInput] {
+        &self.value_inputs[1..]
     }
 
     pub fn branches(&self) -> &[Region] {
@@ -1659,6 +1675,7 @@ gen_const_nodes! {
     ConstI32: i32,
     ConstF32: f32,
     ConstBool: bool,
+    ConstPredicate: u32,
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
@@ -2107,6 +2124,7 @@ gen_simple_node! {
     ConstI32,
     ConstF32,
     ConstBool,
+    ConstPredicate,
     ConstPtr,
     ConstFallback,
     OpAlloca,
@@ -2686,6 +2704,23 @@ impl Rvsdg {
         add_const_i32 ConstI32 i32 TY_I32,
         add_const_f32 ConstF32 f32 TY_F32,
         add_const_bool ConstBool bool TY_BOOL,
+    }
+
+    pub fn add_const_predicate(&mut self, region: Region, value: u32) -> Node {
+        let node = self.nodes.insert(NodeData {
+            kind: NodeKind::Simple(
+                ConstPredicate {
+                    value,
+                    output: ValueOutput::new(TY_PREDICATE),
+                }
+                .into(),
+            ),
+            region: Some(region),
+        });
+
+        self.regions[region].nodes.insert(node);
+
+        node
     }
 
     pub fn add_const_ptr(&mut self, region: Region, pointee_ty: Type, base: ValueInput) -> Node {

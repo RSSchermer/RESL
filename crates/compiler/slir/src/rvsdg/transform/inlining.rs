@@ -129,6 +129,7 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
             Simple(ConstI32(_)) => self.replicate_const_i32_node(node),
             Simple(ConstF32(_)) => self.replicate_const_f32_node(node),
             Simple(ConstBool(_)) => self.replicate_const_bool_node(node),
+            Simple(ConstPredicate(_)) => self.replicate_const_predicate_node(node),
             Simple(ConstPtr(_)) => self.replicate_const_ptr_node(node),
             Simple(ConstFallback(_)) => self.replicate_const_fallback_node(node),
             Simple(OpAlloca(_)) => self.replicate_op_alloca_node(node),
@@ -285,6 +286,12 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
         let value = self.rvsdg[node].expect_const_bool().value();
 
         self.rvsdg.add_const_bool(self.dst_region, value)
+    }
+
+    fn replicate_const_predicate_node(&mut self, node: Node) -> Node {
+        let value = self.rvsdg[node].expect_const_predicate().value();
+
+        self.rvsdg.add_const_predicate(self.dst_region, value)
     }
 
     fn replicate_const_ptr_node(&mut self, node: Node) -> Node {
@@ -770,7 +777,7 @@ impl BottomUpVisitor for ApplyNodeCollector {
 /// For all entry points in the given `module`, finds all "apply" nodes and inlines the
 /// corresponding function, iteratively inlining any new "apply" amongst the inlined nodes until
 /// the entry points no longer contain any apply operations for user-defined functions.
-pub fn entry_points_inline_exhaustive(module: &mut Module, rvsdg: &mut Rvsdg) {
+pub fn transform_entry_points(module: &mut Module, rvsdg: &mut Rvsdg) {
     let entry_points = module
         .entry_points
         .iter()
@@ -1227,7 +1234,7 @@ mod tests {
             },
         );
 
-        entry_points_inline_exhaustive(&mut module, &mut rvsdg);
+        transform_entry_points(&mut module, &mut rvsdg);
 
         // The entry_point function should no longer contain any apply nodes.
         assert_eq!(

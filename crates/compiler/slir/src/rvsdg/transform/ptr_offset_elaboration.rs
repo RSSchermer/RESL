@@ -98,7 +98,7 @@ impl PtrOffsetElaborator {
     }
 }
 
-pub fn entry_points_ptr_offset_elaboration(module: &Module, rvsdg: &mut Rvsdg) {
+pub fn transform_entry_points(module: &Module, rvsdg: &mut Rvsdg) {
     let mut elaborator = PtrOffsetElaborator::new();
 
     for (entry_point, _) in module.entry_points.iter() {

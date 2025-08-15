@@ -967,6 +967,9 @@ impl NodeLayout {
                 SimpleNode::ConstI32(v) => NodeContent::PlainText(v.value().to_string().into()),
                 SimpleNode::ConstF32(v) => NodeContent::PlainText(v.value().to_string().into()),
                 SimpleNode::ConstBool(v) => NodeContent::PlainText(v.value().to_string().into()),
+                SimpleNode::ConstPredicate(v) => {
+                    NodeContent::PlainText(v.value().to_string().into())
+                }
                 SimpleNode::ConstPtr(_) => NodeContent::PlainText("ptr".into()),
                 SimpleNode::ConstFallback(_) => NodeContent::PlainText("fallback".into()),
                 SimpleNode::OpAlloca(_) => NodeContent::PlainText("alloca".into()),

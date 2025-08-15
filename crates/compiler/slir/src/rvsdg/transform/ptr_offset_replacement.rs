@@ -370,7 +370,7 @@ impl PtrOffsetReplacer {
     }
 }
 
-pub fn entry_points_ptr_offset_replacement(module: &Module, rvsdg: &mut Rvsdg) {
+pub fn transform_entry_points(module: &Module, rvsdg: &mut Rvsdg) {
     let mut replacer = PtrOffsetReplacer::new();
 
     for (entry_point, _) in module.entry_points.iter() {

@@ -92,7 +92,7 @@ impl PredToCaseToPredMerger {
     }
 }
 
-pub fn entry_points_merge_pred_to_case_to_pred(module: &Module, rvsdg: &mut Rvsdg) {
+pub fn transform_entry_points(module: &Module, rvsdg: &mut Rvsdg) {
     let mut merger = PredToCaseToPredMerger::new();
 
     for (function, _) in module.entry_points.iter() {

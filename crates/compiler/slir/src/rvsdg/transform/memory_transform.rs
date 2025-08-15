@@ -39,7 +39,7 @@ impl MemoryTransformer {
     }
 }
 
-pub fn entry_points_transform_memory(module: &Module, rvsdg: &mut Rvsdg) {
+pub fn transform_entry_points(module: &Module, rvsdg: &mut Rvsdg) {
     let mut transformer = MemoryTransformer::new();
 
     for (entry_point, _) in module.entry_points.iter() {

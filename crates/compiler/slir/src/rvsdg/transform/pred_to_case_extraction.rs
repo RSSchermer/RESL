@@ -94,7 +94,7 @@ impl PredToCaseExtractor {
     }
 }
 
-pub fn entry_points_extract_pred_to_case(module: &Module, rvsdg: &mut Rvsdg) {
+pub fn transform_entry_points(module: &Module, rvsdg: &mut Rvsdg) {
     let mut extractor = PredToCaseExtractor::new();
 
     for (function, _) in module.entry_points.iter() {

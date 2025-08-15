@@ -279,7 +279,7 @@ fn process_simple_node(rvsdg: &mut Rvsdg, node: Node, candidates: &mut FxHashSet
     remove_node(rvsdg, node, candidates);
 }
 
-pub fn entry_points_eliminate_dead_connections(module: &mut Module, rvsdg: &mut Rvsdg) {
+pub fn transform_entry_points(module: &mut Module, rvsdg: &mut Rvsdg) {
     let mut dce = DeadConnectionEliminator::new();
 
     let entry_points = module
