@@ -1,8 +1,6 @@
-use std::collections::VecDeque;
-
 use rustc_hash::FxHashSet;
 
-use crate::rvsdg::transform::inlining::replicate_region;
+use crate::rvsdg::transform::region_replication::replicate_region;
 use crate::rvsdg::visit::region_nodes::RegionNodesVisitor;
 use crate::rvsdg::visit::reverse_value_flow::ReverseValueFlowVisitor;
 use crate::rvsdg::{
