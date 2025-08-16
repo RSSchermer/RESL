@@ -717,24 +717,14 @@ pub fn inline_function(module: &mut Module, rvsdg: &mut Rvsdg, apply_node: Node)
     // Region replication does not connect the outputs used by the results of the original function
     // body, so we do that now using the mapping returned by region replication.
     for i in 0..value_output_count {
-        let mapped_origin = result_mapping[i];
-        let user_count = rvsdg[apply_node].value_outputs()[i].users.len();
-
-        // Iterate over the user indices in reverse order, as during this loop we'll be removing
-        // the respective user connection at each index; by going in reverse order, the indices will
-        // remain correct despite this concurrent modification of the user list during iteration.
-        // This is effectively equivalent to repeatedly popping the last entry until the list is
-        // empty.
-        for j in (0..user_count).rev() {
-            match rvsdg[apply_node].value_outputs()[i].users[j] {
-                ValueUser::Result(res) => {
-                    rvsdg.reconnect_region_result(dst_region, res, mapped_origin);
-                }
-                ValueUser::Input { consumer, input } => {
-                    rvsdg.reconnect_value_input(consumer, input, mapped_origin);
-                }
-            }
-        }
+        rvsdg.reconnect_value_users(
+            dst_region,
+            ValueOrigin::Output {
+                producer: apply_node,
+                output: i as u32,
+            },
+            result_mapping[i],
+        );
     }
 
     // Now that we've disconnected the users of all of the apply node's value outputs, the apply
