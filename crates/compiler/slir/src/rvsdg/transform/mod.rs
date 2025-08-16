@@ -1,3 +1,4 @@
+pub mod const_switch_inlining;
 pub mod dead_connection_elimination;
 pub mod enum_replacement;
 pub mod inlining;
@@ -23,5 +24,6 @@ pub fn transform(module: &mut Module, rvsdg: &mut Rvsdg) {
     pred_to_case_extraction::transform_entry_points(module, rvsdg);
     pred_to_case_to_pred_merging::transform_entry_points(module, rvsdg);
     switch_arg_reduction::transform_entry_points(module, rvsdg);
+    const_switch_inlining::transform_entry_points(module, rvsdg);
     dead_connection_elimination::transform_entry_points(module, rvsdg);
 }

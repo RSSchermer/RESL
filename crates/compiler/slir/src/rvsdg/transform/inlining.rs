@@ -204,16 +204,12 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
                 Some(StateOrigin::Argument),
             );
 
-            region_replicator.replicate_region();
+            let result_mapping = region_replicator.replicate_region();
 
-            // Connect the replicate region's results
-            let result_count = self.rvsdg[src_region].value_results().len();
-            for i in 0..result_count {
-                let input = &self.rvsdg[src_region].value_results()[i];
-                let mapped_input = self.mapped_value_input(input);
-
+            // Connect the replicated region's results
+            for (i, origin) in result_mapping.into_iter().enumerate() {
                 self.rvsdg
-                    .reconnect_region_result(replicate_region, i as u32, mapped_input.origin);
+                    .reconnect_region_result(replicate_region, i as u32, origin);
             }
         }
 
@@ -249,16 +245,12 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
             Some(StateOrigin::Argument),
         );
 
-        region_replicator.replicate_region();
+        let result_mapping = region_replicator.replicate_region();
 
-        // Connect the replicate region's results
-        let result_count = self.rvsdg[src_region].value_results().len();
-        for i in 0..result_count {
-            let input = &self.rvsdg[src_region].value_results()[i];
-            let mapped_input = self.mapped_value_input(input);
-
+        // Connect the replicated region's results
+        for (i, origin) in result_mapping.into_iter().enumerate() {
             self.rvsdg
-                .reconnect_region_result(replicate_region, i as u32, mapped_input.origin);
+                .reconnect_region_result(replicate_region, i as u32, origin);
         }
 
         replicate_node
