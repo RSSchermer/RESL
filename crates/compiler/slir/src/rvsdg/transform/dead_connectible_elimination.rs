@@ -6,12 +6,12 @@ use crate::rvsdg::transform::proxy_node_elimination::region_eliminate_proxy_node
 use crate::rvsdg::{Connectivity, Node, NodeKind, Region, Rvsdg, StateUser, ValueOrigin};
 use crate::Module;
 
-pub struct DeadConnectionEliminator {
+pub struct DeadConnectibleEliminator {
     current_candidates: FxHashSet<Node>,
     next_candidates: FxHashSet<Node>,
 }
 
-impl DeadConnectionEliminator {
+impl DeadConnectibleEliminator {
     pub fn new() -> Self {
         Self {
             current_candidates: FxHashSet::default(),
@@ -280,7 +280,7 @@ fn process_simple_node(rvsdg: &mut Rvsdg, node: Node, candidates: &mut FxHashSet
 }
 
 pub fn transform_entry_points(module: &mut Module, rvsdg: &mut Rvsdg) {
-    let mut dce = DeadConnectionEliminator::new();
+    let mut dce = DeadConnectibleEliminator::new();
 
     let entry_points = module
         .entry_points
@@ -338,7 +338,7 @@ mod tests {
             },
         );
 
-        let mut dce = DeadConnectionEliminator::new();
+        let mut dce = DeadConnectibleEliminator::new();
 
         dce.process_region(&mut rvsdg, region);
 
@@ -379,7 +379,7 @@ mod tests {
             ValueInput::output(TY_U32, node_0, 0),
         );
 
-        let mut dce = DeadConnectionEliminator::new();
+        let mut dce = DeadConnectibleEliminator::new();
 
         dce.process_region(&mut rvsdg, region);
 
@@ -455,7 +455,7 @@ mod tests {
             },
         );
 
-        let mut dce = DeadConnectionEliminator::new();
+        let mut dce = DeadConnectibleEliminator::new();
 
         dce.process_region(&mut rvsdg, region);
 
@@ -522,7 +522,7 @@ mod tests {
             },
         );
 
-        let mut dce = DeadConnectionEliminator::new();
+        let mut dce = DeadConnectibleEliminator::new();
 
         dce.process_region(&mut rvsdg, region);
 
@@ -616,7 +616,7 @@ mod tests {
             },
         );
 
-        let mut dce = DeadConnectionEliminator::new();
+        let mut dce = DeadConnectibleEliminator::new();
 
         dce.process_region(&mut rvsdg, region);
 
@@ -699,7 +699,7 @@ mod tests {
             },
         );
 
-        let mut dce = DeadConnectionEliminator::new();
+        let mut dce = DeadConnectibleEliminator::new();
 
         dce.process_region(&mut rvsdg, region);
 
@@ -787,7 +787,7 @@ mod tests {
             },
         );
 
-        let mut dce = DeadConnectionEliminator::new();
+        let mut dce = DeadConnectibleEliminator::new();
 
         dce.process_region(&mut rvsdg, region);
 
