@@ -2561,6 +2561,26 @@ impl Rvsdg {
         }
     }
 
+    pub fn link_switch_state(&mut self, switch_node: Node, state_origin: StateOrigin) {
+        if self.nodes[switch_node].state().is_some() {
+            panic!("switch node is already linked into the state chain")
+        }
+
+        let region = self.nodes[switch_node].region();
+
+        self.link_state(region, switch_node, state_origin);
+    }
+
+    pub fn unlink_switch_state(&mut self, switch_node: Node, state_origin: StateOrigin) {
+        if self.nodes[switch_node].state().is_none() {
+            panic!("switch node is not linked into the state chain")
+        }
+
+        let region = self.nodes[switch_node].region();
+
+        self.unlink_state(switch_node);
+    }
+
     pub fn add_loop(
         &mut self,
         region: Region,
