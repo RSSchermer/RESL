@@ -994,15 +994,29 @@ impl NodeLayout {
                 SimpleNode::OpBinary(op) => {
                     NodeContent::PlainText(op.operator().to_string().into())
                 }
-                SimpleNode::OpCaseToSwitchPredicate(_) => {
-                    NodeContent::PlainText("pred-case".into())
+                SimpleNode::OpCaseToSwitchPredicate(n) => {
+                    let tooltip = n
+                        .cases()
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",");
+
+                    NodeContent::PlainText(TextElement::from("pred-case").with_tooltip(tooltip))
                 }
                 SimpleNode::OpBoolToSwitchPredicate(_) => {
                     NodeContent::PlainText("pred-bool".into())
                 }
                 SimpleNode::OpU32ToSwitchPredicate(_) => NodeContent::PlainText("pred-u32".into()),
-                SimpleNode::OpSwitchPredicateToCase(_) => {
-                    NodeContent::PlainText("case-pred".into())
+                SimpleNode::OpSwitchPredicateToCase(n) => {
+                    let tooltip = n
+                        .cases()
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",");
+
+                    NodeContent::PlainText(TextElement::from("case-pred").with_tooltip(tooltip))
                 }
                 SimpleNode::ValueProxy(_) => NodeContent::PlainText("proxy".into()),
                 SimpleNode::Reaggregation(_) => NodeContent::PlainText("reaggregation".into()),
@@ -1204,6 +1218,7 @@ impl NodeLayout {
 pub struct TextElement {
     text: Cow<'static, str>,
     translation: [f32; 2],
+    tooltip: Option<Cow<'static, str>>,
 }
 
 impl TextElement {
@@ -1214,6 +1229,19 @@ impl TextElement {
     pub fn translation(&self) -> [f32; 2] {
         self.translation
     }
+
+    pub fn tooltip(&self) -> Option<&str> {
+        self.tooltip.as_deref()
+    }
+
+    pub fn with_tooltip<T>(mut self, tooltip: T) -> Self
+    where
+        T: Into<Cow<'static, str>>,
+    {
+        self.tooltip = Some(tooltip.into());
+
+        self
+    }
 }
 
 impl From<String> for TextElement {
@@ -1221,6 +1249,7 @@ impl From<String> for TextElement {
         Self {
             text: Cow::Owned(text),
             translation: [0.0; 2],
+            tooltip: None,
         }
     }
 }
@@ -1230,6 +1259,7 @@ impl From<&'static str> for TextElement {
         Self {
             text: Cow::Borrowed(text),
             translation: [0.0; 2],
+            tooltip: None,
         }
     }
 }

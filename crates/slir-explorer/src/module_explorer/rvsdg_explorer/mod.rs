@@ -80,7 +80,22 @@ pub fn RvsdgExplorer(
                             .node-rect.switch {
                                 fill: #baf7c9;
                             }
-                            
+
+                            .node-content-container .node-tooltip rect {
+                                stroke_width: 1px;
+                                stroke: black;
+                                fill: white;
+                            }
+
+                            .node-content-container .node-tooltip {
+                                display: none;
+                            }
+
+                            .node-content-container:hover .node-tooltip {
+                                display: block;
+                                z-index: 100;
+                            }
+
                             .connector .tooltip rect {
                                 stroke_width: 1px;
                                 stroke: black;
@@ -119,10 +134,19 @@ pub fn RvsdgExplorer(
                                 stroke: transparent;
                                 fill: none;
                             }
+
+                            .edge-lines:hover {
+                                cursor: pointer;
+                            }
                             
                             .edge-lines:hover .visible-line {
                                 stroke-width: 4.0px;
                                 stroke: #fcba03;
+                            }
+
+                            .edge-lines.highlighted .visible-line {
+                                stroke-width: 4.0px;
+                                stroke: #fae17d;
                             }
                             "#
                         </style>

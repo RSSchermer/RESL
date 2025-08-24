@@ -24,6 +24,7 @@ pub fn Region(module: StoredValue<ModuleData>, region: RegionLayout) -> impl Int
                 (0..edge_count).map(|i| {
                     let path = region.edge_vertices(i).iter().map(|v| format!("{},{}", v[0], v[1])).collect::<Vec<_>>().join(" ");
                     let is_state_edge = region.is_state_edge(i);
+                    let (highlight, set_highlight) = signal(false);
 
                     // We want to do some edge-highlighting on hover (see the <style> block in the
                     // root svg element in mod.rs) to make it easier to visually track individual
@@ -34,12 +35,15 @@ pub fn Region(module: StoredValue<ModuleData>, region: RegionLayout) -> impl Int
                     // margin around the "visible line" that makes it a bit easier to mouse over
                     // the element group and trigger the hover effect.
                     view! {
-                        <g class="edge-lines" class=("state-edge", move || is_state_edge)>
+                        <g class="edge-lines"
+                            class=("state-edge", move || is_state_edge)
+                            class=("highlighted", move || highlight.get())
+                            on:click=move |_| set_highlight.update(|v| *v = !*v)
+                        >
                             <polyline class="visible-line" points=path.clone() />
                             <polyline class="hover-target" points=path />
                         </g>
                     }
-
                 }).collect_view()
             }}
 
@@ -50,7 +54,10 @@ pub fn Region(module: StoredValue<ModuleData>, region: RegionLayout) -> impl Int
             }}
 
             {move || {
-                region.read_value().node_layouts().iter().cloned().map(|node| {
+                // Reverse the iteration order so we draw from right to left: this makes the
+                // tooltips correctly appear on top if they are big enough to overlap a node to
+                // the right.
+                region.read_value().node_layouts().iter().rev().cloned().map(|node| {
                     view! { <Node module node /> }
                 }).collect_view()
             }}

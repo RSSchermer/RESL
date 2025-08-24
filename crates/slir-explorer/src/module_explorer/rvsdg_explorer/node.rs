@@ -15,6 +15,10 @@ use crate::module_explorer::{format_function_url, ModuleData};
 // dirty-fixing this with a hard-coded adjustment
 const TEXT_ADJUST: f32 = -3.0;
 
+const TOOLTIP_FONT_HEIGHT: f32 = 15.0;
+const TOOLTIP_FONT_RATIO: f32 = 0.6;
+const TOOLTIP_PADDING: f32 = 5.0;
+
 #[component]
 pub fn Node(module: StoredValue<ModuleData>, node: NodeLayout) -> impl IntoView {
     let node = StoredValue::new(node);
@@ -28,16 +32,49 @@ pub fn Node(module: StoredValue<ModuleData>, node: NodeLayout) -> impl IntoView 
     };
 
     view! {
-        <g>
-            <rect class=rect_class x=rect().origin[0] y=rect().origin[1] width=rect().size[0] height=rect().size[1] />
+        {move || {
+            node.read_value().input_connectors().iter().cloned().map(|connector| {
+                view! { <Connector module connector tooltip_position=ToolTipPosition::Top /> }
+            }).collect_view()
+        }}
 
+        {move || {
+            node.read_value().output_connectors().iter().cloned().map(|connector| {
+                view! { <Connector module connector tooltip_position=ToolTipPosition::Bottom /> }
+            }).collect_view()
+        }}
+
+        <rect class=rect_class x=rect().origin[0] y=rect().origin[1] width=rect().size[0] height=rect().size[1] />
+
+        <g class="node-content-container">
             {move || {
                 match node.read_value().content() {
                     NodeContent::PlainText(text) => {
                         let [x, y] = text.translation();
+                        let tooltip = text.tooltip().map(|t| t.to_string());
 
                         view! {
-                            <text x=x y=y+TEXT_ADJUST>{text.text().to_owned()}</text>
+                            <g transform=format!("translate({}, {})", x, y)>
+                                <text y=TEXT_ADJUST>{text.text().to_owned()}</text>
+
+                                {move || {
+                                    if let Some(tooltip) = tooltip.clone() {
+                                        let text_width = tooltip.len() as f32 * TOOLTIP_FONT_HEIGHT * TOOLTIP_FONT_RATIO;
+                                        let width = text_width + TOOLTIP_PADDING * 2.0;
+                                        let height = TOOLTIP_FONT_HEIGHT + TOOLTIP_PADDING * 2.0;
+                                        let text_base = TOOLTIP_PADDING + TOOLTIP_FONT_HEIGHT;
+
+                                        view! {
+                                            <g class="node-tooltip" transform="translate(0, 5)">
+                                                <rect x=0 y=0 width=width height=height />
+                                                <text x=TOOLTIP_PADDING y=text_base>{tooltip}</text>
+                                            </g>
+                                        }.into_any()
+                                    } else {
+                                        view! {}.into_any()
+                                    }
+                                }}
+                            </g>
                         }.into_any()
                     }
                     NodeContent::FnApply(text, f) => {
@@ -77,18 +114,6 @@ pub fn Node(module: StoredValue<ModuleData>, node: NodeLayout) -> impl IntoView 
                         }.into_any()
                     }
                 }
-            }}
-
-            {move || {
-                node.read_value().input_connectors().iter().cloned().map(|connector| {
-                    view! { <Connector module connector tooltip_position=ToolTipPosition::Top /> }
-                }).collect_view()
-            }}
-
-            {move || {
-                node.read_value().output_connectors().iter().cloned().map(|connector| {
-                    view! { <Connector module connector tooltip_position=ToolTipPosition::Bottom /> }
-                }).collect_view()
             }}
         </g>
     }
