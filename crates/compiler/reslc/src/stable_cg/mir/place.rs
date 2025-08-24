@@ -173,6 +173,17 @@ impl<'a, V: CodegenObject> PlaceRef<V> {
         PlaceValue::new_sized(llval, layout.layout.shape().abi_align).with_type(layout)
     }
 
+    pub fn project_subslice<Bx: BuilderMethods<'a, Value = V>>(
+        &self,
+        bx: &mut Bx,
+        lloffset: V,
+        slice_layout: TyAndLayout,
+    ) -> Self {
+        let llval = bx.offset_slice_ptr(self.val.llval, lloffset, bx.backend_type(slice_layout));
+
+        PlaceValue::new_sized(llval, slice_layout.layout.shape().abi_align).with_type(slice_layout)
+    }
+
     /// Obtain the actual discriminant of a value.
     #[instrument(level = "trace", skip(bx))]
     pub fn codegen_get_discr<Bx: BuilderMethods<'a, Value = V>>(self, bx: &mut Bx) -> V {
@@ -303,8 +314,6 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                     cg_base.project_index(bx, llindex)
                 }
                 mir::ProjectionElem::Subslice { from, to, from_end } => {
-                    let mut subslice = cg_base.project_index(bx, bx.const_usize(from));
-
                     let TyKind::RigidTy(ty) = cg_base.layout.ty.kind() else {
                         bug!("type should be rigid")
                     };
@@ -325,7 +334,8 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                         _ => bug!("cannot subslice non-array type: `{:?}`", cg_base.layout.ty),
                     };
 
-                    subslice.layout = TyAndLayout::expect_from_ty(projected_ty);
+                    let layout = TyAndLayout::expect_from_ty(projected_ty);
+                    let mut subslice = cg_base.project_subslice(bx, bx.const_usize(from), layout);
 
                     if subslice.layout.layout.shape().is_unsized() {
                         assert!(from_end, "slice subslices should be `from_end`");

@@ -393,7 +393,6 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
     }
 
     fn set_discriminant(&mut self, ptr: Self::Value, variant_index: VariantIdx) {
-        panic!("adsf");
         let ptr = ptr.expect_value();
         let variant_index = variant_index.to_index() as u32;
 
@@ -604,7 +603,7 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
             return OperandRef::zero_sized(place.layout);
         }
 
-        let val = if place.val.llextra.is_some() {
+        let val = if place.val.llextra.is_some() || place.layout.ty.kind().is_enum() {
             OperandValue::Ref(place.val)
         } else if self.is_backend_immediate(place.layout) {
             let llval = self.load(
@@ -775,6 +774,35 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         result.into()
     }
 
+    fn offset_slice_ptr(
+        &mut self,
+        ptr: Self::Value,
+        offset: Self::Value,
+        ty: Self::Type,
+    ) -> Self::Value {
+        let mut module = self.module.borrow_mut();
+        let mut cfg = self.cfg.borrow_mut();
+        let mut body = &mut cfg.function_body[self.function];
+
+        let ptr_ty = module
+            .ty
+            .register(slir::ty::TypeKind::Ptr(ty.expect_slir_type()));
+        let result = body
+            .local_values
+            .insert(slir::cfg::LocalValueData { ty: Some(ptr_ty) });
+
+        body.basic_blocks[self.basic_block].statements.push(
+            slir::cfg::OpOffsetSlicePtr {
+                slice_ptr: ptr.expect_value(),
+                offset: offset.expect_value(),
+                result,
+            }
+            .into(),
+        );
+
+        result.into()
+    }
+
     fn trunc(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value {
         todo!()
     }
@@ -887,14 +915,17 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
             .expect("value must be typed");
         let agg_ty_kind = module.ty.kind(agg_ty);
         let slir::ty::TypeKind::Ptr(pointee_ty) = *agg_ty_kind else {
-            bug!("can only extract value from a pointer to a struct type");
+            bug!("can only extract value from a pointer to an aggregate type");
         };
         let pointee_ty_kind = module.ty.kind(pointee_ty);
-        let slir::ty::TypeKind::Struct(struct_data) = &*pointee_ty_kind else {
-            bug!("can only extract value from a pointer to a struct type");
+
+        let val_ty = match &*pointee_ty_kind {
+            slir::ty::TypeKind::Struct(struct_data) => struct_data.fields[idx as usize].ty,
+            slir::ty::TypeKind::Array { element_ty, .. }
+            | slir::ty::TypeKind::Slice { element_ty } => *element_ty,
+            _ => bug!("can only extract value from a pointer to an aggregate type"),
         };
 
-        let val_ty = struct_data.fields[idx as usize].ty;
         let index = slir::cfg::InlineConst::U32(idx as u32);
 
         mem::drop(module);
@@ -940,13 +971,9 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         todo!()
     }
 
-    fn lifetime_start(&mut self, ptr: Self::Value, size: MachineSize) {
-        todo!()
-    }
+    fn lifetime_start(&mut self, ptr: Self::Value, size: MachineSize) {}
 
-    fn lifetime_end(&mut self, ptr: Self::Value, size: MachineSize) {
-        todo!()
-    }
+    fn lifetime_end(&mut self, ptr: Self::Value, size: MachineSize) {}
 
     fn call(
         &mut self,

@@ -189,6 +189,13 @@ pub trait BuilderMethods<'a>:
     ) -> Self::Value;
     fn ptr_variant_ptr(&mut self, ptr: Self::Value, variant_idx: VariantIdx) -> Self::Value;
 
+    fn offset_slice_ptr(
+        &mut self,
+        ptr: Self::Value,
+        offset: Self::Value,
+        ty: Self::Type,
+    ) -> Self::Value;
+
     fn trunc(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value;
     fn sext(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value;
     fn fptoui(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value;
