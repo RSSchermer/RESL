@@ -624,6 +624,14 @@ impl NodeData {
         }
     }
 
+    fn expect_op_case_to_switch_predicate_mut(&mut self) -> &mut OpCaseToSwitchPredicate {
+        if let NodeKind::Simple(SimpleNode::OpCaseToSwitchPredicate(proxy)) = &mut self.kind {
+            proxy
+        } else {
+            panic!("expected node to be an op-case-to-switch-predicate node")
+        }
+    }
+
     pub fn is_op_bool_to_switch_predicate(&self) -> bool {
         matches!(
             self.kind,
@@ -2459,6 +2467,18 @@ impl Rvsdg {
         region
     }
 
+    pub fn permute_switch_branches(&mut self, switch_node: Node, permutation: &[usize]) {
+        let mut branches_new = Vec::with_capacity(permutation.len());
+
+        let data = self.nodes[switch_node].kind.expect_switch_mut();
+
+        for index in permutation {
+            branches_new.push(data.branches[*index as usize]);
+        }
+
+        data.branches = branches_new;
+    }
+
     pub fn add_switch_input(&mut self, switch_node: Node, input: ValueInput) -> u32 {
         let region = self.nodes[switch_node].region();
 
@@ -3273,6 +3293,19 @@ impl Rvsdg {
         node
     }
 
+    pub fn permute_op_case_to_switch_predicate_cases(&mut self, node: Node, permutation: &[usize]) {
+        let mut new_cases = Vec::with_capacity(permutation.len());
+
+        let data = self.nodes[node].expect_op_case_to_switch_predicate_mut();
+        let cases = data.cases();
+
+        for index in permutation {
+            new_cases.push(cases[*index]);
+        }
+
+        data.cases = new_cases;
+    }
+
     pub fn add_op_bool_to_switch_predicate(&mut self, region: Region, input: ValueInput) -> Node {
         self.validate_node_value_input(region, &input);
         assert_eq!(input.ty, TY_BOOL, "input must by a `bool` value");
@@ -3335,7 +3368,7 @@ impl Rvsdg {
                 OpSwitchPredicateToCase {
                     cases: cases.into_iter().collect(),
                     input,
-                    output: ValueOutput::new(TY_PREDICATE),
+                    output: ValueOutput::new(TY_U32),
                 }
                 .into(),
             ),
