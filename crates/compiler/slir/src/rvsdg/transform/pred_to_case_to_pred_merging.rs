@@ -24,28 +24,28 @@ impl RegionNodesVisitor for NodeCollector<'_> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum CaseMatch<'a> {
+enum CasesMatch<'a> {
     Exact,
     Permutation(&'a [usize]),
     NoMatch,
 }
 
-struct CaseMatcher {
+struct CasesMatcher {
     permutation: Vec<usize>,
 }
 
-impl CaseMatcher {
+impl CasesMatcher {
     fn new() -> Self {
         Self {
             permutation: Vec::new(),
         }
     }
 
-    fn match_cases(&mut self, cases_0: &[u32], cases_1: &[u32]) -> CaseMatch {
+    fn match_cases(&mut self, cases_0: &[u32], cases_1: &[u32]) -> CasesMatch {
         // Note: this assumes that the cases in `cases_0` are all unique (no duplicates).
 
         if cases_0.len() != cases_1.len() {
-            return CaseMatch::NoMatch;
+            return CasesMatch::NoMatch;
         }
 
         self.permutation.clear();
@@ -60,14 +60,14 @@ impl CaseMatcher {
                     is_exact_match = false;
                 }
             } else {
-                return CaseMatch::NoMatch;
+                return CasesMatch::NoMatch;
             }
         }
 
         if is_exact_match {
-            CaseMatch::Exact
+            CasesMatch::Exact
         } else {
-            CaseMatch::Permutation(&self.permutation)
+            CasesMatch::Permutation(&self.permutation)
         }
     }
 }
@@ -114,14 +114,14 @@ impl ValueFlowVisitor for DependentFinder {
 }
 
 struct Merger {
-    case_matcher: CaseMatcher,
+    case_matcher: CasesMatcher,
     dependent_finder: DependentFinder,
 }
 
 impl Merger {
     fn new() -> Self {
         Self {
-            case_matcher: CaseMatcher::new(),
+            case_matcher: CasesMatcher::new(),
             dependent_finder: DependentFinder::new(),
         }
     }
@@ -149,11 +149,11 @@ impl Merger {
             {
                 let case_match = self.case_matcher.match_cases(data.cases(), n.cases());
 
-                if matches!(case_match, CaseMatch::NoMatch) {
+                if matches!(case_match, CasesMatch::NoMatch) {
                     continue;
                 }
 
-                if let CaseMatch::Permutation(permutation) = case_match {
+                if let CasesMatch::Permutation(permutation) = case_match {
                     for dependent in self
                         .dependent_finder
                         .find_dependents(rvsdg, case_to_pred)
@@ -240,35 +240,35 @@ mod tests {
 
     #[test]
     fn test_case_match() {
-        let mut matcher = CaseMatcher::new();
+        let mut matcher = CasesMatcher::new();
 
         let cases_0 = [1, 2, 3];
         let cases_1 = [1, 2, 3];
 
-        assert_eq!(matcher.match_cases(&cases_0, &cases_1), CaseMatch::Exact);
+        assert_eq!(matcher.match_cases(&cases_0, &cases_1), CasesMatch::Exact);
 
         let cases_0 = [1, 2, 3];
         let cases_1 = [3, 1, 2];
 
         assert_eq!(
             matcher.match_cases(&cases_0, &cases_1),
-            CaseMatch::Permutation(&[1, 2, 0])
+            CasesMatch::Permutation(&[1, 2, 0])
         );
 
         let cases_0 = [1, 2, 3];
         let cases_1 = [1, 2, 4];
 
-        assert_eq!(matcher.match_cases(&cases_0, &cases_1), CaseMatch::NoMatch);
+        assert_eq!(matcher.match_cases(&cases_0, &cases_1), CasesMatch::NoMatch);
 
         let cases_0 = [1, 2, 3];
         let cases_1 = [1, 2];
 
-        assert_eq!(matcher.match_cases(&cases_0, &cases_1), CaseMatch::NoMatch);
+        assert_eq!(matcher.match_cases(&cases_0, &cases_1), CasesMatch::NoMatch);
 
         let cases_0 = [1, 2];
         let cases_1 = [1, 2, 3];
 
-        assert_eq!(matcher.match_cases(&cases_0, &cases_1), CaseMatch::NoMatch);
+        assert_eq!(matcher.match_cases(&cases_0, &cases_1), CasesMatch::NoMatch);
     }
 
     #[test]
