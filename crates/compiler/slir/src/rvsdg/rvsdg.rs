@@ -308,6 +308,18 @@ impl NodeData {
         }
     }
 
+    pub fn is_simple(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(_))
+    }
+
+    pub fn expect_simple(&self) -> &SimpleNode {
+        if let NodeKind::Simple(n) = &self.kind {
+            n
+        } else {
+            panic!("expected node to be a simple node")
+        }
+    }
+
     pub fn is_switch(&self) -> bool {
         matches!(self.kind, NodeKind::Switch(_))
     }
@@ -811,6 +823,16 @@ pub struct UniformBindingNode {
     output: ValueOutput,
 }
 
+impl UniformBindingNode {
+    pub fn binding(&self) -> UniformBinding {
+        self.binding
+    }
+
+    pub fn output(&self) -> &ValueOutput {
+        &self.output
+    }
+}
+
 impl Connectivity for UniformBindingNode {
     fn value_inputs(&self) -> &[ValueInput] {
         &[]
@@ -843,6 +865,16 @@ pub struct StorageBindingNode {
     output: ValueOutput,
 }
 
+impl StorageBindingNode {
+    pub fn binding(&self) -> StorageBinding {
+        self.binding
+    }
+
+    pub fn output(&self) -> &ValueOutput {
+        &self.output
+    }
+}
+
 impl Connectivity for StorageBindingNode {
     fn value_inputs(&self) -> &[ValueInput] {
         &[]
@@ -873,6 +905,16 @@ impl Connectivity for StorageBindingNode {
 pub struct WorkgroupBindingNode {
     binding: WorkgroupBinding,
     output: ValueOutput,
+}
+
+impl WorkgroupBindingNode {
+    pub fn binding(&self) -> WorkgroupBinding {
+        self.binding
+    }
+
+    pub fn output(&self) -> &ValueOutput {
+        &self.output
+    }
 }
 
 impl Connectivity for WorkgroupBindingNode {

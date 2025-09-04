@@ -2,13 +2,14 @@ use std::hash::{Hash, Hasher};
 use std::ops::{Deref, Index};
 
 use indexmap::{IndexMap, IndexSet};
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
 
 use crate::ty::{Type, TypeKind, TypeRegistry, TY_BOOL, TY_F32, TY_I32, TY_U32};
 use crate::{
-    BinaryOperator, StorageBinding, StorageBindingRegistry, UnaryOperator, UniformBinding,
-    UniformBindingRegistry, WorkgroupBinding, WorkgroupBindingRegistry,
+    BinaryOperator, Function, Module, StorageBinding, StorageBindingRegistry, UnaryOperator,
+    UniformBinding, UniformBindingRegistry, WorkgroupBinding, WorkgroupBindingRegistry,
 };
 
 slotmap::new_key_type! {
@@ -36,6 +37,15 @@ impl ExpressionData {
 
     pub fn kind(&self) -> &ExpressionKind {
         &self.kind
+    }
+
+    pub fn is_global_value(&self) -> bool {
+        match self.kind {
+            ExpressionKind::UniformValue(_)
+            | ExpressionKind::StorageValue(_)
+            | ExpressionKind::WorkgroupValue(_) => true,
+            _ => false,
+        }
     }
 }
 
@@ -109,6 +119,22 @@ impl OpExtractElement {
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct OpCaseToSwitchPredicate {
+    case: Expression,
+    cases: Vec<u32>,
+}
+
+impl OpCaseToSwitchPredicate {
+    pub fn case(&self) -> Expression {
+        self.case
+    }
+
+    pub fn cases(&self) -> &[u32] {
+        &self.cases
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub enum ExpressionKind {
     LocalValue(LocalBinding),
     UniformValue(UniformBinding),
@@ -119,11 +145,14 @@ pub enum ExpressionKind {
     ConstI32(i32),
     ConstF32(f32),
     ConstBool(bool),
+    ConstPtr(Expression),
     OpUnary(OpUnary),
     OpBinary(OpBinary),
     OpPtrElementPtr(OpPtrElementPtr),
     OpExtractElement(OpExtractElement),
     OpLoad(Expression),
+    OpBoolToSwitchPredicate(Expression),
+    OpCaseToSwitchPredicate(OpCaseToSwitchPredicate),
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -192,9 +221,11 @@ impl BlockData {
         self.statements.shift_remove(&statement)
     }
 
-    fn set_control_flow_var(&mut self, binding: LocalBinding, value: Expression) {
-        if self.control_flow_vars.insert(binding, value).is_none() {
-            panic!("no control-flow variable associated with the local binding");
+    fn set_control_flow_var(&mut self, index: usize, value: Expression) {
+        if let Some(mut entry) = self.control_flow_vars.get_index_entry(index) {
+            entry.insert(value);
+        } else {
+            panic!("no control-flow variable associated with the index");
         }
     }
 
@@ -249,21 +280,6 @@ impl Loop {
     pub fn loop_vars(&self) -> &[LoopVar] {
         &self.loop_vars
     }
-
-    // pub fn add_loop_var(&mut self, init: Expression) {
-    //     todo!()
-    // }
-    //
-    // pub fn remove_loop_var(&mut self, binding: LocalBinding) -> bool {
-    //     if let Some(index) = self.loop_vars.iter().position(|x| x.binding == binding) {
-    //         self.loop_vars.remove(index);
-    //         self.block.remove_control_flow_var(binding);
-    //
-    //         true
-    //     } else {
-    //         false
-    //     }
-    // }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -294,12 +310,12 @@ impl If {
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct SwitchCase {
-    case: i64,
+    case: u32,
     block: Block,
 }
 
 impl SwitchCase {
-    pub fn case(&self) -> i64 {
+    pub fn case(&self) -> u32 {
         self.case
     }
 
@@ -470,11 +486,28 @@ impl LocalBindingGenerator {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct FunctionBody {
+    block: Block,
+    argument_bindings: Vec<LocalBinding>,
+}
+
+impl FunctionBody {
+    pub fn block(&self) -> Block {
+        self.block
+    }
+
+    pub fn argument_bindings(&self) -> &[LocalBinding] {
+        &self.argument_bindings
+    }
+}
+
 #[derive(Clone, Deserialize, Debug)]
 pub struct ScfData {
     expressions: SlotMap<Expression, ExpressionData>,
     statements: SlotMap<Statement, StatementData>,
     blocks: SlotMap<Block, BlockData>,
+    function_bodies: FxHashMap<Function, FunctionBody>,
     local_binding_generator: LocalBindingGenerator,
 }
 
@@ -485,6 +518,7 @@ pub struct Scf {
     expressions: SlotMap<Expression, ExpressionData>,
     statements: SlotMap<Statement, StatementData>,
     blocks: SlotMap<Block, BlockData>,
+    function_bodies: FxHashMap<Function, FunctionBody>,
     local_binding_generator: LocalBindingGenerator,
 }
 
@@ -495,6 +529,7 @@ impl Scf {
             expressions: Default::default(),
             statements: Default::default(),
             blocks: Default::default(),
+            function_bodies: Default::default(),
             local_binding_generator: LocalBindingGenerator::new(),
         }
     }
@@ -504,6 +539,7 @@ impl Scf {
             expressions,
             statements,
             blocks,
+            function_bodies,
             local_binding_generator,
         } = data;
 
@@ -512,12 +548,30 @@ impl Scf {
             expressions,
             statements,
             blocks,
+            function_bodies,
             local_binding_generator,
         }
     }
 
     pub fn ty(&self) -> &TypeRegistry {
         &self.ty
+    }
+
+    pub fn register_function(&mut self, module: &Module, function: Function) -> &FunctionBody {
+        let sig = &module.fn_sigs[function];
+        let argument_bindings = sig
+            .args
+            .iter()
+            .map(|arg| self.local_binding_generator.generate(arg.ty))
+            .collect();
+        let block = self.blocks.insert(BlockData::new());
+
+        self.function_bodies
+            .entry(function)
+            .or_insert(FunctionBody {
+                block,
+                argument_bindings,
+            })
     }
 
     pub fn make_expr_local_value(&mut self, binding: LocalBinding) -> Expression {
@@ -529,7 +583,7 @@ impl Scf {
 
     pub fn make_expr_uniform_value(
         &mut self,
-        registry: UniformBindingRegistry,
+        registry: &UniformBindingRegistry,
         binding: UniformBinding,
     ) -> Expression {
         self.expressions.insert(ExpressionData {
@@ -540,7 +594,7 @@ impl Scf {
 
     pub fn make_expr_storage_value(
         &mut self,
-        registry: StorageBindingRegistry,
+        registry: &StorageBindingRegistry,
         binding: StorageBinding,
     ) -> Expression {
         self.expressions.insert(ExpressionData {
@@ -551,7 +605,7 @@ impl Scf {
 
     pub fn make_expr_workgroup_value(
         &mut self,
-        registry: WorkgroupBindingRegistry,
+        registry: &WorkgroupBindingRegistry,
         binding: WorkgroupBinding,
     ) -> Expression {
         self.expressions.insert(ExpressionData {
@@ -585,6 +639,22 @@ impl Scf {
         self.expressions.insert(ExpressionData {
             ty: TY_F32,
             kind: ExpressionKind::ConstF32(value),
+        })
+    }
+
+    pub fn make_expr_const_ptr(&mut self, base: Expression) -> Expression {
+        let base_data = &self.expressions[base];
+
+        assert!(
+            base_data.is_global_value(),
+            "SLIR only supports constant pointers to global values"
+        );
+
+        let ty = self.ty.register(TypeKind::Ptr(base_data.ty()));
+
+        self.expressions.insert(ExpressionData {
+            ty,
+            kind: ExpressionKind::ConstPtr(base),
         })
     }
 
@@ -673,6 +743,30 @@ impl Scf {
         self.expressions.insert(ExpressionData {
             ty: pointee_ty,
             kind: ExpressionKind::OpLoad(pointer),
+        })
+    }
+
+    pub fn make_expr_op_bool_to_switch_predicate(&mut self, value: Expression) -> Expression {
+        assert_eq!(self.expressions[value].ty, TY_BOOL);
+
+        self.expressions.insert(ExpressionData {
+            ty: TY_U32,
+            kind: ExpressionKind::OpBoolToSwitchPredicate(value),
+        })
+    }
+
+    pub fn make_expr_op_case_to_switch_predicate(
+        &mut self,
+        case: Expression,
+        cases: impl IntoIterator<Item = u32>,
+    ) -> Expression {
+        assert_eq!(self.expressions[case].ty, TY_U32);
+
+        let cases = cases.into_iter().collect::<Vec<_>>();
+
+        self.expressions.insert(ExpressionData {
+            ty: TY_U32,
+            kind: ExpressionKind::OpCaseToSwitchPredicate(OpCaseToSwitchPredicate { case, cases }),
         })
     }
 
@@ -818,7 +912,7 @@ impl Scf {
         }
     }
 
-    pub fn add_switch_case(&mut self, switch_statement: Statement, case: i64) -> Block {
+    pub fn add_switch_case(&mut self, switch_statement: Statement, case: u32) -> Block {
         let stmt = self.statements[switch_statement].kind.expect_switch_mut();
 
         if stmt.cases.iter().any(|c| c.case == case) {
@@ -849,7 +943,7 @@ impl Scf {
         case_block
     }
 
-    pub fn remove_switch_case(&mut self, switch_statement: Statement, case: i64) -> bool {
+    pub fn remove_switch_case(&mut self, switch_statement: Statement, case: u32) -> bool {
         let stmt = self.statements[switch_statement].kind.expect_switch_mut();
 
         if let Some(index) = stmt.cases.iter().position(|c| c.case == case) {
@@ -861,7 +955,7 @@ impl Scf {
         }
     }
 
-    pub fn add_stmt_loop(&mut self, block: Block, position: BlockPosition) -> Statement {
+    pub fn add_stmt_loop(&mut self, block: Block, position: BlockPosition) -> (Statement, Block) {
         let loop_block = self.blocks.insert(BlockData::new());
         let loop_statement = self.statements.insert(StatementData {
             kind: StatementKind::Loop(Loop {
@@ -873,7 +967,7 @@ impl Scf {
 
         self.blocks[block].add_statement(position, loop_statement);
 
-        loop_statement
+        (loop_statement, loop_block)
     }
 
     pub fn set_loop_control(&mut self, loop_statement: Statement, control: LoopControl) {
@@ -940,7 +1034,7 @@ impl Scf {
         block: Block,
         position: BlockPosition,
         expr: Expression,
-    ) -> Statement {
+    ) -> (Statement, LocalBinding) {
         let ty = self.expressions[expr].ty;
         let binding = self.local_binding_generator.generate(ty);
         let statement = self.statements.insert(StatementData {
@@ -949,7 +1043,7 @@ impl Scf {
 
         self.blocks[block].add_statement(position, statement);
 
-        statement
+        (statement, binding)
     }
 
     pub fn add_stmt_alloca(
@@ -957,7 +1051,7 @@ impl Scf {
         block: Block,
         position: BlockPosition,
         ty: Type,
-    ) -> Statement {
+    ) -> (Statement, LocalBinding) {
         let ptr_ty = self.ty.register(TypeKind::Ptr(ty));
         let binding = self.local_binding_generator.generate(ptr_ty);
         let statement = self.statements.insert(StatementData {
@@ -966,7 +1060,7 @@ impl Scf {
 
         self.blocks[block].add_statement(position, statement);
 
-        statement
+        (statement, binding)
     }
 
     pub fn add_stmt_store(
@@ -1005,6 +1099,10 @@ impl Scf {
         } else {
             false
         }
+    }
+
+    pub fn set_control_flow_var(&mut self, block: Block, index: usize, value: Expression) {
+        self.blocks[block].set_control_flow_var(index, value);
     }
 }
 
