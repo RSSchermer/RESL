@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use rustc_hash::FxHashMap;
 
 use crate::rvsdg::analyse::region_stratification::RegionStratifier;
-use crate::rvsdg::{Connectivity, Rvsdg, SimpleNode, ValueOrigin};
+use crate::rvsdg::{Connectivity, Rvsdg, ValueOrigin};
 use crate::scf::{BlockPosition, Expression, LoopControl, Scf};
 use crate::{rvsdg, scf, Function, Module};
 
@@ -158,22 +158,24 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
     fn visit_simple_node(&mut self, node: rvsdg::Node) {
         let data = self.rvsdg[node].expect_simple();
 
+        use crate::rvsdg::SimpleNode::*;
+
         match data {
-            SimpleNode::ConstU32(_) => self.visit_const_u32(node),
-            SimpleNode::ConstI32(_) => self.visit_const_i32(node),
-            SimpleNode::ConstF32(_) => self.visit_const_f32(node),
-            SimpleNode::ConstBool(_) => self.visit_const_bool(node),
-            SimpleNode::ConstPtr(_) => self.visit_const_ptr(node),
-            SimpleNode::ConstFallback(_) => self.visit_const_fallback(node),
-            SimpleNode::OpAlloca(_) => self.visit_op_alloca(node),
-            SimpleNode::OpLoad(_) => self.visit_op_load(node),
-            SimpleNode::OpStore(_) => self.visit_op_store(node),
-            SimpleNode::OpPtrElementPtr(_) => self.visit_op_ptr_element_ptr(node),
-            SimpleNode::OpExtractElement(_) => self.visit_op_extract_element(node),
-            SimpleNode::OpUnary(_) => self.visit_op_unary(node),
-            SimpleNode::OpBinary(_) => self.visit_op_binary(node),
-            SimpleNode::OpCaseToSwitchPredicate(_) => self.visit_op_case_to_switch_predicate(node),
-            SimpleNode::OpBoolToSwitchPredicate(_) => self.visit_op_bool_to_switch_predicate(node),
+            ConstU32(_) => self.visit_const_u32(node),
+            ConstI32(_) => self.visit_const_i32(node),
+            ConstF32(_) => self.visit_const_f32(node),
+            ConstBool(_) => self.visit_const_bool(node),
+            ConstPtr(_) => self.visit_const_ptr(node),
+            ConstFallback(_) => self.visit_const_fallback(node),
+            OpAlloca(_) => self.visit_op_alloca(node),
+            OpLoad(_) => self.visit_op_load(node),
+            OpStore(_) => self.visit_op_store(node),
+            OpPtrElementPtr(_) => self.visit_op_ptr_element_ptr(node),
+            OpExtractElement(_) => self.visit_op_extract_element(node),
+            OpUnary(_) => self.visit_op_unary(node),
+            OpBinary(_) => self.visit_op_binary(node),
+            OpCaseToSwitchPredicate(_) => self.visit_op_case_to_switch_predicate(node),
+            OpBoolToSwitchPredicate(_) => self.visit_op_bool_to_switch_predicate(node),
             _ => {
                 panic!("node kind not currently supported by SLIR's structured control-flow format")
             }
