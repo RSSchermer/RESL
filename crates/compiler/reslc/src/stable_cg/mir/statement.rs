@@ -10,7 +10,6 @@ use crate::stable_cg::{OperandValue, PlaceRef};
 impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
     #[instrument(level = "debug", skip(self, bx))]
     pub(crate) fn codegen_statement(&mut self, bx: &mut Bx, statement: &mir::Statement) {
-        dbg!(statement);
         match &statement.kind {
             mir::StatementKind::Assign(place, rvalue) => {
                 if place.projection.is_empty() {
