@@ -3,12 +3,14 @@ use std::fs::File;
 use ar::{GnuBuilder, Header};
 use slir::cfg::Cfg;
 use slir::rvsdg::Rvsdg;
+use slir::scf::Scf;
 use slir::{Module, Symbol};
 
 use crate::context::ReslContext;
 
 pub const MODULE_IDENTIFIER: &'static str = "module";
 pub const CFG_IDENTIFIER: &'static str = "cfg";
+pub const SCF_IDENTIFIER: &'static str = "scf";
 pub const RVSDG_INITIAL_IDENTIFIER: &'static str = "rvsdg_initial";
 pub const RVSDG_TRANSFORMED_IDENTIFIER: &'static str = "rvsdg_transformed";
 
@@ -23,6 +25,7 @@ pub struct SlirArtifactBuilder {
     module_name: Symbol,
     module_identifier: Vec<u8>,
     cfg_identifier: Vec<u8>,
+    scf_identifier: Vec<u8>,
     rvsdg_initial_identifier: Option<Vec<u8>>,
     rvsdg_transformed_identifier: Option<Vec<u8>>,
 }
@@ -49,12 +52,17 @@ impl SlirArtifactBuilder {
 
         let module_identifier = MODULE_IDENTIFIER.as_bytes().to_vec();
         let cfg_identifier = CFG_IDENTIFIER.as_bytes().to_vec();
+        let scf_identifier = SCF_IDENTIFIER.as_bytes().to_vec();
         let rvsdg_initial_identifier =
             include_rvsdg_initial.then(|| RVSDG_INITIAL_IDENTIFIER.as_bytes().to_vec());
         let rvsdg_transformed_identifier =
             include_rvsdg_transformed.then(|| RVSDG_TRANSFORMED_IDENTIFIER.as_bytes().to_vec());
 
-        let mut identifiers = vec![module_identifier.clone(), cfg_identifier.clone()];
+        let mut identifiers = vec![
+            module_identifier.clone(),
+            cfg_identifier.clone(),
+            scf_identifier.clone(),
+        ];
 
         if let Some(rvsdg_initial_identifier) = &rvsdg_initial_identifier {
             identifiers.push(rvsdg_initial_identifier.clone());
@@ -71,12 +79,13 @@ impl SlirArtifactBuilder {
             module_name,
             module_identifier,
             cfg_identifier,
+            scf_identifier,
             rvsdg_initial_identifier,
             rvsdg_transformed_identifier,
         }
     }
 
-    pub fn append_cfg(&mut self, cfg: &Cfg) {
+    pub fn add_cfg(&mut self, cfg: &Cfg) {
         let encoding = bincode::serde::encode_to_vec(cfg, bincode::config::standard())
             .expect("failed to encode SLIR Control-Flow Graph");
 
@@ -88,7 +97,19 @@ impl SlirArtifactBuilder {
             .expect("failed to append SLIR Control-Flow Graph to SLIR artifact archive");
     }
 
-    pub fn maybe_append_rvsdg_initial(&mut self, rvsdg: &Rvsdg) {
+    pub fn add_scf(&mut self, cfg: &Scf) {
+        let encoding = bincode::serde::encode_to_vec(cfg, bincode::config::standard())
+            .expect("failed to encode SLIR Structured Control-Flow");
+
+        self.inner
+            .append(
+                &Header::new(self.scf_identifier.clone(), encoding.len() as u64),
+                encoding.as_slice(),
+            )
+            .expect("failed to append SLIR Structured Control-Flow to SLIR artifact archive");
+    }
+
+    pub fn maybe_add_rvsdg_initial(&mut self, rvsdg: &Rvsdg) {
         if let Some(identifier) = self.rvsdg_initial_identifier.clone() {
             let encoding = bincode::serde::encode_to_vec(rvsdg, bincode::config::standard())
                 .expect("failed to encode SLIR RVSDG-initial");
@@ -102,7 +123,7 @@ impl SlirArtifactBuilder {
         }
     }
 
-    pub fn maybe_append_rvsdg_transformed(&mut self, rvsdg: &Rvsdg) {
+    pub fn maybe_add_rvsdg_transformed(&mut self, rvsdg: &Rvsdg) {
         if let Some(identifier) = self.rvsdg_transformed_identifier.clone() {
             let encoding = bincode::serde::encode_to_vec(rvsdg, bincode::config::standard())
                 .expect("failed to encode SLIR RVSDG-transformed");
