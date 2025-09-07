@@ -1,6 +1,7 @@
 $border-color: #333333;
 $shadow-color: #aaaaaa;
 $cfg-value-color: #915d09;
+$scf-local-binding-color: #915d09;
 $card-bg-color: #e6e8ed;
 
 body {
@@ -103,4 +104,21 @@ main {
 
 .cfg-value.highlighted {
 	font-weight: bold;
+}
+
+.scf-function-body {
+    font-family: monospace;
+}
+
+.scf-indent {
+    padding-left: 4ch;
+}
+
+.scf-local-binding {
+    cursor: pointer;
+    color: $scf-local-binding-color;
+}
+
+.scf-local-binding.highlighted {
+    font-weight: bold;
 }

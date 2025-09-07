@@ -4,6 +4,7 @@ use thaw::*;
 
 use crate::module_explorer::cfg_explorer::CfgExplorer;
 use crate::module_explorer::rvsdg_explorer::{RvsdgExplorer, RvsdgStage};
+use crate::module_explorer::scf_explorer::ScfExplorer;
 use crate::module_explorer::tpe::Type;
 use crate::module_explorer::ModuleData;
 
@@ -63,7 +64,7 @@ pub fn FunctionExplorer(
                         } else if mode.read().as_str() == "rvsdg-transformed" {
                             view! {<RvsdgExplorer module function stage=RvsdgStage::Transformed/>}.into_any()
                         } else {
-                            view! {}.into_any()
+                            view! {<ScfExplorer module function/>}.into_any()
                         }
                     }}
                 </div>

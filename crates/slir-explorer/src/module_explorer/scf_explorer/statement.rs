@@ -1,0 +1,240 @@
+use leptos::prelude::*;
+use leptos::{component, IntoView};
+use slir::scf::{LoopControl, StatementKind};
+
+use crate::module_explorer::scf_explorer::block::Block;
+use crate::module_explorer::scf_explorer::expression::Expression;
+use crate::module_explorer::scf_explorer::local_binding::LocalBinding;
+use crate::module_explorer::scf_explorer::HighlightSignal;
+use crate::module_explorer::tpe::Type;
+use crate::module_explorer::ModuleData;
+
+#[component]
+pub fn Statement(
+    module: StoredValue<ModuleData>,
+    statement: slir::scf::Statement,
+    highlight: HighlightSignal,
+) -> impl IntoView {
+    let module_data = module.read_value();
+    let stmt_data = &module_data.scf.as_ref().unwrap()[statement];
+
+    match stmt_data.kind() {
+        StatementKind::If(_) => view! {
+            <br/><If module statement highlight /><br/><br/>
+        }
+        .into_any(),
+        StatementKind::Switch(_) => view! {
+            <br/><Switch module statement highlight /><br/><br/>
+        }
+        .into_any(),
+        StatementKind::Loop(_) => view! {
+            <br/><Loop module statement highlight /><br/><br/>
+        }
+        .into_any(),
+        StatementKind::Return(_) => view! {
+            <Return module statement highlight /><br/>
+        }
+        .into_any(),
+        StatementKind::ExprBinding(_) => view! {
+            <ExprBinding module statement highlight /><br/>
+        }
+        .into_any(),
+        StatementKind::Alloca(_) => view! {
+            <Alloca module statement highlight /><br/>
+        }
+        .into_any(),
+        StatementKind::Store(_) => view! {
+            <Store module statement highlight /><br/>
+        }
+        .into_any(),
+    }
+}
+
+#[component]
+pub fn If(
+    module: StoredValue<ModuleData>,
+    statement: slir::scf::Statement,
+    highlight: HighlightSignal,
+) -> impl IntoView {
+    let module_data = module.read_value();
+    let stmt = module_data.expect_scf()[statement].kind().expect_if();
+
+    view! {
+        {move || {
+            let m = module.read_value();
+            let stmt = m.expect_scf()[statement].kind().expect_if();
+
+            stmt.out_vars().iter().map(|var| view!{
+                "var "<LocalBinding module binding=*var highlight />": "<Type module ty=var.ty() />";"<br/>
+            }).collect_view()
+        }}
+        <br/>
+        "if " <Expression module expression=stmt.condition() highlight /> " {"<br/>
+            <Block module block=stmt.then_block() highlight />
+        "} "
+        {move || {
+            let m = module.read_value();
+            let stmt = m.expect_scf()[statement].kind().expect_if();
+
+            stmt.else_block().map(|else_block| {
+                view! {
+                    "else {"<br/>
+                        <Block module block=else_block highlight />
+                    "}"
+                }
+            })
+        }}
+    }
+}
+
+#[component]
+pub fn Switch(
+    module: StoredValue<ModuleData>,
+    statement: slir::scf::Statement,
+    highlight: HighlightSignal,
+) -> impl IntoView {
+    let module_data = module.read_value();
+    let stmt = module_data.expect_scf()[statement].kind().expect_switch();
+
+    view! {
+        {move || {
+            let m = module.read_value();
+            let stmt = m.expect_scf()[statement].kind().expect_switch();
+
+            stmt.out_vars().iter().map(|var| view!{
+                "var "<LocalBinding module binding=*var highlight />": "<Type module ty=var.ty() />";"<br/>
+            }).collect_view()
+        }}
+        <br/>
+        "switch " <Expression module expression=stmt.on() highlight /> " {"<br/>
+            <div class="scf-indent">
+                {move || {
+                    let m = module.read_value();
+                    let stmt = m.expect_scf()[statement].kind().expect_switch();
+
+                    stmt.cases().iter().map(|case| {
+                        view! {
+                            "case "{case.case()}": {"<br/>
+                                <Block module block=case.block() highlight />
+                            "}"<br/>
+                        }
+                    }).collect_view()
+                }}
+                "default: {"<br/>
+                    <Block module block=stmt.default() highlight />
+                "}"
+            </div>
+        "}"
+    }
+}
+
+#[component]
+pub fn Loop(
+    module: StoredValue<ModuleData>,
+    statement: slir::scf::Statement,
+    highlight: HighlightSignal,
+) -> impl IntoView {
+    view! {
+        {move || {
+            let m = module.read_value();
+            let stmt = m.expect_scf()[statement].kind().expect_loop();
+
+            stmt.loop_vars().iter().map(|var| view!{
+                "var "<LocalBinding module binding=var.binding() highlight />
+                " = "<Expression module expression=var.initial_value() highlight />";"<br/>
+            }).collect_view()
+        }}
+        <br/>
+        {move || {
+            let m = module.read_value();
+            let stmt = m.expect_scf()[statement].kind().expect_loop();
+
+            match stmt.control() {
+                LoopControl::Head(expression) => view!{
+                    "while "<Expression module expression highlight />" {"<br/>
+                        <Block module block=stmt.block() highlight />
+                    "}"<br/>
+                }.into_any(),
+                LoopControl::Tail(expression) => view!{
+                    "do {"<br/>
+                        <Block module block=stmt.block() highlight />
+                    "} while "<Expression module expression highlight />";"<br/>
+                }.into_any(),
+                LoopControl::Infinite => view!{
+                    "loop {"<br/>
+                        <Block module block=stmt.block() highlight />
+                    "}"<br/>
+                }.into_any()
+            }
+        }}
+    }
+}
+
+#[component]
+pub fn Return(
+    module: StoredValue<ModuleData>,
+    statement: slir::scf::Statement,
+    highlight: HighlightSignal,
+) -> impl IntoView {
+    let module_data = module.read_value();
+    let stmt = module_data.expect_scf()[statement].kind().expect_return();
+
+    if let Some(expression) = stmt.value() {
+        view! {
+            "return "<Expression module expression highlight />";"
+        }
+        .into_any()
+    } else {
+        view! {
+            "return;"
+        }
+        .into_any()
+    }
+}
+
+#[component]
+pub fn ExprBinding(
+    module: StoredValue<ModuleData>,
+    statement: slir::scf::Statement,
+    highlight: HighlightSignal,
+) -> impl IntoView {
+    let module_data = module.read_value();
+    let stmt = module_data.expect_scf()[statement]
+        .kind()
+        .expect_expr_binding();
+
+    view! {
+        "let "<LocalBinding module binding=stmt.binding() highlight />
+        " = "<Expression module expression=stmt.expression() highlight />";"
+    }
+}
+
+#[component]
+pub fn Alloca(
+    module: StoredValue<ModuleData>,
+    statement: slir::scf::Statement,
+    highlight: HighlightSignal,
+) -> impl IntoView {
+    let module_data = module.read_value();
+    let stmt = module_data.expect_scf()[statement].kind().expect_alloca();
+
+    view! {
+        "let "<LocalBinding module binding=stmt.binding() highlight />" = alloca;"
+    }
+}
+
+#[component]
+pub fn Store(
+    module: StoredValue<ModuleData>,
+    statement: slir::scf::Statement,
+    highlight: HighlightSignal,
+) -> impl IntoView {
+    let module_data = module.read_value();
+    let stmt = module_data.expect_scf()[statement].kind().expect_store();
+
+    view! {
+        <Expression module expression=stmt.pointer() highlight />
+        " *= "
+        <Expression module expression=stmt.value() highlight />";"<br/>
+    }
+}

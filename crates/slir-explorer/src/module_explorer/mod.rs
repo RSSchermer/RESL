@@ -3,6 +3,7 @@ pub mod cfg_explorer;
 pub mod function_explorer;
 pub mod inner;
 mod rvsdg_explorer;
+mod scf_explorer;
 pub mod struct_explorer;
 pub mod tpe;
 
@@ -45,6 +46,13 @@ struct ModuleData {
     pub cfg: slir::cfg::Cfg,
     pub rvsdg_initial: Option<slir::rvsdg::Rvsdg>,
     pub rvsdg_transformed: Option<slir::rvsdg::Rvsdg>,
+    pub scf: Option<slir::scf::Scf>,
+}
+
+impl ModuleData {
+    pub fn expect_scf(&self) -> &slir::scf::Scf {
+        self.scf.as_ref().expect("SCF data is not present")
+    }
 }
 
 /// Renders the home page of your application.
@@ -88,6 +96,7 @@ pub fn ModuleExplorer() -> impl IntoView {
                     let mut cfg = None;
                     let mut rvsdg_initial = None;
                     let mut rvsdg_transformed = None;
+                    let mut scf = None;
 
                     while let Some(entry_result) = archive.next_entry() {
                         let mut entry = entry_result.unwrap();
@@ -133,6 +142,16 @@ pub fn ModuleExplorer() -> impl IntoView {
 
                             rvsdg_transformed = Some(decoded);
                         }
+
+                        if entry.header().identifier() == "scf".as_bytes() {
+                            let decoded: slir::scf::ScfData = bincode::serde::decode_from_std_read(
+                                &mut entry,
+                                bincode::config::standard(),
+                            )
+                            .expect("SCF encoding was invalid");
+
+                            scf = Some(decoded);
+                        }
                     }
 
                     let module =
@@ -142,12 +161,15 @@ pub fn ModuleExplorer() -> impl IntoView {
                         .map(|data| slir::rvsdg::Rvsdg::from_ty_and_data(module.ty.clone(), data));
                     let rvsdg_transformed = rvsdg_transformed
                         .map(|data| slir::rvsdg::Rvsdg::from_ty_and_data(module.ty.clone(), data));
+                    let scf =
+                        scf.map(|data| slir::scf::Scf::from_ty_and_data(module.ty.clone(), data));
 
                     ModuleData {
                         module,
                         cfg,
                         rvsdg_initial,
                         rvsdg_transformed,
+                        scf,
                     }
                 })
                 .map_err(|err| err.clone())
