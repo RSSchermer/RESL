@@ -24,6 +24,16 @@ pub struct LocalBinding {
     ty: Type,
 }
 
+impl LocalBinding {
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    pub fn ty(&self) -> Type {
+        self.ty
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct ExpressionData {
     ty: Type,
@@ -155,6 +165,144 @@ pub enum ExpressionKind {
     OpCaseToSwitchPredicate(OpCaseToSwitchPredicate),
 }
 
+impl ExpressionKind {
+    pub fn expect_local_value(&self) -> LocalBinding {
+        if let ExpressionKind::LocalValue(binding) = self {
+            *binding
+        } else {
+            panic!("expected a local-value expression");
+        }
+    }
+
+    pub fn expect_uniform_value(&self) -> UniformBinding {
+        if let ExpressionKind::UniformValue(binding) = self {
+            *binding
+        } else {
+            panic!("expected a uniform-value expression");
+        }
+    }
+
+    pub fn expect_storage_value(&self) -> StorageBinding {
+        if let ExpressionKind::StorageValue(binding) = self {
+            *binding
+        } else {
+            panic!("expected a storage-value expression");
+        }
+    }
+
+    pub fn expect_workgroup_value(&self) -> WorkgroupBinding {
+        if let ExpressionKind::WorkgroupValue(binding) = self {
+            *binding
+        } else {
+            panic!("expected a workgroup-value expression");
+        }
+    }
+
+    pub fn expect_fallback_value(&self) -> Type {
+        if let ExpressionKind::FallbackValue(ty) = self {
+            *ty
+        } else {
+            panic!("expected a fallback-value expression");
+        }
+    }
+
+    pub fn expect_const_u32(&self) -> u32 {
+        if let ExpressionKind::ConstU32(value) = self {
+            *value
+        } else {
+            panic!("expected a constant u32 expression");
+        }
+    }
+
+    pub fn expect_const_i32(&self) -> i32 {
+        if let ExpressionKind::ConstI32(value) = self {
+            *value
+        } else {
+            panic!("expected a constant i32 expression");
+        }
+    }
+
+    pub fn expect_const_f32(&self) -> f32 {
+        if let ExpressionKind::ConstF32(value) = self {
+            *value
+        } else {
+            panic!("expected a constant f32 expression");
+        }
+    }
+
+    pub fn expect_const_bool(&self) -> bool {
+        if let ExpressionKind::ConstBool(value) = self {
+            *value
+        } else {
+            panic!("expected a constant bool expression");
+        }
+    }
+
+    pub fn expect_const_ptr(&self) -> &Expression {
+        if let ExpressionKind::ConstPtr(expr) = self {
+            expr
+        } else {
+            panic!("expected a constant pointer expression");
+        }
+    }
+
+    pub fn expect_op_unary(&self) -> &OpUnary {
+        if let ExpressionKind::OpUnary(op) = self {
+            op
+        } else {
+            panic!("expected an unary operation expression");
+        }
+    }
+
+    pub fn expect_op_binary(&self) -> &OpBinary {
+        if let ExpressionKind::OpBinary(op) = self {
+            op
+        } else {
+            panic!("expected a binary operation expression");
+        }
+    }
+
+    pub fn expect_op_ptr_element_ptr(&self) -> &OpPtrElementPtr {
+        if let ExpressionKind::OpPtrElementPtr(op) = self {
+            op
+        } else {
+            panic!("expected a pointer-element-pointer operation expression");
+        }
+    }
+
+    pub fn expect_op_extract_element(&self) -> &OpExtractElement {
+        if let ExpressionKind::OpExtractElement(op) = self {
+            op
+        } else {
+            panic!("expected an extract-element operation expression");
+        }
+    }
+
+    pub fn expect_op_load(&self) -> Expression {
+        if let ExpressionKind::OpLoad(op) = self {
+            *op
+        } else {
+            panic!("expected a load operation expression");
+        }
+    }
+
+    pub fn expect_op_bool_to_switch_predicate(&self) -> Expression {
+        if let ExpressionKind::OpBoolToSwitchPredicate(op) = self {
+            *op
+        } else {
+            panic!("expected a boolean-to-switch-predicate operation expression");
+        }
+    }
+
+    pub fn expect_op_case_to_switch_predicate(&self) -> &OpCaseToSwitchPredicate {
+        if let ExpressionKind::OpCaseToSwitchPredicate(op) = self {
+            op
+        } else {
+            panic!("expected a case-to-switch-predicate operation expression");
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct BlockData {
     statements: IndexSet<Statement>,
@@ -178,6 +326,14 @@ impl BlockData {
             .control_flow_vars
             .get(&binding)
             .expect("no control-flow variable associated with the local binding")
+    }
+
+    pub fn control_flow_var_iter(
+        &self,
+    ) -> impl Iterator<Item = (LocalBinding, Expression)> + use<'_> {
+        self.control_flow_vars
+            .iter()
+            .map(|(binding, expr)| (*binding, *expr))
     }
 
     fn add_statement(&mut self, position: BlockPosition, statement: Statement) {
@@ -238,7 +394,7 @@ impl BlockData {
     }
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize, Debug)]
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize, Debug)]
 pub enum LoopControl {
     Head(Expression),
     Tail(Expression),
@@ -364,12 +520,28 @@ impl Return {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct ExprBinding {
     binding: LocalBinding,
-    expr: Expression,
+    expression: Expression,
+}
+
+impl ExprBinding {
+    pub fn binding(&self) -> LocalBinding {
+        self.binding
+    }
+
+    pub fn expression(&self) -> Expression {
+        self.expression
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Alloca {
     binding: LocalBinding,
+}
+
+impl Alloca {
+    pub fn binding(&self) -> LocalBinding {
+        self.binding
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -379,7 +551,7 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn ptr(&self) -> Expression {
+    pub fn pointer(&self) -> Expression {
         self.pointer
     }
 
@@ -456,6 +628,38 @@ impl StatementKind {
             stmt
         } else {
             panic!("expected a loop statement");
+        }
+    }
+
+    pub fn expect_return(&self) -> &Return {
+        if let StatementKind::Return(stmt) = self {
+            stmt
+        } else {
+            panic!("expected a return statement");
+        }
+    }
+
+    pub fn expect_expr_binding(&self) -> &ExprBinding {
+        if let StatementKind::ExprBinding(stmt) = self {
+            stmt
+        } else {
+            panic!("expected an expression-binding statement");
+        }
+    }
+
+    pub fn expect_alloca(&self) -> &Alloca {
+        if let StatementKind::Alloca(stmt) = self {
+            stmt
+        } else {
+            panic!("expected an alloca statement");
+        }
+    }
+
+    pub fn expect_store(&self) -> &Store {
+        if let StatementKind::Store(stmt) = self {
+            stmt
+        } else {
+            panic!("expected a store statement");
         }
     }
 }
@@ -572,6 +776,10 @@ impl Scf {
                 block,
                 argument_bindings,
             })
+    }
+
+    pub fn get_function_body(&self, function: Function) -> Option<&FunctionBody> {
+        self.function_bodies.get(&function)
     }
 
     pub fn make_expr_local_value(&mut self, binding: LocalBinding) -> Expression {
@@ -932,7 +1140,7 @@ impl Scf {
             case_block_data.add_control_flow_var(binding, fallback);
         }
 
-        let case_block = self.blocks.insert(BlockData::new());
+        let case_block = self.blocks.insert(case_block_data);
         let stmt = self.statements[switch_statement].kind.expect_switch_mut();
 
         stmt.cases.push(SwitchCase {
@@ -1038,7 +1246,10 @@ impl Scf {
         let ty = self.expressions[expr].ty;
         let binding = self.local_binding_generator.generate(ty);
         let statement = self.statements.insert(StatementData {
-            kind: StatementKind::ExprBinding(ExprBinding { binding, expr }),
+            kind: StatementKind::ExprBinding(ExprBinding {
+                binding,
+                expression: expr,
+            }),
         });
 
         self.blocks[block].add_statement(position, statement);

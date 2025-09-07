@@ -84,6 +84,7 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
         let switch_stmt = self
             .scf
             .add_stmt_switch(self.dst_block, BlockPosition::Append, on);
+        let default_block = self.scf[switch_stmt].kind().expect_switch().default();
 
         // Add out variables to the switch statement and record them in the value mapping.
         for (i, output) in data.value_outputs().iter().enumerate() {
@@ -103,7 +104,15 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
         }
 
         for (i, branch) in data.branches().iter().copied().enumerate() {
-            let branch_block = self.scf.add_switch_case(switch_stmt, i as u32);
+            let is_last = i == data.branches().len() - 1;
+
+            // We use the switch's default block for the last case.
+            let branch_block = if is_last {
+                default_block
+            } else {
+                self.scf.add_switch_case(switch_stmt, i as u32)
+            };
+
             let sub_region_mapping =
                 self.visit_sub_region(branch, branch_block, argument_mapping.clone());
 
@@ -475,5 +484,463 @@ impl<'a, 'b> ScfBuilder<'a, 'b> {
 
     pub fn into_result(self) -> Scf {
         self.scf
+    }
+}
+
+pub fn rvsdg_entry_points_to_scf(module: &Module, rvsdg: &Rvsdg) -> Scf {
+    let mut builder = ScfBuilder::new(module, rvsdg);
+
+    for (entry_point, _) in module.entry_points.iter() {
+        builder.build_function_body(entry_point);
+    }
+
+    builder.into_result()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::iter;
+
+    use super::*;
+    use crate::rvsdg::{ValueInput, ValueOutput};
+    use crate::ty::{TY_DUMMY, TY_PREDICATE, TY_U32};
+    use crate::{BinaryOperator, FnArg, FnSig, Symbol};
+
+    #[test]
+    fn test_single_region() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let node = rvsdg.add_op_binary(
+            region,
+            BinaryOperator::Add,
+            ValueInput::argument(TY_U32, 0),
+            ValueInput::argument(TY_U32, 1),
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: node,
+                output: 0,
+            },
+        );
+
+        let mut builder = ScfBuilder::new(&module, &rvsdg);
+
+        builder.build_function_body(function);
+
+        let scf = builder.into_result();
+
+        let body = scf
+            .get_function_body(function)
+            .expect("should have registered a function body");
+
+        assert_eq!(body.argument_bindings().len(), 2);
+        assert_eq!(body.argument_bindings()[0].ty(), TY_U32);
+        assert_eq!(body.argument_bindings()[1].ty(), TY_U32);
+
+        let block_data = &scf[body.block()];
+
+        assert_eq!(block_data.statements().len(), 2);
+
+        let statement_0 = block_data.statements()[0];
+        let statement_1 = block_data.statements()[1];
+
+        let statement_0_data = scf[statement_0].kind().expect_expr_binding();
+        let statement_0_binding = statement_0_data.binding();
+        let op_binary = scf[statement_0_data.expression()].kind().expect_op_binary();
+
+        assert_eq!(op_binary.operator(), BinaryOperator::Add);
+
+        let lhs = scf[op_binary.lhs()].kind().expect_local_value();
+
+        assert_eq!(lhs, body.argument_bindings()[0]);
+
+        let rhs = scf[op_binary.rhs()].kind().expect_local_value();
+
+        assert_eq!(rhs, body.argument_bindings()[1]);
+
+        let statement_1_data = scf[statement_1].kind().expect_return();
+
+        let return_value = statement_1_data
+            .value()
+            .expect("should have a return value");
+        let return_value_data = scf[return_value].kind().expect_local_value();
+
+        assert_eq!(return_value_data, statement_0_binding);
+    }
+
+    #[test]
+    fn test_switch_node() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_PREDICATE,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let switch_node = rvsdg.add_switch(
+            region,
+            vec![
+                ValueInput::argument(TY_PREDICATE, 0),
+                ValueInput::argument(TY_U32, 1),
+            ],
+            vec![ValueOutput::new(TY_U32)],
+            None,
+        );
+
+        let branch_0 = rvsdg.add_switch_branch(switch_node);
+
+        let branch_0_const_node = rvsdg.add_const_u32(branch_0, 1);
+        let branch_0_add_node = rvsdg.add_op_binary(
+            branch_0,
+            BinaryOperator::Add,
+            ValueInput::argument(TY_U32, 0),
+            ValueInput::output(TY_U32, branch_0_const_node, 0),
+        );
+
+        rvsdg.reconnect_region_result(
+            branch_0,
+            0,
+            ValueOrigin::Output {
+                producer: branch_0_add_node,
+                output: 0,
+            },
+        );
+
+        let branch_1 = rvsdg.add_switch_branch(switch_node);
+
+        let branch_1_const_node = rvsdg.add_const_u32(branch_1, 0);
+
+        rvsdg.reconnect_region_result(
+            branch_1,
+            0,
+            ValueOrigin::Output {
+                producer: branch_1_const_node,
+                output: 0,
+            },
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: switch_node,
+                output: 0,
+            },
+        );
+
+        let mut builder = ScfBuilder::new(&module, &rvsdg);
+
+        builder.build_function_body(function);
+
+        let scf = builder.into_result();
+
+        let body = scf
+            .get_function_body(function)
+            .expect("should have registered a function body");
+
+        assert_eq!(body.argument_bindings().len(), 2);
+        assert_eq!(body.argument_bindings()[0].ty(), TY_PREDICATE);
+        assert_eq!(body.argument_bindings()[1].ty(), TY_U32);
+
+        let block_data = &scf[body.block()];
+
+        assert_eq!(block_data.statements().len(), 2);
+
+        let stmt_switch = block_data.statements()[0];
+        let stmt_return = block_data.statements()[1];
+
+        let stmt_switch_data = scf[stmt_switch].kind().expect_switch();
+
+        assert_eq!(stmt_switch_data.out_vars().len(), 1);
+
+        let stmt_switch_out_var = stmt_switch_data.out_vars()[0];
+
+        assert_eq!(stmt_switch_data.cases().len(), 1);
+
+        let case_0_block = stmt_switch_data.cases()[0].block();
+        let case_0_block_data = &scf[case_0_block];
+
+        assert_eq!(case_0_block_data.statements().len(), 2);
+
+        let case_0_stmt_const = case_0_block_data.statements()[0];
+        let case_0_stmt_add = case_0_block_data.statements()[1];
+
+        let case_0_stmt_const_data = scf[case_0_stmt_const].kind().expect_expr_binding();
+        let case_0_stmt_const_binding = case_0_stmt_const_data.binding();
+        let case_0_stmt_const_expr = case_0_stmt_const_data.expression();
+
+        assert_eq!(scf[case_0_stmt_const_expr].kind().expect_const_u32(), 1);
+
+        let case_0_stmt_add_data = scf[case_0_stmt_add].kind().expect_expr_binding();
+        let case_0_stmt_add_binding = case_0_stmt_add_data.binding();
+        let case_0_stmt_add_expr = case_0_stmt_add_data.expression();
+
+        let case_0_add_data = scf[case_0_stmt_add_expr].kind().expect_op_binary();
+
+        assert_eq!(case_0_add_data.operator(), BinaryOperator::Add);
+
+        let lhs_data = scf[case_0_add_data.lhs()].kind().expect_local_value();
+        let rhs_data = scf[case_0_add_data.rhs()].kind().expect_local_value();
+
+        assert_eq!(lhs_data, body.argument_bindings()[1]);
+        assert_eq!(rhs_data, case_0_stmt_const_binding);
+
+        let case_0_var_0_expr = case_0_block_data.control_flow_var(stmt_switch_out_var);
+        let case_0_var_0_value = scf[case_0_var_0_expr].kind().expect_local_value();
+
+        assert_eq!(case_0_var_0_value, case_0_stmt_add_binding);
+
+        let default_block_data = &scf[stmt_switch_data.default()];
+
+        assert_eq!(default_block_data.statements().len(), 1);
+
+        let default_stmt_const = default_block_data.statements()[0];
+
+        let default_stmt_const_data = scf[default_stmt_const].kind().expect_expr_binding();
+        let default_stmt_const_binding = default_stmt_const_data.binding();
+        let default_stmt_const_expr = default_stmt_const_data.expression();
+
+        assert_eq!(scf[default_stmt_const_expr].kind().expect_const_u32(), 0);
+
+        let default_var_0_expr = default_block_data.control_flow_var(stmt_switch_out_var);
+        let default_var_0_value = scf[default_var_0_expr].kind().expect_local_value();
+
+        assert_eq!(default_var_0_value, default_stmt_const_binding);
+
+        let stmt_return_data = scf[stmt_return].kind().expect_return();
+
+        let return_expr = stmt_return_data
+            .value()
+            .expect("should have a return value");
+        let return_value = scf[return_expr].kind().expect_local_value();
+
+        assert_eq!(return_value, stmt_switch_out_var);
+    }
+
+    #[test]
+    fn test_loop_node() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![FnArg {
+                    ty: TY_U32,
+                    shader_io_binding: None,
+                }],
+                ret_ty: Some(TY_U32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let (loop_node, loop_region) =
+            rvsdg.add_loop(region, vec![ValueInput::argument(TY_U32, 0)], None);
+
+        let added_value_node = rvsdg.add_const_u32(loop_region, 1);
+        let add_node = rvsdg.add_op_binary(
+            loop_region,
+            BinaryOperator::Add,
+            ValueInput::argument(TY_U32, 0),
+            ValueInput::output(TY_U32, added_value_node, 0),
+        );
+        let compare_value_node = rvsdg.add_const_u32(loop_region, 10);
+        let compare_node = rvsdg.add_op_binary(
+            loop_region,
+            BinaryOperator::Lt,
+            ValueInput::output(TY_U32, add_node, 0),
+            ValueInput::output(TY_U32, compare_value_node, 0),
+        );
+
+        rvsdg.reconnect_region_result(
+            loop_region,
+            0,
+            ValueOrigin::Output {
+                producer: compare_node,
+                output: 0,
+            },
+        );
+        rvsdg.reconnect_region_result(
+            loop_region,
+            1,
+            ValueOrigin::Output {
+                producer: add_node,
+                output: 0,
+            },
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: loop_node,
+                output: 0,
+            },
+        );
+
+        let mut builder = ScfBuilder::new(&module, &rvsdg);
+
+        builder.build_function_body(function);
+
+        let scf = builder.into_result();
+
+        let body = scf
+            .get_function_body(function)
+            .expect("should have registered a function body");
+
+        assert_eq!(body.argument_bindings().len(), 1);
+        assert_eq!(body.argument_bindings()[0].ty(), TY_U32);
+
+        let block_data = &scf[body.block()];
+
+        assert_eq!(block_data.statements().len(), 2);
+
+        let stmt_loop = block_data.statements()[0];
+        let stmt_return = block_data.statements()[1];
+
+        let stmt_loop_data = scf[stmt_loop].kind().expect_loop();
+
+        assert_eq!(stmt_loop_data.loop_vars().len(), 1);
+
+        let loop_var = stmt_loop_data.loop_vars()[0];
+        let loop_var_init_value = scf[loop_var.initial_value()].kind().expect_local_value();
+
+        assert_eq!(loop_var_init_value, body.argument_bindings()[0]);
+
+        let loop_block = stmt_loop_data.block();
+        let loop_block_data = &scf[loop_block];
+
+        assert_eq!(loop_block_data.statements().len(), 4);
+
+        let loop_block_stmt_0 = loop_block_data.statements()[0];
+        let loop_block_stmt_1 = loop_block_data.statements()[1];
+        let loop_block_stmt_2 = loop_block_data.statements()[2];
+        let loop_block_stmt_3 = loop_block_data.statements()[3];
+
+        let added_value_data = scf[loop_block_stmt_0].kind().expect_expr_binding();
+        let added_value_binding = added_value_data.binding();
+        let added_value_expr = added_value_data.expression();
+
+        assert_eq!(scf[added_value_expr].kind().expect_const_u32(), 1);
+
+        let compare_value_data = scf[loop_block_stmt_1].kind().expect_expr_binding();
+        let compare_value_binding = compare_value_data.binding();
+        let compare_value_expr = compare_value_data.expression();
+
+        assert_eq!(scf[compare_value_expr].kind().expect_const_u32(), 10);
+
+        let add_data = scf[loop_block_stmt_2].kind().expect_expr_binding();
+        let add_binding = add_data.binding();
+        let add_expr = add_data.expression();
+
+        let add_expr_data = scf[add_expr].kind().expect_op_binary();
+
+        assert_eq!(add_expr_data.operator(), BinaryOperator::Add);
+
+        let lhs = scf[add_expr_data.lhs()].kind().expect_local_value();
+
+        assert_eq!(lhs, loop_var.binding());
+
+        let rhs = scf[add_expr_data.rhs()].kind().expect_local_value();
+
+        assert_eq!(rhs, added_value_binding);
+
+        let compare_data = scf[loop_block_stmt_3].kind().expect_expr_binding();
+        let compare_binding = compare_data.binding();
+        let compare_expr = compare_data.expression();
+
+        let compare_expr_data = scf[compare_expr].kind().expect_op_binary();
+
+        assert_eq!(compare_expr_data.operator(), BinaryOperator::Lt);
+
+        let lhs = scf[compare_expr_data.lhs()].kind().expect_local_value();
+
+        assert_eq!(lhs, add_binding);
+
+        let rhs = scf[compare_expr_data.rhs()].kind().expect_local_value();
+
+        assert_eq!(rhs, compare_value_binding);
+
+        let loop_var_0_expr = loop_block_data.control_flow_var(loop_var.binding());
+        let loop_var_0_value = scf[loop_var_0_expr].kind().expect_local_value();
+
+        assert_eq!(loop_var_0_value, add_binding);
+
+        let LoopControl::Tail(reentry_control_expr) = stmt_loop_data.control() else {
+            panic!("should be tail-controlled loop")
+        };
+
+        let reentry_control_binding = scf[reentry_control_expr].kind().expect_local_value();
+
+        assert_eq!(reentry_control_binding, compare_binding);
+
+        let stmt_return_data = scf[stmt_return].kind().expect_return();
+
+        let return_expr = stmt_return_data
+            .value()
+            .expect("should have a return value");
+        let return_value = scf[return_expr].kind().expect_local_value();
+
+        assert_eq!(return_value, loop_var.binding());
     }
 }

@@ -4691,15 +4691,6 @@ mod tests {
             None,
         );
 
-        rvsdg.reconnect_region_result(
-            region,
-            0,
-            ValueOrigin::Output {
-                producer: switch_node,
-                output: 0,
-            },
-        );
-
         let branch_0 = rvsdg.add_switch_branch(switch_node);
 
         let branch_0_node_0 = rvsdg.add_const_u32(branch_0, 1);
@@ -4728,6 +4719,15 @@ mod tests {
             0,
             ValueOrigin::Output {
                 producer: branch_1_node_0,
+                output: 0,
+            },
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: switch_node,
                 output: 0,
             },
         );
@@ -4882,15 +4882,6 @@ mod tests {
         let (loop_node, loop_region) =
             rvsdg.add_loop(region, vec![ValueInput::argument(TY_U32, 0)], None);
 
-        rvsdg.reconnect_region_result(
-            region,
-            0,
-            ValueOrigin::Output {
-                producer: loop_node,
-                output: 0,
-            },
-        );
-
         let loop_node_0 = rvsdg.add_const_u32(loop_region, 1);
         let loop_node_1 = rvsdg.add_op_binary(
             loop_region,
@@ -4901,7 +4892,7 @@ mod tests {
         let loop_node_2 = rvsdg.add_const_u32(loop_region, 10);
         let loop_node_3 = rvsdg.add_op_binary(
             loop_region,
-            BinaryOperator::Gt,
+            BinaryOperator::Lt,
             ValueInput::output(TY_U32, loop_node_1, 0),
             ValueInput::output(TY_U32, loop_node_2, 0),
         );
@@ -4919,6 +4910,15 @@ mod tests {
             1,
             ValueOrigin::Output {
                 producer: loop_node_1,
+                output: 0,
+            },
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: loop_node,
                 output: 0,
             },
         );
