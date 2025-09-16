@@ -185,6 +185,7 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
             OpBinary(_) => self.visit_op_binary(node),
             OpCaseToSwitchPredicate(_) => self.visit_op_case_to_switch_predicate(node),
             OpBoolToSwitchPredicate(_) => self.visit_op_bool_to_switch_predicate(node),
+            OpU32ToSwitchPredicate(_) => self.visit_op_u32_to_switch_predicate(node),
             _ => {
                 panic!("node kind not currently supported by SLIR's structured control-flow format")
             }
@@ -316,6 +317,13 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
         let expr = self.scf.make_expr_op_bool_to_switch_predicate(value_expr);
 
         self.bind_and_map_expr(node, 0, expr);
+    }
+
+    fn visit_op_u32_to_switch_predicate(&mut self, node: rvsdg::Node) {
+        let data = self.rvsdg[node].expect_op_u32_to_switch_predicate();
+        let value_expr = self.value_mapping.mapping(data.input().origin);
+
+        self.value_mapping.map_output(node, 0, value_expr);
     }
 
     fn visit_op_case_to_switch_predicate(&mut self, node: rvsdg::Node) {
