@@ -31,7 +31,7 @@ pub fn Value(
 fn LocalValue(
     module: StoredValue<ModuleData>,
     function: slir::Function,
-    value: slir::cfg::LocalValue,
+    value: slir::cfg::LocalBinding,
     highlight: HighlightSignal,
 ) -> impl IntoView {
     let (get_highlight, set_highlight) = highlight;
@@ -55,13 +55,8 @@ fn LocalValue(
                     {format!("V{}", value.data().as_ffi())}
                 </span>
             </PopoverTrigger>
-            {move || {
-                if let Some(ty) = module.read_value().cfg.function_body[function].local_values[value].ty {
-                    view! { <Type module ty/> }.into_any()
-                } else {
-                    view! { "Untyped" }.into_any()
-                }
-            }}
+
+            <Type module ty=module.read_value().cfg[value].ty()/>
         </Popover>
     }
 }
@@ -79,13 +74,7 @@ fn InlineConst(
         slir::cfg::InlineConst::F32(v) => view! {{format!("{}f32", v)}}.into_any(),
         slir::cfg::InlineConst::Bool(v) => view! {{format!("{}", v)}}.into_any(),
         slir::cfg::InlineConst::Ptr(v) => view! {
-            "&"
-            <RootIdentifier module function=function root_identifier=v.base highlight=highlight/>
-            ":"
-            {format!("{}", v.offset)}
-            "("
-            <Type module ty=v.pointee_ty/>
-            ")"
+            "&"<RootIdentifier module function=function root_identifier=v.root_identifier() highlight=highlight/>
         }
         .into_any(),
     }

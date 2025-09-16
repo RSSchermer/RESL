@@ -14,14 +14,14 @@ pub fn Terminator(
 ) -> impl IntoView {
     match terminator {
         slir::cfg::Terminator::Branch(branch) => {
-            if let Some(selector) = branch.selector {
+            if let Some(selector) = branch.selector() {
                 view! {
                     "branch "<Value module function value=selector.into() highlight/>": "
                     {move || {
                         let mut bb_views = Vec::new();
                         let mut is_first = true;
 
-                        for bb in branch.branches.iter().copied() {
+                        for bb in branch.targets().iter().copied() {
                             if !is_first {
                                 bb_views.push(view! {", "}.into_any());
                             }
@@ -40,7 +40,7 @@ pub fn Terminator(
                 }
                 .into_any()
             } else {
-                view! { "branch " {format!("BB{}", branch.branches[0].data().as_ffi())}}.into_any()
+                view! { "branch " {format!("BB{}", branch.targets()[0].data().as_ffi())}}.into_any()
             }
         }
         slir::cfg::Terminator::Return(None) => view! {

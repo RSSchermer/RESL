@@ -1,5 +1,5 @@
 pub mod basic_block;
-pub mod instruction;
+pub mod statement;
 pub mod terminator;
 pub mod value;
 
@@ -10,8 +10,8 @@ use crate::module_explorer::cfg_explorer::value::Value;
 use crate::module_explorer::ModuleData;
 
 type HighlightSignal = (
-    ReadSignal<Option<slir::cfg::LocalValue>>,
-    WriteSignal<Option<slir::cfg::LocalValue>>,
+    ReadSignal<Option<slir::cfg::LocalBinding>>,
+    WriteSignal<Option<slir::cfg::LocalBinding>>,
 );
 
 #[component]
@@ -19,17 +19,13 @@ pub fn CfgExplorer(module: StoredValue<ModuleData>, function: slir::Function) ->
     let highlight = signal(None);
 
     view! {
-        <div class="ret">
-            "Return value: "
-            <Value module function value=module.read_value().cfg.function_body[function].ret.into() highlight/>
-        </div>
         <div class="params">
             <div class="param-list-header">
                 Function Parameters
             </div>
             <ul class="param-list">
                 {move || {
-                    module.read_value().cfg.function_body[function].params.iter().map(|p| view! {
+                    module.read_value().cfg[function].argument_values().iter().map(|p| view! {
                         <li><Value module function value=(*p).into() highlight/></li>
                     }).collect_view()
                 }}
@@ -37,7 +33,7 @@ pub fn CfgExplorer(module: StoredValue<ModuleData>, function: slir::Function) ->
         </div>
 
         {move || {
-            module.read_value().cfg.function_body[function].basic_blocks.keys().map(|bb| view! {
+            module.read_value().cfg[function].basic_blocks().iter().copied().map(|bb| view! {
                 <BasicBlock module function bb highlight/>
             }).collect_view()
         }}

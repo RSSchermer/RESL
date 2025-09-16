@@ -2,7 +2,7 @@ use std::mem;
 
 use indexmap::IndexSet;
 
-use crate::cfg::{BasicBlock, LocalValue, Terminator, Value};
+use crate::cfg::{BasicBlock, LocalBinding, Terminator, Value};
 use crate::cfg_to_rvsdg::control_tree::control_tree::{
     BranchingNode, ControlTree, ControlTreeNode, ControlTreeNodeKind, LinearNode, LoopNode,
 };
@@ -10,17 +10,17 @@ use crate::cfg_to_rvsdg::control_tree::slice_annotation::SliceAnnotation;
 
 struct DemandAnnotationVisitor<'a> {
     control_tree: &'a ControlTree,
-    read_annotations: &'a SliceAnnotation<LocalValue>,
-    write_annotations: &'a SliceAnnotation<LocalValue>,
-    annotations: SliceAnnotation<LocalValue>,
-    accum: IndexSet<LocalValue>,
+    read_annotations: &'a SliceAnnotation<LocalBinding>,
+    write_annotations: &'a SliceAnnotation<LocalBinding>,
+    annotations: SliceAnnotation<LocalBinding>,
+    accum: IndexSet<LocalBinding>,
 }
 
 impl<'a> DemandAnnotationVisitor<'a> {
     fn new(
         control_tree: &'a ControlTree,
-        read_annotations: &'a SliceAnnotation<LocalValue>,
-        write_annotations: &'a SliceAnnotation<LocalValue>,
+        read_annotations: &'a SliceAnnotation<LocalBinding>,
+        write_annotations: &'a SliceAnnotation<LocalBinding>,
     ) -> Self {
         DemandAnnotationVisitor {
             control_tree,
@@ -87,16 +87,16 @@ impl<'a> DemandAnnotationVisitor<'a> {
         self.visit(data.inner);
     }
 
-    fn into_annotation_state(self) -> SliceAnnotation<LocalValue> {
+    fn into_annotation_state(self) -> SliceAnnotation<LocalBinding> {
         self.annotations
     }
 }
 
 pub fn annotate_demand(
     control_tree: &ControlTree,
-    read_annotations: &SliceAnnotation<LocalValue>,
-    write_annotations: &SliceAnnotation<LocalValue>,
-) -> SliceAnnotation<LocalValue> {
+    read_annotations: &SliceAnnotation<LocalBinding>,
+    write_annotations: &SliceAnnotation<LocalBinding>,
+) -> SliceAnnotation<LocalBinding> {
     let mut visitor =
         DemandAnnotationVisitor::new(control_tree, read_annotations, write_annotations);
 
@@ -109,136 +109,99 @@ mod tests {
     use smallvec::smallvec;
 
     use super::*;
-    use crate::cfg::{Body, Branch, InlineConst, LocalValueData, OpAssign, OpBinary, Terminator};
+    use crate::cfg::{
+        Assign, BlockPosition, Branch, Cfg, FunctionBody, InlineConst, LocalBindingData, OpBinary,
+        Terminator,
+    };
     use crate::cfg_to_rvsdg::control_flow_restructuring::{
         restructure_branches, restructure_loops, Graph,
     };
     use crate::cfg_to_rvsdg::control_tree::read_write_annotation::annotate_read_write;
     use crate::ty::{TY_BOOL, TY_DUMMY, TY_U32};
-    use crate::{BinaryOperator, FnArg, FnSig};
+    use crate::{BinaryOperator, FnArg, FnSig, Function, Module, Symbol};
 
     #[test]
     fn annotate_demand_test() {
-        let mut body = Body::init(&FnSig {
-            name: Default::default(),
-            ty: TY_DUMMY,
-            args: vec![
-                FnArg {
-                    ty: TY_U32,
-                    shader_io_binding: None,
-                },
-                FnArg {
-                    ty: TY_U32,
-                    shader_io_binding: None,
-                },
-            ],
-            ret_ty: Some(TY_U32),
-        });
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
 
-        let x = body.params[0];
-        let y = body.params[1];
-        let c = body
-            .local_values
-            .insert(LocalValueData { ty: Some(TY_BOOL) });
-        let t = body
-            .local_values
-            .insert(LocalValueData { ty: Some(TY_U32) });
-        let r = body
-            .local_values
-            .insert(LocalValueData { ty: Some(TY_U32) });
-
-        let enter = body.append_block();
-        let bb0 = body.append_block();
-        let bb1 = body.append_block();
-        let bb2 = body.append_block();
-        let bb3 = body.append_block();
-        let bb4 = body.append_block();
-        let exit = body.append_block();
-
-        body.basic_blocks[enter].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb0],
-        });
-
-        body.basic_blocks[bb0].statements.push(
-            OpBinary {
-                operator: BinaryOperator::NotEq,
-                lhs: y.into(),
-                rhs: 0u32.into(),
-                result: c,
-            }
-            .into(),
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: Some(TY_U32),
+            },
         );
-        body.basic_blocks[bb0].terminator = Terminator::Branch(Branch {
-            selector: Some(c),
-            branches: smallvec![bb1, bb2],
-        });
 
-        body.basic_blocks[bb1].statements.push(
-            OpAssign {
-                value: 0u32.into(),
-                result: r,
-            }
-            .into(),
+        let mut cfg = Cfg::new(module.ty.clone());
+
+        let body = cfg.register_function(&module, function);
+
+        let x = body.argument_values()[0];
+        let y = body.argument_values()[1];
+
+        let enter = body.entry_block();
+        let bb0 = cfg.add_basic_block(function);
+        let bb1 = cfg.add_basic_block(function);
+        let bb2 = cfg.add_basic_block(function);
+        let bb3 = cfg.add_basic_block(function);
+        let bb4 = cfg.add_basic_block(function);
+        let exit = cfg.add_basic_block(function);
+
+        let (_, r) = cfg.add_stmt_uninitialized(enter, BlockPosition::Append, TY_U32);
+        cfg.set_terminator(enter, Terminator::branch_single(bb0));
+
+        let (_, c) = cfg.add_stmt_op_binary(
+            bb0,
+            BlockPosition::Append,
+            BinaryOperator::NotEq,
+            y.into(),
+            0u32.into(),
         );
-        body.basic_blocks[bb1].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb4],
-        });
+        cfg.set_terminator(bb0, Terminator::branch_multiple(c, [bb1, bb2]));
 
-        body.basic_blocks[bb2].statements.push(
-            OpAssign {
-                value: y.into(),
-                result: t,
-            }
-            .into(),
+        cfg.add_stmt_assign(bb1, BlockPosition::Append, r, 0u32.into());
+        cfg.set_terminator(bb1, Terminator::branch_single(bb4));
+
+        let (_, t) = cfg.add_stmt_bind(bb2, BlockPosition::Append, y.into());
+        let (_, s) = cfg.add_stmt_op_binary(
+            bb2,
+            BlockPosition::Append,
+            BinaryOperator::Mod,
+            x.into(),
+            y.into(),
         );
-        body.basic_blocks[bb2].statements.push(
-            OpBinary {
-                operator: BinaryOperator::Mod,
-                lhs: x.into(),
-                rhs: y.into(),
-                result: y.into(),
-            }
-            .into(),
-        );
-        body.basic_blocks[bb2].statements.push(
-            OpAssign {
-                value: t.into(),
-                result: x,
-            }
-            .into(),
-        );
-        body.basic_blocks[bb2].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb3],
-        });
+        cfg.add_stmt_assign(bb2, BlockPosition::Append, y, s.into());
+        cfg.add_stmt_assign(bb2, BlockPosition::Append, x, t.into());
+        cfg.set_terminator(bb2, Terminator::branch_single(bb3));
 
-        body.basic_blocks[bb3].statements.push(
-            OpAssign {
-                value: Value::InlineConst(InlineConst::U32(1)),
-                result: r,
-            }
-            .into(),
-        );
-        body.basic_blocks[bb3].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb4],
-        });
+        cfg.add_stmt_assign(bb3, BlockPosition::Append, r, 1u32.into());
+        cfg.set_terminator(bb3, Terminator::branch_single(bb4));
 
-        body.basic_blocks[bb4].terminator = Terminator::Branch(Branch {
-            selector: Some(r),
-            branches: smallvec![exit, bb0],
-        });
+        cfg.set_terminator(bb4, Terminator::branch_multiple(r, [exit, bb0]));
 
-        body.basic_blocks[exit].terminator = Terminator::Return(Some(x.into()));
+        cfg.set_terminator(exit, Terminator::Return(Some(x.into())));
 
-        let mut graph = Graph::init(body);
+        let mut graph = Graph::init(&mut cfg, function);
+
         let reentry_edges = restructure_loops(&mut graph);
         let branch_info = restructure_branches(&mut graph, &reentry_edges);
 
         let control_tree = ControlTree::generate(&graph, &reentry_edges, &branch_info);
-        let body = graph.into_inner();
 
         // Control-tree layout:
         //
@@ -265,24 +228,24 @@ mod tests {
         //
         // Expected demand annotations:
         //
-        //     | Node | Read       | Write      | Demand     |
-        //     |------|------------|------------|------------|
-        //     | A    | x, y       | r, c       | x, y       |
-        //     | B    |            |            | x, y       |
-        //     | C    | x, y       | r, c       | x, y       |
-        //     | D    | x          |            | x          |
-        //     | E    | x, y       | r, c       | x, y       |
-        //     | F    | y          | c          | x, y       |
-        //     | G    | x, y       | r          | x, y       |
-        //     | H    | r          |            | x, y, r    |
-        //     | I    |            | r          | x, y       |
-        //     | J    | x, y       | r, x, y, t | x, y       |
-        //     | K    |            | r          | x, y       |
-        //     | L    | x, y       | x, y, t    | x, y       |
-        //     | M    |            | r          | x, y       |
+        //     | Node | Read       | Write         | Demand     |
+        //     |------|------------|---------------|------------|
+        //     | A    | x, y       | r, c          | x, y       |
+        //     | B    |            |               | x, y       |
+        //     | C    | x, y       | r, c          | x, y       |
+        //     | D    | x          |               | x          |
+        //     | E    | x, y       | r, c          | x, y       |
+        //     | F    | y          | c             | x, y       |
+        //     | G    | x, y       | r             | x, y       |
+        //     | H    | r          |               | x, y, r    |
+        //     | I    |            | r             | x, y       |
+        //     | J    | x, y       | r, x, y, s, t | x, y       |
+        //     | K    |            | r             | x, y       |
+        //     | L    | x, y       | x, y, s, t    | x, y       |
+        //     | M    |            | r             | x, y       |
         //
 
-        let (read, write) = annotate_read_write(&control_tree, &body);
+        let (read, write) = annotate_read_write(&control_tree, &cfg);
         let demand = annotate_demand(&control_tree, &read, &write);
 
         #[allow(non_snake_case)]

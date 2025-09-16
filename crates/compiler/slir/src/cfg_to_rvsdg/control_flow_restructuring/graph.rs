@@ -1,21 +1,30 @@
+use std::ops::{Deref, DerefMut};
+
+use indexmap::IndexSet;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use slotmap::SlotMap;
 
 use crate::cfg::{
-    BasicBlock, BasicBlockData, Body, LocalValue, LocalValueData, Statement, Terminator,
+    BasicBlock, BasicBlockData, BlockPosition, Cfg, FunctionBody, LocalBinding, LocalBindingData,
+    Statement, StatementData, Terminator,
 };
 use crate::cfg_to_rvsdg::control_flow_restructuring::exit_restructuring::restructure_exit;
+use crate::ty::Type;
+use crate::Function;
 
-fn inverse_graph(
-    graph: &SlotMap<BasicBlock, BasicBlockData>,
-) -> FxHashMap<BasicBlock, Vec<BasicBlock>> {
+fn inverse_graph(cfg: &Cfg, function: Function) -> FxHashMap<BasicBlock, Vec<BasicBlock>> {
+    let body = cfg
+        .get_function_body(function)
+        .expect("function not registered");
+    let bb_count = body.basic_blocks().len();
+
     let mut inverse: FxHashMap<BasicBlock, Vec<BasicBlock>> =
-        FxHashMap::with_capacity_and_hasher(graph.len(), FxBuildHasher::default());
+        FxHashMap::with_capacity_and_hasher(bb_count, FxBuildHasher::default());
 
-    for (source, bb) in graph {
-        if let Terminator::Branch(b) = &bb.terminator {
-            for dest in &b.branches {
-                inverse.entry(*dest).or_default().push(source);
+    for source in body.basic_blocks() {
+        if let Terminator::Branch(b) = cfg[*source].terminator() {
+            for dest in b.targets() {
+                inverse.entry(*dest).or_default().push(*source);
             }
         }
     }
@@ -30,22 +39,24 @@ pub struct Edge {
 }
 
 #[derive(Debug)]
-pub struct Graph {
-    body: Body,
+pub struct Graph<'a> {
+    cfg: &'a mut Cfg,
+    function: Function,
     inverse_graph: FxHashMap<BasicBlock, Vec<BasicBlock>>,
     entry: BasicBlock,
     exit: BasicBlock,
 }
 
-impl Graph {
-    pub fn init(mut body: Body) -> Self {
-        let entry = body.entry.expect("body must have an entry block");
-        let exit = restructure_exit(&mut body);
+impl<'a> Graph<'a> {
+    pub fn init(cfg: &'a mut Cfg, function: Function) -> Self {
+        let entry = cfg[function].entry_block();
+        let exit = restructure_exit(cfg, function);
 
-        let inverse_graph = inverse_graph(&body.basic_blocks);
+        let inverse_graph = inverse_graph(&cfg, function);
 
         Graph {
-            body: body.clone(),
+            cfg,
+            function,
             inverse_graph,
             entry,
             exit,
@@ -61,47 +72,50 @@ impl Graph {
     }
 
     pub fn nodes(&self) -> impl Iterator<Item = BasicBlock> + use<'_> {
-        self.body.basic_blocks.keys()
+        self.cfg[self.function].basic_blocks().iter().copied()
     }
 
-    pub fn append_block(&mut self) -> BasicBlock {
-        self.body.append_block()
+    pub fn append_block_branch_single(&mut self, target: BasicBlock) -> BasicBlock {
+        let bb = self.cfg.add_basic_block(self.function);
+
+        self.cfg
+            .set_terminator(bb, Terminator::branch_single(target));
+        self.inverse_graph.entry(target).or_default().push(bb);
+
+        bb
     }
 
-    pub fn statements(&self, bb: BasicBlock) -> &[Statement] {
-        &self.body.basic_blocks[bb].statements
+    pub fn append_block_branch_multiple(&mut self, predicate: LocalBinding) -> BasicBlock {
+        let bb = self.cfg.add_basic_block(self.function);
+
+        self.cfg
+            .set_terminator(bb, Terminator::branch_multiple(predicate, []));
+
+        bb
     }
 
-    pub fn statements_mut(&mut self, bb: BasicBlock) -> &mut Vec<Statement> {
-        &mut self.body.basic_blocks[bb].statements
+    pub fn statements(&self, bb: BasicBlock) -> &IndexSet<Statement> {
+        self.cfg[bb].statements()
     }
 
-    pub fn add_value(&mut self, value_data: LocalValueData) -> LocalValue {
-        self.body.local_values.insert(value_data)
+    pub fn add_value(&mut self, ty: Type) -> LocalBinding {
+        self.cfg
+            .add_stmt_uninitialized(self.entry, BlockPosition::Append, ty)
+            .1
     }
 
-    pub fn selector(&self, bb: BasicBlock) -> Option<LocalValue> {
-        self.body.basic_blocks[bb]
-            .terminator
-            .expect_branch()
-            .selector
+    pub fn selector(&self, bb: BasicBlock) -> Option<LocalBinding> {
+        self.cfg[bb].terminator().expect_branch().selector()
     }
 
-    pub fn set_selector(&mut self, bb: BasicBlock, selector: Option<LocalValue>) {
-        self.body.basic_blocks[bb]
-            .terminator
-            .get_or_make_branch()
-            .selector = selector;
+    pub fn set_selector(&mut self, bb: BasicBlock, selector: LocalBinding) {
+        self.cfg.set_branch_selector(bb, selector);
     }
 
     pub fn connect(&mut self, edge: Edge) {
         let Edge { source, dest } = edge;
 
-        self.body.basic_blocks[source]
-            .terminator
-            .get_or_make_branch()
-            .branches
-            .push(dest);
+        self.cfg.add_branch_target(source, dest);
         self.inverse_graph.entry(dest).or_default().push(source);
     }
 
@@ -109,27 +123,12 @@ impl Graph {
         let Edge { source, dest } = edge;
 
         // First point the out-edge from the source to the new destination
-
-        let mut src_out_found = false;
-
-        for bb in &mut self.body.basic_blocks[source]
-            .terminator
-            .get_or_make_branch()
-            .branches
-        {
-            if *bb == dest {
-                *bb = new_dest;
-                src_out_found = true;
-            }
-        }
-
+        let mut src_out_found = self.cfg.replace_branch_target(source, dest, new_dest);
         assert!(src_out_found, "edge source does not connect to edge dest");
 
-        // Then disconnect the in-ege frmo the old destination
-
+        // Then disconnect the in-edge from the old destination
         let mut dest_in_found = false;
         let dst_in = self.inverse_graph.get_mut(&dest).unwrap();
-
         for i in 0..dst_in.len() {
             if dst_in[i] == source {
                 dst_in.remove(i);
@@ -138,11 +137,9 @@ impl Graph {
                 break;
             }
         }
-
         assert!(dest_in_found, "edge dest does not connect to edge source");
 
         // Finally, add an in-edge to the new destination
-
         self.inverse_graph.entry(new_dest).or_default().push(source);
     }
 
@@ -151,22 +148,11 @@ impl Graph {
 
         // First point the out-edge from the source to the "via" node
 
-        let mut src_out_found = false;
-
-        for bb in &mut self.body.basic_blocks[source]
-            .terminator
-            .get_or_make_branch()
-            .branches
-        {
-            if *bb == dest {
-                *bb = via;
-                src_out_found = true;
-            }
-        }
+        let mut src_out_found = self.cfg.replace_branch_target(source, dest, via);
 
         assert!(src_out_found, "edge source does not connect to edge dest");
 
-        // First point the in-edge from the destination to the "via" node
+        // Then point the in-edge from the destination to the "via" node
 
         let mut dest_in_found = false;
 
@@ -181,13 +167,8 @@ impl Graph {
 
         // Finally, add an in-edge and out-edge to the "via" node for the source and destination
         // respectively
-
-        self.body.basic_blocks[via]
-            .terminator
-            .get_or_make_branch()
-            .branches
-            .push(dest);
         self.inverse_graph.entry(via).or_default().push(source);
+        self.cfg.add_branch_target(via, dest);
     }
 
     pub fn parents(&self, bb: BasicBlock) -> &[BasicBlock] {
@@ -198,8 +179,8 @@ impl Graph {
     }
 
     pub fn children(&self, bb: BasicBlock) -> &[BasicBlock] {
-        match &self.body.basic_blocks[bb].terminator {
-            Terminator::Branch(b) => b.branches.as_slice(),
+        match self.cfg[bb].terminator() {
+            Terminator::Branch(b) => b.targets(),
             Terminator::Return(_) => &[],
         }
     }
@@ -213,9 +194,19 @@ impl Graph {
                 })
         })
     }
+}
 
-    pub fn into_inner(self) -> Body {
-        self.body
+impl Deref for Graph<'_> {
+    type Target = Cfg;
+
+    fn deref(&self) -> &Self::Target {
+        &self.cfg
+    }
+}
+
+impl DerefMut for Graph<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.cfg
     }
 }
 
@@ -225,35 +216,53 @@ mod tests {
 
     use super::*;
     use crate::cfg::{Branch, Terminator};
-    use crate::ty::TY_DUMMY;
-    use crate::FnSig;
+    use crate::ty::{TY_BOOL, TY_DUMMY};
+    use crate::{FnArg, FnSig, Module, Symbol};
 
     #[test]
     fn test_connect() {
-        let mut body = Body::init(&FnSig {
-            name: Default::default(),
-            ty: TY_DUMMY,
-            args: vec![],
-            ret_ty: None,
-        });
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
 
-        let entry = body.append_block();
-        let bb0 = body.append_block();
-        let bb1 = body.append_block();
-        let bb2 = body.append_block();
-        let bb3 = body.append_block();
-        let exit = body.append_block();
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![FnArg {
+                    ty: TY_BOOL,
+                    shader_io_binding: None,
+                }],
+                ret_ty: None,
+            },
+        );
 
-        body.basic_blocks[entry].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb0, bb1],
-        });
-        body.basic_blocks[bb0].terminator = Terminator::Branch(Branch::single(bb2));
-        body.basic_blocks[bb1].terminator = Terminator::Branch(Branch::single(bb3));
-        body.basic_blocks[bb2].terminator = Terminator::Branch(Branch::single(exit));
-        body.basic_blocks[bb3].terminator = Terminator::Branch(Branch::single(exit));
+        let mut cfg = Cfg::new(module.ty.clone());
 
-        let mut graph = Graph::init(body.clone());
+        let body = cfg.register_function(&module, function);
+
+        let arg_0 = body.argument_values()[0];
+
+        let entry = cfg.add_basic_block(function);
+        let bb0 = cfg.add_basic_block(function);
+        let bb1 = cfg.add_basic_block(function);
+        let bb2 = cfg.add_basic_block(function);
+        let bb3 = cfg.add_basic_block(function);
+        let exit = cfg.add_basic_block(function);
+
+        let (_, selector) =
+            cfg.add_stmt_op_bool_to_branch_predicate(entry, BlockPosition::Append, arg_0.into());
+
+        cfg.set_terminator(entry, Terminator::branch_multiple(selector, [bb0, bb1]));
+        cfg.set_terminator(bb0, Terminator::branch_single(bb2));
+        cfg.set_terminator(bb1, Terminator::branch_single(bb3));
+        cfg.set_terminator(bb2, Terminator::branch_single(exit));
+        cfg.set_terminator(bb3, Terminator::branch_single(exit));
+
+        let mut graph = Graph::init(&mut cfg, function);
 
         graph.connect(Edge {
             source: bb0,
@@ -273,30 +282,48 @@ mod tests {
 
     #[test]
     fn test_reconnect_dest() {
-        let mut body = Body::init(&FnSig {
-            name: Default::default(),
-            ty: TY_DUMMY,
-            args: vec![],
-            ret_ty: None,
-        });
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
 
-        let entry = body.append_block();
-        let bb0 = body.append_block();
-        let bb1 = body.append_block();
-        let bb2 = body.append_block();
-        let bb3 = body.append_block();
-        let exit = body.append_block();
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![FnArg {
+                    ty: TY_BOOL,
+                    shader_io_binding: None,
+                }],
+                ret_ty: None,
+            },
+        );
 
-        body.basic_blocks[entry].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb0, bb1],
-        });
-        body.basic_blocks[bb0].terminator = Terminator::Branch(Branch::single(bb2));
-        body.basic_blocks[bb1].terminator = Terminator::Branch(Branch::single(bb3));
-        body.basic_blocks[bb2].terminator = Terminator::Branch(Branch::single(exit));
-        body.basic_blocks[bb3].terminator = Terminator::Branch(Branch::single(exit));
+        let mut cfg = Cfg::new(module.ty.clone());
 
-        let mut graph = Graph::init(body.clone());
+        let body = cfg.register_function(&module, function);
+
+        let arg_0 = body.argument_values()[0];
+
+        let entry = cfg.add_basic_block(function);
+        let bb0 = cfg.add_basic_block(function);
+        let bb1 = cfg.add_basic_block(function);
+        let bb2 = cfg.add_basic_block(function);
+        let bb3 = cfg.add_basic_block(function);
+        let exit = cfg.add_basic_block(function);
+
+        let (_, selector) =
+            cfg.add_stmt_op_bool_to_branch_predicate(entry, BlockPosition::Append, arg_0.into());
+
+        cfg.set_terminator(entry, Terminator::branch_multiple(selector, [bb0, bb1]));
+        cfg.set_terminator(bb0, Terminator::branch_single(bb2));
+        cfg.set_terminator(bb1, Terminator::branch_single(bb3));
+        cfg.set_terminator(bb2, Terminator::branch_single(exit));
+        cfg.set_terminator(bb3, Terminator::branch_single(exit));
+
+        let mut graph = Graph::init(&mut cfg, function);
 
         graph.reconnect_dest(
             Edge {

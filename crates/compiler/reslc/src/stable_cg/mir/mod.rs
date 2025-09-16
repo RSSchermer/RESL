@@ -137,7 +137,7 @@ pub fn codegen_mir<'a, Bx: BuilderMethods<'a>>(cx: &'a Bx::CodegenCx, instance: 
         return;
     };
 
-    // mir.dump(&mut io::stdout(), instance.name().as_str());
+    mir.dump(&mut io::stdout(), instance.name().as_str());
 
     let Ok(fn_abi) = instance.fn_abi() else {
         bug!("fn ABI should be available during codegen")
@@ -145,7 +145,7 @@ pub fn codegen_mir<'a, Bx: BuilderMethods<'a>>(cx: &'a Bx::CodegenCx, instance: 
 
     debug!("fn_abi: {:?}", fn_abi);
 
-    let start_llbb = Bx::append_block(cx, llfn, "start");
+    let start_llbb = Bx::start_block(cx, llfn);
     let mut start_bx = Bx::build(cx, start_llbb);
 
     let cached_llbbs: Vec<CachedLlbb<Bx::BasicBlock>> = (0..mir.blocks.len())

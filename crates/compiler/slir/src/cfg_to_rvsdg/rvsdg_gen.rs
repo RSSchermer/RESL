@@ -4,10 +4,10 @@ use index_vec::IndexVec;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::cfg::{
-    BasicBlock, Body, Cfg, InlineConst, LocalValue, OpAlloca, OpAssign, OpBinary,
+    Assign, BasicBlock, Bind, Cfg, FunctionBody, InlineConst, LocalBinding, OpAlloca, OpBinary,
     OpBoolToBranchPredicate, OpCall, OpCaseToBranchPredicate, OpGetDiscriminant, OpLoad,
     OpOffsetSlicePtr, OpPtrElementPtr, OpPtrVariantPtr, OpSetDiscriminant, OpStore, OpUnary,
-    RootIdentifier, Statement, Terminator, Value,
+    RootIdentifier, StatementData, Terminator, Uninitialized, Value,
 };
 use crate::cfg_to_rvsdg::control_flow_restructuring::{
     restructure_branches, restructure_loops, Graph,
@@ -20,11 +20,11 @@ use crate::cfg_to_rvsdg::control_tree::{
 use crate::cfg_to_rvsdg::item_dependencies::{item_dependencies, Item, ItemDependencies};
 use crate::rvsdg::{Node, Region, Rvsdg, StateOrigin, ValueInput, ValueOrigin, ValueOutput};
 use crate::ty::{Type, TypeKind, TY_BOOL, TY_F32, TY_I32, TY_U32};
-use crate::Module;
+use crate::{Function, Module};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum InputState {
-    Value(LocalValue),
+    Value(LocalBinding),
     Item(Item),
 }
 
@@ -44,29 +44,25 @@ enum InputState {
 /// requirements that a node may have, should have already been added to the tracker when visiting
 /// prior nodes, thus such lookups should never fail.
 #[derive(Clone, Debug)]
-struct InputStateTracker<'a> {
-    body: &'a Body,
+struct InputStateTracker {
     state: FxHashMap<InputState, ValueInput>,
     current_arg_index: u32,
 }
 
-impl<'a> InputStateTracker<'a> {
-    fn new(body: &'a Body) -> Self {
+impl InputStateTracker {
+    fn new() -> Self {
         InputStateTracker {
-            body,
             state: Default::default(),
             current_arg_index: 0,
         }
     }
 
-    fn insert_value(&mut self, value: LocalValue, input: ValueInput) {
+    fn insert_value(&mut self, value: LocalBinding, input: ValueInput) {
         self.state.insert(InputState::Value(value), input);
     }
 
-    fn insert_value_arg(&mut self, value: LocalValue) {
-        let ty = self.body[value]
-            .ty
-            .expect("region argument should by typed");
+    fn insert_value_arg(&mut self, cfg: &Cfg, value: LocalBinding) {
+        let ty = cfg[value].ty();
         let input = ValueInput {
             ty,
             origin: ValueOrigin::Argument(self.current_arg_index),
@@ -86,8 +82,8 @@ impl<'a> InputStateTracker<'a> {
         self.current_arg_index += 1;
     }
 
-    fn insert_value_node(&mut self, value: LocalValue, producer: Node, output: u32) {
-        let ty = self.body[value].ty.expect("value should by typed");
+    fn insert_value_node(&mut self, cfg: &Cfg, value: LocalBinding, producer: Node, output: u32) {
+        let ty = cfg[value].ty();
         let input = ValueInput {
             ty,
             origin: ValueOrigin::Output { producer, output },
@@ -97,17 +93,17 @@ impl<'a> InputStateTracker<'a> {
     }
 }
 
-impl Index<LocalValue> for InputStateTracker<'_> {
+impl Index<LocalBinding> for InputStateTracker {
     type Output = ValueInput;
 
-    fn index(&self, value: LocalValue) -> &Self::Output {
+    fn index(&self, value: LocalBinding) -> &Self::Output {
         self.state
             .get(&InputState::Value(value))
             .expect("no input found for value")
     }
 }
 
-impl Index<Item> for InputStateTracker<'_> {
+impl Index<Item> for InputStateTracker {
     type Output = ValueInput;
 
     fn index(&self, item: Item) -> &Self::Output {
@@ -121,12 +117,12 @@ struct RegionBuilder<'a> {
     region: Region,
     module: &'a mut Module,
     control_tree: &'a ControlTree,
-    body: &'a Body,
+    cfg: &'a Cfg,
     item_dependencies: &'a SliceAnnotation<Item>,
-    demand: &'a SliceAnnotation<LocalValue>,
+    demand: &'a SliceAnnotation<LocalBinding>,
     state_use: &'a IndexVec<ControlTreeNode, bool>,
     rvsdg: &'a mut Rvsdg,
-    input_state_tracker: InputStateTracker<'a>,
+    input_state_tracker: InputStateTracker,
     state_origin: StateOrigin,
 }
 
@@ -170,11 +166,11 @@ impl<'a> RegionBuilder<'a> {
         // We need to construct the input state for the branch regions, based on the inputs to the
         // switch node. Each region builder for a branch's sub-region will start with a copy of this
         // tracker.
-        let mut branch_input_state = InputStateTracker::new(self.body);
+        let mut branch_input_state = InputStateTracker::new();
 
         for value in demand {
             value_inputs.push(self.input_state_tracker[*value]);
-            branch_input_state.insert_value_arg(*value);
+            branch_input_state.insert_value_arg(self.cfg, *value);
         }
 
         for dep in item_deps {
@@ -191,13 +187,7 @@ impl<'a> RegionBuilder<'a> {
 
             next_sibling_demand
                 .iter()
-                .map(|value| {
-                    let ty = self.body[*value]
-                        .ty
-                        .expect("used local values should be typed");
-
-                    ValueOutput::new(ty)
-                })
+                .map(|value| ValueOutput::new(self.cfg[*value].ty()))
                 .collect()
         } else {
             Vec::new()
@@ -234,7 +224,7 @@ impl<'a> RegionBuilder<'a> {
 
             for (i, value) in next_sibling_demand.iter().enumerate() {
                 self.input_state_tracker
-                    .insert_value_node(*value, node, i as u32);
+                    .insert_value_node(self.cfg, *value, node, i as u32);
             }
         }
 
@@ -250,11 +240,11 @@ impl<'a> RegionBuilder<'a> {
         let uses_state = self.state_use[node];
 
         let mut value_inputs = Vec::with_capacity(item_deps.len() + demand.len());
-        let mut inner_input_state = InputStateTracker::new(self.body);
+        let mut inner_input_state = InputStateTracker::new();
 
         for value in demand {
             value_inputs.push(self.input_state_tracker[*value]);
-            inner_input_state.insert_value_arg(*value);
+            inner_input_state.insert_value_arg(self.cfg, *value);
         }
 
         for dep in item_deps {
@@ -286,7 +276,7 @@ impl<'a> RegionBuilder<'a> {
         // outputs
         for (i, value) in demand.iter().enumerate() {
             self.input_state_tracker
-                .insert_value_node(*value, node, i as u32);
+                .insert_value_node(self.cfg, *value, node, i as u32);
         }
 
         // Keep track of the state tail
@@ -296,13 +286,13 @@ impl<'a> RegionBuilder<'a> {
     }
 
     fn visit_basic_block(&mut self, bb: BasicBlock) {
-        let data = &self.body.basic_blocks[bb];
+        let data = &self.cfg[bb];
 
-        for statement in &data.statements {
-            self.visit_statement(statement)
+        for statement in data.statements() {
+            self.visit_statement(&self.cfg[*statement]);
         }
 
-        if let Terminator::Return(Some(value)) = &data.terminator {
+        if let Terminator::Return(Some(value)) = data.terminator() {
             // Restructuring should have left only a single return terminator (if any), and it
             // should belong to the last child of the control tree's root linear node, so we know we
             // should currently be in a function's top-level region. We can therefor simply connect
@@ -311,58 +301,78 @@ impl<'a> RegionBuilder<'a> {
         }
     }
 
-    fn visit_statement(&mut self, statement: &Statement) {
+    fn visit_statement(&mut self, statement: &StatementData) {
         match statement {
-            Statement::OpAlloca(op) => self.visit_op_alloca(op),
-            Statement::OpAssign(op) => self.visit_op_assign(op),
-            Statement::OpLoad(op) => self.visit_op_load(op),
-            Statement::OpStore(op) => self.visit_op_store(op),
-            Statement::OpPtrElementPtr(op) => self.visit_op_ptr_element_ptr(op),
-            Statement::OpPtrVariantPtr(op) => self.visit_op_ptr_variant_ptr(op),
-            Statement::OpGetDiscriminant(op) => self.visit_op_get_discriminant(op),
-            Statement::OpSetDiscriminant(op) => self.visit_op_set_discriminant(op),
-            Statement::OpOffsetSlicePtr(op) => self.visit_op_offset_slice_ptr(op),
-            Statement::OpUnary(op) => self.visit_op_unary(op),
-            Statement::OpBinary(op) => self.visit_op_binary(op),
-            Statement::OpCall(op) => self.visit_op_call(op),
-            Statement::OpCaseToBranchPredicate(op) => self.visit_op_case_to_branch_predicate(op),
-            Statement::OpBoolToBranchPredicate(op) => self.visit_op_bool_to_branch_predicate(op),
+            StatementData::Assign(op) => self.visit_assign(op),
+            StatementData::Bind(op) => self.visit_bind(op),
+            StatementData::Uninitialized(op) => self.visit_uninitialized(op),
+            StatementData::OpAlloca(op) => self.visit_op_alloca(op),
+            StatementData::OpLoad(op) => self.visit_op_load(op),
+            StatementData::OpStore(op) => self.visit_op_store(op),
+            StatementData::OpPtrElementPtr(op) => self.visit_op_ptr_element_ptr(op),
+            StatementData::OpPtrVariantPtr(op) => self.visit_op_ptr_variant_ptr(op),
+            StatementData::OpGetDiscriminant(op) => self.visit_op_get_discriminant(op),
+            StatementData::OpSetDiscriminant(op) => self.visit_op_set_discriminant(op),
+            StatementData::OpOffsetSlicePtr(op) => self.visit_op_offset_slice_ptr(op),
+            StatementData::OpUnary(op) => self.visit_op_unary(op),
+            StatementData::OpBinary(op) => self.visit_op_binary(op),
+            StatementData::OpCall(op) => self.visit_op_call(op),
+            StatementData::OpCaseToBranchPredicate(op) => {
+                self.visit_op_case_to_branch_predicate(op)
+            }
+            StatementData::OpBoolToBranchPredicate(op) => {
+                self.visit_op_bool_to_branch_predicate(op)
+            }
         }
     }
 
-    fn visit_op_alloca(&mut self, op: &OpAlloca) {
-        let node = self.rvsdg.add_op_alloca(self.region, op.ty);
-
-        self.input_state_tracker
-            .insert_value_node(op.result, node, 0);
-    }
-
-    fn visit_op_assign(&mut self, op: &OpAssign) {
-        // Assignment operations are not represented in the RVSDG, they are implicit in the data
+    fn visit_assign(&mut self, op: &Assign) {
+        // Assignment statements are not represented in the RVSDG, they are implicit in the data
         // flow. We instead redirect the tracker to the origin of the data that is being assigned.
 
-        let input = self.resolve_value(op.value);
+        let input = self.resolve_value(op.value());
 
-        self.input_state_tracker.insert_value(op.result, input);
+        self.input_state_tracker
+            .insert_value(op.local_binding(), input);
+    }
+
+    fn visit_bind(&mut self, op: &Bind) {
+        // Bind statements are not represented in the RVSDG, they are implicit in the data
+        // flow. We instead redirect the tracker to the origin of the data that is being assigned.
+
+        let input = self.resolve_value(op.value());
+
+        self.input_state_tracker
+            .insert_value(op.local_binding(), input);
+    }
+
+    fn visit_uninitialized(&mut self, _: &Uninitialized) {
+        // Like assignment and bind statements, uninitialized statements are not represented in the
+        // RVSDG. They also do not have an associated value, so we do not have to do anything here.
+    }
+
+    fn visit_op_alloca(&mut self, op: &OpAlloca) {
+        let node = self.rvsdg.add_op_alloca(self.region, op.ty());
+
+        self.input_state_tracker
+            .insert_value_node(self.cfg, op.result(), node, 0);
     }
 
     fn visit_op_load(&mut self, op: &OpLoad) {
-        let ptr_input = self.resolve_value(op.ptr);
-        let output_ty = self.body[op.result]
-            .ty
-            .expect("load result should be typed");
+        let ptr_input = self.resolve_value(op.pointer());
+        let output_ty = self.cfg[op.result()].ty();
         let node = self
             .rvsdg
             .add_op_load(self.region, ptr_input, output_ty, self.state_origin);
 
         self.input_state_tracker
-            .insert_value_node(op.result, node, 0);
+            .insert_value_node(self.cfg, op.result(), node, 0);
         self.state_origin = StateOrigin::Node(node);
     }
 
     fn visit_op_store(&mut self, op: &OpStore) {
-        let ptr_input = self.resolve_value(op.ptr);
-        let value_input = self.resolve_value(op.value);
+        let ptr_input = self.resolve_value(op.pointer());
+        let value_input = self.resolve_value(op.value());
         let node = self
             .rvsdg
             .add_op_store(self.region, ptr_input, value_input, self.state_origin);
@@ -371,50 +381,53 @@ impl<'a> RegionBuilder<'a> {
     }
 
     fn visit_op_ptr_element_ptr(&mut self, op: &OpPtrElementPtr) {
-        let ptr_input = self.resolve_value(op.ptr);
+        let ptr_input = self.resolve_value(op.pointer());
         let index_inputs = op
-            .indices
+            .indices()
             .iter()
             .copied()
             .map(|v| self.resolve_value(v))
             .collect::<Vec<_>>();
-        let node =
-            self.rvsdg
-                .add_op_ptr_element_ptr(self.region, op.element_ty, ptr_input, index_inputs);
+        let node = self.rvsdg.add_op_ptr_element_ptr(
+            self.region,
+            op.element_ty(),
+            ptr_input,
+            index_inputs,
+        );
 
         self.input_state_tracker
-            .insert_value_node(op.result, node, 0);
+            .insert_value_node(self.cfg, op.result(), node, 0);
     }
 
     fn visit_op_ptr_variant_ptr(&mut self, op: &OpPtrVariantPtr) {
-        let input = self.resolve_value(op.ptr);
+        let input = self.resolve_value(op.pointer());
 
         let node = self
             .rvsdg
-            .add_op_ptr_variant_ptr(self.region, input, op.variant_index);
+            .add_op_ptr_variant_ptr(self.region, input, op.variant_index());
 
         self.input_state_tracker
-            .insert_value_node(op.result, node, 0);
+            .insert_value_node(self.cfg, op.result(), node, 0);
     }
 
     fn visit_op_get_discriminant(&mut self, op: &OpGetDiscriminant) {
-        let ptr_input = self.resolve_value(op.ptr);
+        let ptr_input = self.resolve_value(op.pointer());
 
         let node = self
             .rvsdg
             .add_op_get_discriminant(self.region, ptr_input, self.state_origin);
 
         self.input_state_tracker
-            .insert_value_node(op.result, node, 0);
+            .insert_value_node(self.cfg, op.result(), node, 0);
         self.state_origin = StateOrigin::Node(node);
     }
 
     fn visit_op_set_discriminant(&mut self, op: &OpSetDiscriminant) {
-        let ptr_input = self.resolve_value(op.ptr);
+        let ptr_input = self.resolve_value(op.pointer());
         let node = self.rvsdg.add_op_set_discriminant(
             self.region,
             ptr_input,
-            op.variant_index,
+            op.variant_index(),
             self.state_origin,
         );
 
@@ -422,40 +435,40 @@ impl<'a> RegionBuilder<'a> {
     }
 
     fn visit_op_offset_slice_ptr(&mut self, op: &OpOffsetSlicePtr) {
-        let slice_ptr = self.resolve_value(op.slice_ptr);
-        let offset = self.resolve_value(op.offset);
+        let slice_ptr = self.resolve_value(op.pointer());
+        let offset = self.resolve_value(op.offset());
 
         let node = self
             .rvsdg
             .add_op_add_ptr_offset(self.region, slice_ptr, offset);
 
         self.input_state_tracker
-            .insert_value_node(op.result, node, 0);
+            .insert_value_node(self.cfg, op.result(), node, 0);
     }
 
     fn visit_op_unary(&mut self, op: &OpUnary) {
-        let input = self.resolve_value(op.value);
-        let node = self.rvsdg.add_op_unary(self.region, op.operator, input);
+        let input = self.resolve_value(op.operand());
+        let node = self.rvsdg.add_op_unary(self.region, op.operator(), input);
 
         self.input_state_tracker
-            .insert_value_node(op.result, node, 0);
+            .insert_value_node(self.cfg, op.result(), node, 0);
     }
 
     fn visit_op_binary(&mut self, op: &OpBinary) {
-        let lhs_input = self.resolve_value(op.lhs);
-        let rhs_input = self.resolve_value(op.rhs);
+        let lhs_input = self.resolve_value(op.lhs());
+        let rhs_input = self.resolve_value(op.rhs());
         let node = self
             .rvsdg
-            .add_op_binary(self.region, op.operator, lhs_input, rhs_input);
+            .add_op_binary(self.region, op.operator(), lhs_input, rhs_input);
 
         self.input_state_tracker
-            .insert_value_node(op.result, node, 0);
+            .insert_value_node(self.cfg, op.result(), node, 0);
     }
 
     fn visit_op_call(&mut self, op: &OpCall) {
-        let fn_input = self.input_state_tracker[Item::Function(op.function)];
+        let fn_input = self.input_state_tracker[Item::Function(op.callee())];
         let arg_inputs = op
-            .args
+            .arguments()
             .iter()
             .copied()
             .map(|v| self.resolve_value(v))
@@ -468,32 +481,33 @@ impl<'a> RegionBuilder<'a> {
             self.state_origin,
         );
 
-        if let Some(result) = op.result {
-            self.input_state_tracker.insert_value_node(result, node, 0);
+        if let Some(result) = op.result() {
+            self.input_state_tracker
+                .insert_value_node(self.cfg, result, node, 0);
         }
 
         self.state_origin = StateOrigin::Node(node);
     }
 
     fn visit_op_case_to_branch_predicate(&mut self, op: &OpCaseToBranchPredicate) {
-        let input = self.resolve_value(op.value);
-        let cases = op.cases.clone();
+        let input = self.resolve_value(op.value());
+        let cases = op.cases().to_vec();
         let node = self
             .rvsdg
             .add_op_case_to_switch_predicate(self.region, input, cases);
 
         self.input_state_tracker
-            .insert_value_node(op.result, node, 0);
+            .insert_value_node(self.cfg, op.result(), node, 0);
     }
 
     fn visit_op_bool_to_branch_predicate(&mut self, op: &OpBoolToBranchPredicate) {
-        let input = self.resolve_value(op.value);
+        let input = self.resolve_value(op.value());
         let node = self
             .rvsdg
             .add_op_bool_to_switch_predicate(self.region, input);
 
         self.input_state_tracker
-            .insert_value_node(op.result, node, 0);
+            .insert_value_node(self.cfg, op.result(), node, 0);
     }
 
     fn connect_result(&mut self, result: u32, value: Value) {
@@ -521,10 +535,12 @@ impl<'a> RegionBuilder<'a> {
             ),
             InlineConst::Bool(v) => (TY_BOOL, self.rvsdg.add_const_bool(self.region, v)),
             InlineConst::Ptr(ptr) => {
-                let base = self.resolve_root_identifier(ptr.base);
-                let node = self.rvsdg.add_const_ptr(self.region, ptr.pointee_ty, base);
+                let base = self.resolve_root_identifier(ptr.root_identifier());
+                let ty = ptr.ty();
+                let pointee_ty = self.module.ty.kind(ty).expect_ptr();
+                let node = self.rvsdg.add_const_ptr(self.region, pointee_ty, base);
 
-                (self.module.ty.register(TypeKind::Ptr(ptr.pointee_ty)), node)
+                (ty, node)
             }
         };
 
@@ -549,13 +565,13 @@ impl<'a> RegionBuilder<'a> {
     fn subregion_builder(
         &mut self,
         region: Region,
-        input_state_tracker: InputStateTracker<'a>,
+        input_state_tracker: InputStateTracker,
     ) -> RegionBuilder {
         RegionBuilder {
             region,
             module: self.module,
             control_tree: self.control_tree,
-            body: self.body,
+            cfg: self.cfg,
             item_dependencies: self.item_dependencies,
             demand: self.demand,
             state_use: self.state_use,
@@ -568,29 +584,29 @@ impl<'a> RegionBuilder<'a> {
 
 fn build_body(
     into: Region,
-    from: &Body,
+    function: Function,
     module: &mut Module,
+    cfg: &mut Cfg,
     rvsdg: &mut Rvsdg,
     input_state_tracker: InputStateTracker,
 ) {
-    let mut graph = Graph::init(from.clone());
+    let mut graph = Graph::init(cfg, function);
 
     let reentry_edges = restructure_loops(&mut graph);
     let branch_info = restructure_branches(&mut graph, &reentry_edges);
 
     let control_tree = ControlTree::generate(&graph, &reentry_edges, &branch_info);
-    let body = graph.into_inner();
 
-    let item_dependencies = annotate_item_dependencies(&control_tree, &body);
-    let (read, write) = annotate_read_write(&control_tree, &body);
+    let item_dependencies = annotate_item_dependencies(&control_tree, &cfg);
+    let (read, write) = annotate_read_write(&control_tree, &cfg);
     let demand = annotate_demand(&control_tree, &read, &write);
-    let state_use = annotate_state_use(&control_tree, &body);
+    let state_use = annotate_state_use(&control_tree, &cfg);
 
     let mut region_builder = RegionBuilder {
         region: into,
         module,
         control_tree: &control_tree,
-        body: &body,
+        cfg: &cfg,
         item_dependencies: &item_dependencies,
         demand: &demand,
         state_use: &state_use,
@@ -605,7 +621,7 @@ fn build_body(
 fn add_item(
     item: Item,
     module: &mut Module,
-    cfg: &Cfg,
+    cfg: &mut Cfg,
     item_dependencies: &ItemDependencies,
     rvsdg: &mut Rvsdg,
     visited: &mut FxHashSet<Item>,
@@ -617,9 +633,7 @@ fn add_item(
             Item::StorageBinding(binding) => rvsdg.register_storage_binding(module, binding),
             Item::WorkgroupBinding(binding) => rvsdg.register_workgroup_binding(module, binding),
             Item::Function(function) => {
-                let body = &cfg.function_body[function];
-
-                let mut input_state_tracker = InputStateTracker::new(body);
+                let mut input_state_tracker = InputStateTracker::new();
 
                 let (node, region) = if let Some(deps) = item_dependencies.get(&item) {
                     for dep in deps {
@@ -643,11 +657,11 @@ fn add_item(
                     rvsdg.register_function(module, function, [])
                 };
 
-                for param in &body.params {
-                    input_state_tracker.insert_value_arg(*param);
+                for param in cfg[function].argument_values() {
+                    input_state_tracker.insert_value_arg(cfg, *param);
                 }
 
-                build_body(region, body, module, rvsdg, input_state_tracker);
+                build_body(region, function, module, cfg, rvsdg, input_state_tracker);
 
                 node
             }
@@ -657,7 +671,7 @@ fn add_item(
     }
 }
 
-pub fn cfg_to_rvsdg(module: &mut Module, cfg: &Cfg) -> Rvsdg {
+pub fn cfg_to_rvsdg(module: &mut Module, cfg: &mut Cfg) -> Rvsdg {
     let mut rvsdg = Rvsdg::new(module.ty.clone());
     let mut visited = FxHashSet::default();
     let mut item_node = FxHashMap::default();
@@ -686,7 +700,7 @@ mod tests {
     use smallvec::smallvec;
 
     use super::*;
-    use crate::cfg::{Branch, LocalValueData};
+    use crate::cfg::{BlockPosition, Branch, LocalBindingData};
     use crate::ty::{TY_DUMMY, TY_PREDICATE};
     use crate::{BinaryOperator, FnArg, FnSig, Function, Symbol};
 
@@ -717,42 +731,33 @@ mod tests {
             },
         );
 
-        let mut body = Body::init(&module.fn_sigs[function]);
+        let mut cfg = Cfg::new(module.ty.clone());
 
-        let bb = body.append_block();
+        let body = cfg.register_function(&module, function);
 
-        let a0 = body.params[0];
-        let a1 = body.params[1];
-        let l0 = body
-            .local_values
-            .insert(LocalValueData { ty: Some(TY_U32) });
-        let l1 = body
-            .local_values
-            .insert(LocalValueData { ty: Some(TY_U32) });
+        let bb = body.entry_block();
 
-        body.basic_blocks[bb]
-            .statements
-            .push(Statement::OpBinary(OpBinary {
-                operator: BinaryOperator::Add,
-                lhs: a0.into(),
-                rhs: Value::InlineConst(InlineConst::U32(5)),
-                result: l0,
-            }));
-        body.basic_blocks[bb]
-            .statements
-            .push(Statement::OpBinary(OpBinary {
-                operator: BinaryOperator::Add,
-                lhs: l0.into(),
-                rhs: a1.into(),
-                result: l1,
-            }));
-        body.basic_blocks[bb].terminator = Terminator::Return(Some(l1.into()));
+        let a0 = body.argument_values()[0];
+        let a1 = body.argument_values()[1];
 
-        let mut cfg = Cfg::default();
+        let (_, l0) = cfg.add_stmt_op_binary(
+            bb,
+            BlockPosition::Append,
+            BinaryOperator::Add,
+            a0.into(),
+            5u32.into(),
+        );
+        let (_, l1) = cfg.add_stmt_op_binary(
+            bb,
+            BlockPosition::Append,
+            BinaryOperator::Add,
+            l0.into(),
+            a1.into(),
+        );
 
-        cfg.function_body.insert(function, body);
+        cfg.set_terminator(bb, Terminator::return_value(l1.into()));
 
-        let actual = cfg_to_rvsdg(&mut module, &cfg);
+        let actual = cfg_to_rvsdg(&mut module, &mut cfg);
 
         let mut expected = Rvsdg::new(module.ty.clone());
 
@@ -804,7 +809,7 @@ mod tests {
                 ty: TY_DUMMY,
                 args: vec![
                     FnArg {
-                        ty: TY_PREDICATE,
+                        ty: TY_U32,
                         shader_io_binding: None,
                     },
                     FnArg {
@@ -816,73 +821,57 @@ mod tests {
             },
         );
 
-        let mut body = Body::init(&module.fn_sigs[function]);
+        let mut cfg = Cfg::new(module.ty.clone());
 
-        let bb0 = body.append_block();
-        let bb1 = body.append_block();
-        let bb2 = body.append_block();
-        let bb3 = body.append_block();
+        let body = cfg.register_function(&module, function);
 
-        let a0 = body.params[0];
-        let a1 = body.params[1];
-        let l0 = body
-            .local_values
-            .insert(LocalValueData { ty: Some(TY_U32) });
-        let l1 = body
-            .local_values
-            .insert(LocalValueData { ty: Some(TY_U32) });
+        let a0 = body.argument_values()[0];
+        let a1 = body.argument_values()[1];
 
-        body.basic_blocks[bb0].terminator = Terminator::Branch(Branch {
-            selector: Some(a0),
-            branches: smallvec![bb1, bb2],
-        });
+        let bb0 = body.entry_block();
+        let bb1 = cfg.add_basic_block(function);
+        let bb2 = cfg.add_basic_block(function);
+        let bb3 = cfg.add_basic_block(function);
 
-        body.basic_blocks[bb1]
-            .statements
-            .push(Statement::OpBinary(OpBinary {
-                operator: BinaryOperator::Add,
-                lhs: a1.into(),
-                rhs: Value::InlineConst(InlineConst::U32(1)),
-                result: l0,
-            }));
-        body.basic_blocks[bb1]
-            .statements
-            .push(Statement::OpAssign(OpAssign {
-                value: l0.into(),
-                result: l1,
-            }));
-        body.basic_blocks[bb1].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb3],
-        });
+        // BB0
+        let (_, res) = cfg.add_stmt_uninitialized(bb0, BlockPosition::Append, TY_U32);
+        let (_, predicate) =
+            cfg.add_stmt_op_case_to_branch_predicate(bb0, BlockPosition::Append, a0.into(), [0, 1]);
+        cfg.set_terminator(bb0, Terminator::branch_multiple(predicate, [bb1, bb2]));
 
-        body.basic_blocks[bb2]
-            .statements
-            .push(Statement::OpAssign(OpAssign {
-                value: Value::InlineConst(InlineConst::U32(0)),
-                result: l1,
-            }));
-        body.basic_blocks[bb2].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb3],
-        });
+        // BB1
+        let (_, add_res) = cfg.add_stmt_op_binary(
+            bb1,
+            BlockPosition::Append,
+            BinaryOperator::Add,
+            a1.into(),
+            1u32.into(),
+        );
+        cfg.add_stmt_assign(bb1, BlockPosition::Append, res, add_res.into());
+        cfg.set_terminator(bb1, Terminator::branch_single(bb3));
 
-        body.basic_blocks[bb3].terminator = Terminator::Return(Some(l1.into()));
+        // BB2
+        cfg.add_stmt_assign(bb2, BlockPosition::Append, res, 0u32.into());
+        cfg.set_terminator(bb2, Terminator::branch_single(bb3));
 
-        let mut cfg = Cfg::default();
+        // BB3
+        cfg.set_terminator(bb3, Terminator::return_value(res.into()));
 
-        cfg.function_body.insert(function, body);
-
-        let actual = cfg_to_rvsdg(&mut module, &cfg);
+        let actual = cfg_to_rvsdg(&mut module, &mut cfg);
 
         let mut expected = Rvsdg::new(module.ty.clone());
 
         let (_, region) = expected.register_function(&module, function, iter::empty());
 
+        let predicate_node = expected.add_op_case_to_switch_predicate(
+            region,
+            ValueInput::argument(TY_U32, 0),
+            [0, 1],
+        );
         let switch_node = expected.add_switch(
             region,
             vec![
-                ValueInput::argument(TY_PREDICATE, 0),
+                ValueInput::output(TY_PREDICATE, predicate_node, 0),
                 ValueInput::argument(TY_U32, 1),
             ],
             vec![ValueOutput::new(TY_U32)],
@@ -900,32 +889,32 @@ mod tests {
 
         let branch_0 = expected.add_switch_branch(switch_node);
 
-        let branch_0_node_0 = expected.add_const_u32(branch_0, 1);
-        let branch_0_node_1 = expected.add_op_binary(
+        let branch_0_added_value_node = expected.add_const_u32(branch_0, 1);
+        let branch_0_add_node = expected.add_op_binary(
             branch_0,
             BinaryOperator::Add,
             ValueInput::argument(TY_U32, 0),
-            ValueInput::output(TY_U32, branch_0_node_0, 0),
+            ValueInput::output(TY_U32, branch_0_added_value_node, 0),
         );
 
         expected.reconnect_region_result(
             branch_0,
             0,
             ValueOrigin::Output {
-                producer: branch_0_node_1,
+                producer: branch_0_add_node,
                 output: 0,
             },
         );
 
         let branch_1 = expected.add_switch_branch(switch_node);
 
-        let branch_1_node_0 = expected.add_const_u32(branch_1, 0);
+        let branch_1_const_node = expected.add_const_u32(branch_1, 0);
 
         expected.reconnect_region_result(
             branch_1,
             0,
             ValueOrigin::Output {
-                producer: branch_1_node_0,
+                producer: branch_1_const_node,
                 output: 0,
             },
         );
@@ -957,44 +946,39 @@ mod tests {
             },
         );
 
-        let mut body = Body::init(&module.fn_sigs[function]);
+        let mut cfg = Cfg::new(module.ty.clone());
 
-        let bb0 = body.append_block();
-        let bb1 = body.append_block();
+        let body = cfg.register_function(&module, function);
 
-        let a0 = body.params[0];
-        let l0 = body
-            .local_values
-            .insert(LocalValueData { ty: Some(TY_U32) });
+        let a0 = body.argument_values()[0];
 
-        body.basic_blocks[bb0]
-            .statements
-            .push(Statement::OpBinary(OpBinary {
-                operator: BinaryOperator::Add,
-                lhs: a0.into(),
-                rhs: Value::InlineConst(InlineConst::U32(1)),
-                result: a0,
-            }));
-        body.basic_blocks[bb0]
-            .statements
-            .push(Statement::OpBinary(OpBinary {
-                operator: BinaryOperator::Gt,
-                lhs: a0.into(),
-                rhs: Value::InlineConst(InlineConst::U32(10)),
-                result: l0,
-            }));
-        body.basic_blocks[bb0].terminator = Terminator::Branch(Branch {
-            selector: Some(l0),
-            branches: smallvec![bb1, bb0],
-        });
+        let bb0 = body.entry_block();
+        let bb1 = cfg.add_basic_block(function);
 
-        body.basic_blocks[bb1].terminator = Terminator::Return(Some(a0.into()));
+        // BB0
+        let (_, add_res) = cfg.add_stmt_op_binary(
+            bb0,
+            BlockPosition::Append,
+            BinaryOperator::Add,
+            a0.into(),
+            1u32.into(),
+        );
+        cfg.add_stmt_assign(bb0, BlockPosition::Append, a0, add_res.into());
+        let (_, cmp) = cfg.add_stmt_op_binary(
+            bb0,
+            BlockPosition::Append,
+            BinaryOperator::Gt,
+            a0.into(),
+            10u32.into(),
+        );
+        let (_, predicate) =
+            cfg.add_stmt_op_bool_to_branch_predicate(bb0, BlockPosition::Append, cmp.into());
+        cfg.set_terminator(bb0, Terminator::branch_multiple(predicate, [bb1, bb0]));
 
-        let mut cfg = Cfg::default();
+        // BB1
+        cfg.set_terminator(bb1, Terminator::return_value(a0.into()));
 
-        cfg.function_body.insert(function, body);
-
-        let actual = cfg_to_rvsdg(&mut module, &cfg);
+        let actual = cfg_to_rvsdg(&mut module, &mut cfg);
 
         let mut expected = Rvsdg::new(module.ty.clone());
 
@@ -1003,35 +987,28 @@ mod tests {
         let (loop_node, loop_region) =
             expected.add_loop(region, vec![ValueInput::argument(TY_U32, 0)], None);
 
-        expected.reconnect_region_result(
-            region,
-            0,
-            ValueOrigin::Output {
-                producer: loop_node,
-                output: 0,
-            },
-        );
-
-        let loop_node_0 = expected.add_const_u32(loop_region, 1);
-        let loop_node_1 = expected.add_op_binary(
+        let added_value_node = expected.add_const_u32(loop_region, 1);
+        let add_node = expected.add_op_binary(
             loop_region,
             BinaryOperator::Add,
             ValueInput::argument(TY_U32, 0),
-            ValueInput::output(TY_U32, loop_node_0, 0),
+            ValueInput::output(TY_U32, added_value_node, 0),
         );
-        let loop_node_2 = expected.add_const_u32(loop_region, 10);
-        let loop_node_3 = expected.add_op_binary(
+        let compare_value_node = expected.add_const_u32(loop_region, 10);
+        let cmp_node = expected.add_op_binary(
             loop_region,
             BinaryOperator::Gt,
-            ValueInput::output(TY_U32, loop_node_1, 0),
-            ValueInput::output(TY_U32, loop_node_2, 0),
+            ValueInput::output(TY_U32, add_node, 0),
+            ValueInput::output(TY_U32, compare_value_node, 0),
         );
+        let predicate_node = expected
+            .add_op_bool_to_switch_predicate(loop_region, ValueInput::output(TY_BOOL, cmp_node, 0));
 
         expected.reconnect_region_result(
             loop_region,
             0,
             ValueOrigin::Output {
-                producer: loop_node_3,
+                producer: predicate_node,
                 output: 0,
             },
         );
@@ -1039,7 +1016,16 @@ mod tests {
             loop_region,
             1,
             ValueOrigin::Output {
-                producer: loop_node_1,
+                producer: add_node,
+                output: 0,
+            },
+        );
+
+        expected.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: loop_node,
                 output: 0,
             },
         );
@@ -1077,69 +1063,49 @@ mod tests {
             },
         );
 
-        let mut body = Body::init(&module.fn_sigs[function]);
+        let mut cfg = Cfg::new(module.ty.clone());
 
-        let bb = body.append_block();
+        let body = cfg.register_function(&module, function);
 
-        let a0 = body.params[0];
-        let a1 = body.params[1];
-        let l0 = body
-            .local_values
-            .insert(LocalValueData { ty: Some(TY_U32) });
-        let l1 = body
-            .local_values
-            .insert(LocalValueData { ty: Some(TY_U32) });
+        let a0 = body.argument_values()[0];
+        let a1 = body.argument_values()[1];
 
-        body.basic_blocks[bb]
-            .statements
-            .push(Statement::OpLoad(OpLoad {
-                ptr: a0.into(),
-                result: l0,
-            }));
-        body.basic_blocks[bb]
-            .statements
-            .push(Statement::OpBinary(OpBinary {
-                operator: BinaryOperator::Add,
-                lhs: l0.into(),
-                rhs: Value::InlineConst(InlineConst::U32(1)),
-                result: l1,
-            }));
-        body.basic_blocks[bb]
-            .statements
-            .push(Statement::OpStore(OpStore {
-                ptr: a0.into(),
-                value: l1.into(),
-            }));
-        body.basic_blocks[bb].terminator = Terminator::Return(None);
+        let bb = body.entry_block();
 
-        let mut cfg = Cfg::default();
+        let (_, loaded_value) = cfg.add_stmt_op_load(bb, BlockPosition::Append, a0.into());
+        let (_, summed_value) = cfg.add_stmt_op_binary(
+            bb,
+            BlockPosition::Append,
+            BinaryOperator::Add,
+            loaded_value.into(),
+            a1.into(),
+        );
+        cfg.add_stmt_op_store(bb, BlockPosition::Append, a0.into(), summed_value.into());
+        cfg.set_terminator(bb, Terminator::return_void());
 
-        cfg.function_body.insert(function, body);
-
-        let actual = cfg_to_rvsdg(&mut module, &cfg);
+        let actual = cfg_to_rvsdg(&mut module, &mut cfg);
 
         let mut expected = Rvsdg::new(module.ty.clone());
 
         let (_, region) = expected.register_function(&module, function, iter::empty());
 
-        let node_0 = expected.add_op_load(
+        let load_node = expected.add_op_load(
             region,
             ValueInput::argument(module.ty.register(TypeKind::Ptr(TY_U32)), 0),
             TY_U32,
             StateOrigin::Argument,
         );
-        let node_1 = expected.add_const_u32(region, 1);
-        let node_2 = expected.add_op_binary(
+        let add_node = expected.add_op_binary(
             region,
             BinaryOperator::Add,
-            ValueInput::output(TY_U32, node_0, 0),
-            ValueInput::output(TY_U32, node_1, 0),
+            ValueInput::output(TY_U32, load_node, 0),
+            ValueInput::argument(TY_U32, 1),
         );
-        let node_3 = expected.add_op_store(
+        let store_node = expected.add_op_store(
             region,
             ValueInput::argument(module.ty.register(TypeKind::Ptr(TY_U32)), 0),
-            ValueInput::output(TY_U32, node_2, 0),
-            StateOrigin::Node(node_0),
+            ValueInput::output(TY_U32, add_node, 0),
+            StateOrigin::Node(load_node),
         );
 
         dbg!(&actual);

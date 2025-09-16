@@ -3,7 +3,7 @@ use std::ops::Index;
 use index_vec::IndexVec;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::cfg::{BasicBlock, LocalValue};
+use crate::cfg::{BasicBlock, LocalBinding};
 use crate::cfg_to_rvsdg::control_flow_restructuring::{Edge, Graph};
 
 index_vec::define_index_type! {
@@ -17,13 +17,13 @@ pub struct LinearNode {
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct BranchingNode {
-    pub selector: LocalValue,
+    pub selector: LocalBinding,
     pub branches: Vec<ControlTreeNode>,
 }
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct LoopNode {
-    pub reentry_predicate: LocalValue,
+    pub reentry_predicate: LocalBinding,
     pub inner: ControlTreeNode,
 }
 
@@ -96,7 +96,7 @@ fn reentry_edges_to_loop_info(
 }
 
 struct ControlTreeGenerator<'a> {
-    graph: &'a Graph,
+    graph: &'a Graph<'a>,
     branch_info: &'a FxHashMap<BasicBlock, BasicBlock>,
     loop_info: FxHashMap<BasicBlock, BasicBlock>,
     nodes: IndexVec<ControlTreeNode, ControlTreeNodeKind>,
@@ -105,7 +105,7 @@ struct ControlTreeGenerator<'a> {
 
 impl<'a> ControlTreeGenerator<'a> {
     fn new(
-        graph: &'a Graph,
+        graph: &'a Graph<'a>,
         branch_info: &'a FxHashMap<BasicBlock, BasicBlock>,
         reentry_edges: &FxHashSet<Edge>,
     ) -> Self {
@@ -267,131 +267,92 @@ mod tests {
 
     use super::*;
     use crate::cfg::{
-        Body, Branch, InlineConst, LocalValueData, OpAssign, OpBinary, Statement, Terminator, Value,
+        Assign, BlockPosition, Branch, Cfg, FunctionBody, InlineConst, LocalBindingData, OpBinary,
+        StatementData, Terminator, Value,
     };
     use crate::cfg_to_rvsdg::control_flow_restructuring::{
         restructure_branches, restructure_loops,
     };
     use crate::ty::{TY_BOOL, TY_DUMMY, TY_U32};
-    use crate::{BinaryOperator, FnArg, FnSig};
+    use crate::{BinaryOperator, FnArg, FnSig, Function, Module, Symbol};
 
     #[test]
     fn test_control_tree_generate() {
-        let mut body = Body::init(&FnSig {
-            name: Default::default(),
-            ty: TY_DUMMY,
-            args: vec![
-                FnArg {
-                    ty: TY_U32,
-                    shader_io_binding: None,
-                },
-                FnArg {
-                    ty: TY_U32,
-                    shader_io_binding: None,
-                },
-            ],
-            ret_ty: Some(TY_U32),
-        });
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
 
-        let x = body.params[0];
-        let y = body.params[1];
-        let c = body
-            .local_values
-            .insert(LocalValueData { ty: Some(TY_BOOL) });
-        let t = body
-            .local_values
-            .insert(LocalValueData { ty: Some(TY_U32) });
-        let r = body
-            .local_values
-            .insert(LocalValueData { ty: Some(TY_U32) });
-
-        let enter = body.append_block();
-        let bb0 = body.append_block();
-        let bb1 = body.append_block();
-        let bb2 = body.append_block();
-        let bb3 = body.append_block();
-        let bb4 = body.append_block();
-        let exit = body.append_block();
-
-        body.basic_blocks[enter].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb0],
-        });
-
-        body.basic_blocks[bb0].statements.push(
-            OpBinary {
-                operator: BinaryOperator::NotEq,
-                lhs: y.into(),
-                rhs: 0u32.into(),
-                result: c,
-            }
-            .into(),
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: Some(TY_U32),
+            },
         );
-        body.basic_blocks[bb0].terminator = Terminator::Branch(Branch {
-            selector: Some(c),
-            branches: smallvec![bb1, bb2],
-        });
 
-        body.basic_blocks[bb1].statements.push(
-            OpAssign {
-                value: 0u32.into(),
-                result: r,
-            }
-            .into(),
+        let mut cfg = Cfg::new(module.ty.clone());
+
+        let body = cfg.register_function(&module, function);
+
+        let x = body.argument_values()[0];
+        let y = body.argument_values()[1];
+
+        let enter = body.entry_block();
+        let bb0 = cfg.add_basic_block(function);
+        let bb1 = cfg.add_basic_block(function);
+        let bb2 = cfg.add_basic_block(function);
+        let bb3 = cfg.add_basic_block(function);
+        let bb4 = cfg.add_basic_block(function);
+        let exit = cfg.add_basic_block(function);
+
+        let (_, r) = cfg.add_stmt_uninitialized(enter, BlockPosition::Append, TY_U32);
+        cfg.set_terminator(enter, Terminator::branch_single(bb0));
+
+        let (_, c) = cfg.add_stmt_op_binary(
+            bb0,
+            BlockPosition::Append,
+            BinaryOperator::NotEq,
+            y.into(),
+            0u32.into(),
         );
-        body.basic_blocks[bb1].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb4],
-        });
+        cfg.set_terminator(bb0, Terminator::branch_multiple(c, [bb1, bb2]));
 
-        body.basic_blocks[bb2].statements.push(
-            OpAssign {
-                value: y.into(),
-                result: t,
-            }
-            .into(),
+        cfg.add_stmt_assign(bb1, BlockPosition::Append, r, 0u32.into());
+        cfg.set_terminator(bb1, Terminator::branch_single(bb4));
+
+        let (_, t) = cfg.add_stmt_bind(bb2, BlockPosition::Append, y.into());
+        let (_, mod_result) = cfg.add_stmt_op_binary(
+            bb2,
+            BlockPosition::Append,
+            BinaryOperator::Mod,
+            x.into(),
+            y.into(),
         );
-        body.basic_blocks[bb2].statements.push(
-            OpBinary {
-                operator: BinaryOperator::Mod,
-                lhs: x.into(),
-                rhs: y.into(),
-                result: y.into(),
-            }
-            .into(),
-        );
-        body.basic_blocks[bb2].statements.push(
-            OpAssign {
-                value: t.into(),
-                result: x,
-            }
-            .into(),
-        );
-        body.basic_blocks[bb2].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb3],
-        });
+        cfg.add_stmt_assign(bb2, BlockPosition::Append, y, mod_result.into());
+        cfg.add_stmt_assign(bb2, BlockPosition::Append, x, t.into());
+        cfg.set_terminator(bb2, Terminator::branch_single(bb3));
 
-        body.basic_blocks[bb3].statements.push(
-            OpAssign {
-                value: 1u32.into(),
-                result: r,
-            }
-            .into(),
-        );
-        body.basic_blocks[bb3].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb4],
-        });
+        cfg.add_stmt_assign(bb3, BlockPosition::Append, r, 1u32.into());
+        cfg.set_terminator(bb3, Terminator::branch_single(bb4));
 
-        body.basic_blocks[bb4].terminator = Terminator::Branch(Branch {
-            selector: Some(r),
-            branches: smallvec![exit, bb0],
-        });
+        cfg.set_terminator(bb4, Terminator::branch_multiple(r, [exit, bb0]));
 
-        body.basic_blocks[exit].terminator = Terminator::Return(Some(x.into()));
+        cfg.set_terminator(exit, Terminator::Return(Some(x.into())));
 
-        let mut graph = Graph::init(body);
+        let mut graph = Graph::init(&mut cfg, function);
         let reentry_edges = restructure_loops(&mut graph);
         let branch_info = restructure_branches(&mut graph, &reentry_edges);
 
@@ -464,48 +425,61 @@ mod tests {
 
     #[test]
     fn test_control_tree_generate_single_node_loop() {
-        let mut body = Body::init(&FnSig {
-            name: Default::default(),
-            ty: TY_DUMMY,
-            args: vec![FnArg {
-                ty: TY_U32,
-                shader_io_binding: None,
-            }],
-            ret_ty: Some(TY_U32),
-        });
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
 
-        let bb0 = body.append_block();
-        let bb1 = body.append_block();
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![FnArg {
+                    ty: TY_U32,
+                    shader_io_binding: None,
+                }],
+                ret_ty: Some(TY_U32),
+            },
+        );
 
-        let a0 = body.params[0];
-        let l0 = body
-            .local_values
-            .insert(LocalValueData { ty: Some(TY_U32) });
+        let mut cfg = Cfg::new(module.ty.clone());
 
-        body.basic_blocks[bb0]
-            .statements
-            .push(Statement::OpBinary(OpBinary {
-                operator: BinaryOperator::Add,
-                lhs: a0.into(),
-                rhs: Value::InlineConst(InlineConst::U32(1)),
-                result: a0,
-            }));
-        body.basic_blocks[bb0]
-            .statements
-            .push(Statement::OpBinary(OpBinary {
-                operator: BinaryOperator::Gt,
-                lhs: a0.into(),
-                rhs: Value::InlineConst(InlineConst::U32(10)),
-                result: l0,
-            }));
-        body.basic_blocks[bb0].terminator = Terminator::Branch(Branch {
-            selector: Some(l0),
-            branches: smallvec![bb1, bb0],
-        });
+        let body = cfg.register_function(&module, function);
 
-        body.basic_blocks[bb1].terminator = Terminator::Return(Some(a0.into()));
+        let a0 = body.argument_values()[0];
 
-        let mut graph = Graph::init(body);
+        let bb0 = body.entry_block();
+        let bb1 = cfg.add_basic_block(function);
+
+        let (_, add_result) = cfg.add_stmt_op_binary(
+            bb0,
+            BlockPosition::Append,
+            BinaryOperator::Add,
+            a0.into(),
+            1u32.into(),
+        );
+        let (_, test_result) = cfg.add_stmt_op_binary(
+            bb0,
+            BlockPosition::Append,
+            BinaryOperator::Gt,
+            add_result.into(),
+            10u32.into(),
+        );
+        let (_, predicate) = cfg.add_stmt_op_bool_to_branch_predicate(
+            bb0,
+            BlockPosition::Append,
+            test_result.into(),
+        );
+        cfg.set_terminator(
+            bb0,
+            Terminator::branch_multiple(predicate.into(), [bb1, bb0]),
+        );
+
+        cfg.set_terminator(bb1, Terminator::return_value(add_result.into()));
+
+        let mut graph = Graph::init(&mut cfg, function);
         let reentry_edges = restructure_loops(&mut graph);
         let branch_info = restructure_branches(&mut graph, &reentry_edges);
 

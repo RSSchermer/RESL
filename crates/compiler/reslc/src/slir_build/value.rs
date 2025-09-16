@@ -29,8 +29,8 @@ impl From<slir::cfg::Value> for Value {
     }
 }
 
-impl From<slir::cfg::LocalValue> for Value {
-    fn from(value: slir::cfg::LocalValue) -> Self {
+impl From<slir::cfg::LocalBinding> for Value {
+    fn from(value: slir::cfg::LocalBinding) -> Self {
         Value::Value(slir::cfg::Value::Local(value))
     }
 }

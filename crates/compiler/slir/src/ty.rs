@@ -145,6 +145,14 @@ impl TypeKind {
         matches!(self, TypeKind::Ptr(_))
     }
 
+    pub fn expect_ptr(&self) -> Type {
+        if let TypeKind::Ptr(ptr) = self {
+            *ptr
+        } else {
+            panic!("not a pointer type");
+        }
+    }
+
     pub fn is_aggregate(&self) -> bool {
         matches!(
             self,
@@ -567,6 +575,31 @@ impl TypeRegistry {
                 }
             }
         }
+    }
+
+    pub fn import(&self, other_reg: &TypeRegistry, ty: Type) -> Type {
+        let mut ty_kind = other_reg.kind(ty).deref().clone();
+
+        match &mut ty_kind {
+            TypeKind::Array {
+                element_ty: base, ..
+            } => {
+                *base = self.import(other_reg, *base);
+            }
+            TypeKind::Struct(struct_data) => {
+                for field in &mut struct_data.fields {
+                    field.ty = self.import(other_reg, field.ty);
+                }
+            }
+            TypeKind::Enum(enum_data) => {
+                for variant in &mut enum_data.variants {
+                    *variant = self.import(other_reg, *variant);
+                }
+            }
+            _ => (),
+        }
+
+        self.register(ty_kind)
     }
 
     pub fn is_compatible(&self, t0: Type, t1: Type) -> bool {

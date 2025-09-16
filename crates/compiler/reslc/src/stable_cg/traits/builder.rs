@@ -51,6 +51,8 @@ pub trait BuilderMethods<'a>:
 
     fn set_span(&mut self, span: Span);
 
+    fn start_block(cx: &'a Self::CodegenCx, llfn: Self::Function) -> Self::BasicBlock;
+
     // FIXME(eddyb) replace uses of this with `append_sibling_block`.
     fn append_block(cx: &'a Self::CodegenCx, llfn: Self::Function, name: &str) -> Self::BasicBlock;
 

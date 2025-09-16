@@ -39,7 +39,7 @@ pub fn Expression(
         ExpressionKind::ConstF32(v) => format!("{}f32", v).into_any(),
         ExpressionKind::ConstBool(v) => v.to_string().into_any(),
         ExpressionKind::ConstPtr(expr) => view! {
-            <Expression module expression=*expr highlight />
+            "&"<Expression module expression=*expr highlight />
         }
         .into_any(),
         ExpressionKind::OpUnary(op) => view! {

@@ -1,7 +1,7 @@
 use leptos::prelude::*;
 use slotmap::Key;
 
-use crate::module_explorer::cfg_explorer::instruction::Instruction;
+use crate::module_explorer::cfg_explorer::statement::Statement;
 use crate::module_explorer::cfg_explorer::terminator::Terminator;
 use crate::module_explorer::cfg_explorer::HighlightSignal;
 use crate::module_explorer::ModuleData;
@@ -20,14 +20,14 @@ pub fn BasicBlock(
             </div>
             <div class="basic-block-body">
             {move || {
-                module.read_value().cfg.function_body[function].basic_blocks[bb].statements.iter().map(|instruction| {
-                    view! { <Instruction module function instruction=instruction.clone() highlight/> }
+                module.read_value().cfg[bb].statements().iter().copied().map(|statement| {
+                    view! { <Statement module function statement highlight/> }
                 }).collect_view()
             }}
             </div>
             <div class="basic-block-terminator">
             {move || {
-                let terminator = module.read_value().cfg.function_body[function].basic_blocks[bb].terminator.clone();
+                let terminator = module.read_value().cfg[bb].terminator().clone();
 
                 view! { <Terminator module function terminator highlight/> }
             }}

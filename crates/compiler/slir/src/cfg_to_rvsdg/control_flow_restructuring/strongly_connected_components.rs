@@ -243,21 +243,49 @@ impl SccStructure {
 
 #[cfg(test)]
 mod tests {
-    use smallvec::smallvec;
-
     use super::*;
-    use crate::cfg::{Body, Branch, Terminator};
-    use crate::ty::TY_DUMMY;
-    use crate::FnSig;
+    use crate::cfg::{Cfg, Terminator};
+    use crate::ty::{TY_DUMMY, TY_PREDICATE};
+    use crate::{FnArg, FnSig, Function, Module, Symbol};
 
     #[test]
     fn test_strongly_connected_components() {
-        let mut body = Body::init(&FnSig {
-            name: Default::default(),
-            ty: TY_DUMMY,
-            args: vec![],
-            ret_ty: None,
-        });
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_PREDICATE,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_PREDICATE,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_PREDICATE,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: None,
+            },
+        );
+
+        let mut cfg = Cfg::new(module.ty.clone());
+
+        let body = cfg.register_function(&module, function);
+
+        let a0 = body.argument_values()[0];
+        let a1 = body.argument_values()[1];
+        let a2 = body.argument_values()[2];
 
         //
         //  bb0<-----bb3---->bb4--->bb5<--bb7
@@ -268,34 +296,25 @@ mod tests {
         //  bb1----->bb2
         //
 
-        let bb0 = body.append_block();
-        let bb1 = body.append_block();
-        let bb2 = body.append_block();
-        let bb3 = body.append_block();
-        let bb4 = body.append_block();
-        let bb5 = body.append_block();
-        let bb6 = body.append_block();
-        let bb7 = body.append_block();
+        let bb0 = body.entry_block();
+        let bb1 = cfg.add_basic_block(function);
+        let bb2 = cfg.add_basic_block(function);
+        let bb3 = cfg.add_basic_block(function);
+        let bb4 = cfg.add_basic_block(function);
+        let bb5 = cfg.add_basic_block(function);
+        let bb6 = cfg.add_basic_block(function);
+        let bb7 = cfg.add_basic_block(function);
 
-        body.basic_blocks[bb0].terminator = Terminator::Branch(Branch::single(bb1));
-        body.basic_blocks[bb1].terminator = Terminator::Branch(Branch::single(bb2));
-        body.basic_blocks[bb2].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb0, bb3],
-        });
-        body.basic_blocks[bb3].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb0, bb4],
-        });
-        body.basic_blocks[bb4].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb5, bb6],
-        });
-        body.basic_blocks[bb5].terminator = Terminator::Branch(Branch::single(bb6));
-        body.basic_blocks[bb6].terminator = Terminator::Branch(Branch::single(bb7));
-        body.basic_blocks[bb7].terminator = Terminator::Branch(Branch::single(bb5));
+        cfg.set_terminator(bb0, Terminator::branch_single(bb1));
+        cfg.set_terminator(bb1, Terminator::branch_single(bb2));
+        cfg.set_terminator(bb2, Terminator::branch_multiple(a0, [bb0, bb3]));
+        cfg.set_terminator(bb3, Terminator::branch_multiple(a1, [bb0, bb4]));
+        cfg.set_terminator(bb4, Terminator::branch_multiple(a2, [bb5, bb6]));
+        cfg.set_terminator(bb5, Terminator::branch_single(bb6));
+        cfg.set_terminator(bb6, Terminator::branch_single(bb7));
+        cfg.set_terminator(bb7, Terminator::branch_single(bb5));
 
-        let graph = Graph::init(body);
+        let graph = Graph::init(&mut cfg, function);
 
         let scc = strongly_connected_components(&graph, &FxHashSet::default());
 
@@ -307,12 +326,42 @@ mod tests {
 
     #[test]
     fn test_scc_structure() {
-        let mut body = Body::init(&FnSig {
-            name: Default::default(),
-            ty: TY_DUMMY,
-            args: vec![],
-            ret_ty: None,
-        });
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_PREDICATE,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_PREDICATE,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_PREDICATE,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: None,
+            },
+        );
+
+        let mut cfg = Cfg::new(module.ty.clone());
+
+        let body = cfg.register_function(&module, function);
+
+        let a0 = body.argument_values()[0];
+        let a1 = body.argument_values()[1];
+        let a2 = body.argument_values()[2];
 
         //
         //       bb0
@@ -334,33 +383,24 @@ mod tests {
         //       exit
         //
 
-        let bb0 = body.append_block();
-        let bb1 = body.append_block();
-        let bb2 = body.append_block();
-        let bb3 = body.append_block();
-        let bb4 = body.append_block();
-        let bb5 = body.append_block();
-        let bb6 = body.append_block();
-        let exit = body.append_block();
+        let bb0 = body.entry_block();
+        let bb1 = cfg.add_basic_block(function);
+        let bb2 = cfg.add_basic_block(function);
+        let bb3 = cfg.add_basic_block(function);
+        let bb4 = cfg.add_basic_block(function);
+        let bb5 = cfg.add_basic_block(function);
+        let bb6 = cfg.add_basic_block(function);
+        let exit = cfg.add_basic_block(function);
 
-        body.basic_blocks[bb0].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb1, bb2],
-        });
-        body.basic_blocks[bb1].terminator = Terminator::Branch(Branch::single(bb3));
-        body.basic_blocks[bb2].terminator = Terminator::Branch(Branch::single(bb4));
-        body.basic_blocks[bb3].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb5, bb2],
-        });
-        body.basic_blocks[bb4].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb6, bb1],
-        });
-        body.basic_blocks[bb5].terminator = Terminator::Branch(Branch::single(exit));
-        body.basic_blocks[bb6].terminator = Terminator::Branch(Branch::single(exit));
+        cfg.set_terminator(bb0, Terminator::branch_multiple(a0, [bb1, bb2]));
+        cfg.set_terminator(bb1, Terminator::branch_single(bb3));
+        cfg.set_terminator(bb2, Terminator::branch_single(bb4));
+        cfg.set_terminator(bb3, Terminator::branch_multiple(a1, [bb5, bb2]));
+        cfg.set_terminator(bb4, Terminator::branch_multiple(a2, [bb6, bb1]));
+        cfg.set_terminator(bb5, Terminator::branch_single(exit));
+        cfg.set_terminator(bb6, Terminator::branch_single(exit));
 
-        let graph = Graph::init(body);
+        let graph = Graph::init(&mut cfg, function);
 
         let scc = strongly_connected_components(&graph, &FxHashSet::default());
 

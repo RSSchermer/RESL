@@ -113,11 +113,14 @@ pub struct CodegenContext<'a, 'tcx> {
 
 impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
     pub fn new(rcx: &'a ReslContext<'tcx>, module_name: slir::Symbol) -> Self {
+        let module = slir::Module::new(module_name);
+        let cfg = slir::cfg::Cfg::new(module.ty.clone());
+
         CodegenContext {
             rcx,
             module_name,
-            module: RefCell::new(slir::Module::new(module_name)),
-            cfg: RefCell::new(Default::default()),
+            module: RefCell::new(module),
+            cfg: RefCell::new(cfg),
             scalar_to_slir: RefCell::new(Default::default()),
             ty_to_slir: RefCell::new(Default::default()),
             instance_to_slir: RefCell::new(Default::default()),
@@ -559,11 +562,10 @@ impl<'a, 'tcx> PreDefineCodegenMethods for CodegenContext<'a, 'tcx> {
             ret_ty,
         };
 
-        self.cfg
-            .borrow_mut()
-            .function_body
-            .insert(function, slir::cfg::Body::init(&sig));
-        self.module.borrow_mut().fn_sigs.register(function, sig);
+        let mut module = self.module.borrow_mut();
+
+        module.fn_sigs.register(function, sig);
+        self.cfg.borrow_mut().register_function(&module, function);
 
         self.instance_to_slir
             .borrow_mut()
@@ -573,9 +575,9 @@ impl<'a, 'tcx> PreDefineCodegenMethods for CodegenContext<'a, 'tcx> {
 
 impl<'a, 'tcx> BackendTypes for CodegenContext<'a, 'tcx> {
     type Value = Value;
-    type Local = slir::cfg::LocalValue;
+    type Local = slir::cfg::LocalBinding;
     type Function = slir::Function;
-    type BasicBlock = (slir::Function, slir::cfg::BasicBlock);
+    type BasicBlock = slir::cfg::BasicBlock;
     type Type = Type;
 }
 
@@ -694,7 +696,7 @@ impl<'a, 'tcx> ConstCodegenMethods for CodegenContext<'a, 'tcx> {
             Scalar::I32(v) => slir::cfg::InlineConst::I32(v),
             Scalar::F32(v) => slir::cfg::InlineConst::from(v),
             Scalar::Pointer(ptr) => {
-                let (base, ty) = match GlobalAlloc::from(ptr.alloc_id) {
+                let ident = match GlobalAlloc::from(ptr.alloc_id) {
                     GlobalAlloc::Function(_) => bug!("function pointers are not supported by SLIR"),
                     GlobalAlloc::VTable(_, _) => bug!("V-tables are not supported by SLIR"),
                     GlobalAlloc::Static(def) => {
@@ -704,25 +706,20 @@ impl<'a, 'tcx> ConstCodegenMethods for CodegenContext<'a, 'tcx> {
                             .get(&def)
                             .expect("static should have been pre-defined");
 
-                        let base = match slir_static {
+                        match slir_static {
                             SlirStatic::Uniform(b) => slir::cfg::RootIdentifier::Uniform(b),
                             SlirStatic::Storage(b) => slir::cfg::RootIdentifier::Storage(b),
                             SlirStatic::Workgroup(b) => slir::cfg::RootIdentifier::Workgroup(b),
-                        };
-
-                        let ty = def.ty();
-                        let ty = self.ty_and_layout_resolve(TyAndLayout::expect_from_ty(ty));
-
-                        (base, ty)
+                        }
                     }
                     GlobalAlloc::Memory(_) => todo!(),
                 };
 
-                slir::cfg::InlineConst::Ptr(slir::cfg::Ptr {
-                    pointee_ty: ty,
-                    base,
-                    offset: ptr.offset as u32,
-                })
+                slir::cfg::InlineConst::Ptr(slir::cfg::ConstPtr::new(
+                    &*self.module.borrow(),
+                    &*self.cfg.borrow(),
+                    ident,
+                ))
             }
         };
 

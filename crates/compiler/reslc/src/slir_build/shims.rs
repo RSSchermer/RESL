@@ -4,8 +4,9 @@ use std::sync::LazyLock;
 use regex::Regex;
 use rustc_middle::bug;
 use slir::cfg::{
-    Branch, InlineConst, LocalValueData, OpBinary, OpBoolToBranchPredicate, OpOffsetSlicePtr,
-    OpPtrElementPtr, OpPtrVariantPtr, OpSetDiscriminant, OpStore, Terminator, Value,
+    BlockPosition, Branch, InlineConst, LocalBindingData, OpBinary, OpBoolToBranchPredicate,
+    OpOffsetSlicePtr, OpPtrElementPtr, OpPtrVariantPtr, OpSetDiscriminant, OpStore, Terminator,
+    Value,
 };
 use slir::ty::{TypeKind, TY_BOOL, TY_PREDICATE, TY_PTR_U32, TY_U32};
 use slir::BinaryOperator;
@@ -55,116 +56,74 @@ fn define_usize_slice_index_get(instance: Instance, cx: &CodegenContext) {
         bug!("`Option` type should be represented in SLIR by an enum`");
     };
     let some_variant_ty = option_enum.variants[1];
-    let some_variant_ptr_ty = module.ty.register(TypeKind::Ptr(some_variant_ty));
     let some_struct_data = module.ty.kind(some_variant_ty);
     let some_struct_data = some_struct_data.expect_struct();
     let elem_ptr_ty = some_struct_data.fields[0].ty;
-    let elem_ptr_ptr_ty = module.ty.register(TypeKind::Ptr(elem_ptr_ty));
     let TypeKind::Ptr(elem_ty) = *module.ty.kind(elem_ptr_ty) else {
         bug!("`Some` variant payload must be a pointer");
     };
 
-    let body = &mut cx.cfg.borrow_mut().function_body[function];
+    let mut cfg = cx.cfg.borrow_mut();
+    let body = cfg
+        .get_function_body(function)
+        .expect("function should have been predefined");
 
-    let ret = body.params[0];
-    let index = body.params[1];
-    let slice_ptr = body.params[2];
-    let len = body.params[3];
-    let in_bounds = body
-        .local_values
-        .insert(LocalValueData { ty: Some(TY_BOOL) });
-    let predicate = body.local_values.insert(LocalValueData::predicate());
-    let elem_ptr = body.local_values.insert(LocalValueData {
-        ty: Some(elem_ptr_ty),
-    });
-    let some_ptr = body.local_values.insert(LocalValueData {
-        ty: Some(some_variant_ptr_ty),
-    });
-    let payload_ptr = body.local_values.insert(LocalValueData {
-        ty: Some(elem_ptr_ptr_ty),
-    });
+    let ret = body.argument_values()[0];
+    let index = body.argument_values()[1];
+    let slice_ptr = body.argument_values()[2];
+    let len = body.argument_values()[3];
 
-    let bb0 = body.append_block();
-    let bb1 = body.append_block();
-    let bb2 = body.append_block();
+    let bb0 = body.entry_block();
+    let bb1 = cfg.add_basic_block(function);
+    let bb2 = cfg.add_basic_block(function);
 
-    body.basic_blocks[bb0].statements.push(
-        OpBinary {
-            operator: BinaryOperator::Lt,
-            lhs: index.into(),
-            rhs: len.into(),
-            result: in_bounds,
-        }
-        .into(),
+    let (_, in_bounds) = cfg.add_stmt_op_binary(
+        bb0,
+        BlockPosition::Append,
+        BinaryOperator::Lt,
+        index.into(),
+        len.into(),
     );
-    body.basic_blocks[bb0].statements.push(
-        OpBoolToBranchPredicate {
-            value: in_bounds.into(),
-            result: predicate,
-        }
-        .into(),
+    let (_, predicate) =
+        cfg.add_stmt_op_bool_to_branch_predicate(bb0, BlockPosition::Append, in_bounds.into());
+    cfg.set_terminator(
+        bb0,
+        Terminator::branch_multiple(predicate.into(), [bb1, bb2]),
     );
-    body.basic_blocks[bb0].terminator = Terminator::Branch(Branch {
-        selector: Some(predicate),
-        branches: smallvec![bb1, bb2],
-    });
 
     // The "in bounds" branch
-    body.basic_blocks[bb1].statements.push(
-        OpSetDiscriminant {
-            ptr: ret.into(),
-            variant_index: 1,
-        }
-        .into(),
+    cfg.add_stmt_op_set_discriminant(bb1, BlockPosition::Append, ret.into(), 1);
+    let (_, some_ptr) = cfg.add_stmt_op_ptr_variant_ptr(bb1, BlockPosition::Append, ret.into(), 1);
+    let (_, payload_ptr) = cfg.add_stmt_op_ptr_element_ptr(
+        bb1,
+        BlockPosition::Append,
+        elem_ptr_ty,
+        some_ptr.into(),
+        [InlineConst::U32(0).into()],
     );
-    body.basic_blocks[bb1].statements.push(
-        OpPtrVariantPtr {
-            ptr: ret.into(),
-            variant_index: 1,
-            result: some_ptr,
-        }
-        .into(),
+    let (_, elem_ptr) = cfg.add_stmt_op_ptr_element_ptr(
+        bb1,
+        BlockPosition::Append,
+        elem_ty,
+        slice_ptr.into(),
+        [index.into()],
     );
-    body.basic_blocks[bb1].statements.push(
-        OpPtrElementPtr {
-            element_ty: elem_ptr_ty,
-            ptr: some_ptr.into(),
-            indices: thin_vec![InlineConst::U32(0).into()],
-            result: payload_ptr,
-        }
-        .into(),
+    cfg.add_stmt_op_store(
+        bb1,
+        BlockPosition::Append,
+        payload_ptr.into(),
+        elem_ptr.into(),
     );
-    body.basic_blocks[bb1].statements.push(
-        OpPtrElementPtr {
-            element_ty: elem_ty,
-            ptr: slice_ptr.into(),
-            indices: thin_vec![index.into()],
-            result: elem_ptr,
-        }
-        .into(),
-    );
-    body.basic_blocks[bb1].statements.push(
-        OpStore {
-            ptr: payload_ptr.into(),
-            value: elem_ptr.into(),
-        }
-        .into(),
-    );
-    body.basic_blocks[bb1].terminator = Terminator::Return(None);
+    cfg.set_terminator(bb1, Terminator::return_void());
 
     // The "not in bounds" branch
-    body.basic_blocks[bb2].statements.push(
-        OpSetDiscriminant {
-            ptr: ret.into(),
-            variant_index: 0,
-        }
-        .into(),
-    );
-    body.basic_blocks[bb2].terminator = Terminator::Return(None);
+    cfg.add_stmt_op_set_discriminant(bb2, BlockPosition::Append, ret.into(), 0);
+    cfg.set_terminator(bb2, Terminator::return_void());
 }
 
 fn define_range_usize_slice_index_get(instance: Instance, cx: &CodegenContext) {
     let function = cx.get_fn(&instance);
+
     let mut module = cx.module.borrow_mut();
     let ret_ty = module.fn_sigs[function].args[0].ty;
 
@@ -182,171 +141,107 @@ fn define_range_usize_slice_index_get(instance: Instance, cx: &CodegenContext) {
     let fat_ptr_kind = module.ty.kind(fat_ptr_ty);
     let fat_ptr_data = fat_ptr_kind.expect_struct();
     let slice_ptr_ty = fat_ptr_data.fields[0].ty;
-    let slice_ptr_ptr_ty = module.ty.register(TypeKind::Ptr(slice_ptr_ty));
 
-    let body = &mut cx.cfg.borrow_mut().function_body[function];
+    let mut cfg = cx.cfg.borrow_mut();
 
-    let bb0 = body.append_block();
-    let bb_some = body.append_block();
-    let bb_none = body.append_block();
+    let body = cfg
+        .get_function_body(function)
+        .expect("function should have been predefined");
 
-    let ret = body.params[0];
-    let start = body.params[1];
-    let end = body.params[2];
-    let in_slice_ptr = body.params[3];
-    let in_slice_len = body.params[4];
+    let ret = body.argument_values()[0];
+    let start = body.argument_values()[1];
+    let end = body.argument_values()[2];
+    let in_slice_ptr = body.argument_values()[3];
+    let in_slice_len = body.argument_values()[4];
 
-    let some_variant_ptr = body.local_values.insert(LocalValueData {
-        ty: Some(some_variant_ptr_ty),
-    });
-    let start_lt_end = body
-        .local_values
-        .insert(LocalValueData { ty: Some(TY_BOOL) });
-    let end_in_bounds = body
-        .local_values
-        .insert(LocalValueData { ty: Some(TY_BOOL) });
-    let condition = body
-        .local_values
-        .insert(LocalValueData { ty: Some(TY_BOOL) });
-    let predicate = body.local_values.insert(LocalValueData {
-        ty: Some(TY_PREDICATE),
-    });
-    let out_slice_ptr = body.local_values.insert(LocalValueData {
-        ty: Some(slice_ptr_ty),
-    });
-    let out_slice_ptr_ptr = body.local_values.insert(LocalValueData {
-        ty: Some(slice_ptr_ptr_ty),
-    });
-    let out_len = body
-        .local_values
-        .insert(LocalValueData { ty: Some(TY_U32) });
-    let out_len_ptr = body.local_values.insert(LocalValueData {
-        ty: Some(TY_PTR_U32),
-    });
+    let bb0 = body.entry_block();
+    let bb_some = cfg.add_basic_block(function);
+    let bb_none = cfg.add_basic_block(function);
 
     // Check if the range is non-empty
-    body.basic_blocks[bb0].statements.push(
-        OpBinary {
-            operator: BinaryOperator::Lt,
-            lhs: start.into(),
-            rhs: end.into(),
-            result: start_lt_end,
-        }
-        .into(),
+    let (_, start_lt_end) = cfg.add_stmt_op_binary(
+        bb0,
+        BlockPosition::Append,
+        BinaryOperator::Lt,
+        start.into(),
+        end.into(),
     );
     // Check if the `end` is in bounds. Because of the above check, this will also imply that the
     // `start` is in bounds.
-    body.basic_blocks[bb0].statements.push(
-        OpBinary {
-            operator: BinaryOperator::LtEq,
-            lhs: end.into(),
-            rhs: in_slice_len.into(),
-            result: end_in_bounds,
-        }
-        .into(),
+    let (_, end_in_bounds) = cfg.add_stmt_op_binary(
+        bb0,
+        BlockPosition::Append,
+        BinaryOperator::LtEq,
+        end.into(),
+        in_slice_len.into(),
     );
     // Create a predicate that selects the `Some` branch if both of the above checks are `true`, or
     // the `None` branch otherwise.
-    body.basic_blocks[bb0].statements.push(
-        OpBinary {
-            operator: BinaryOperator::And,
-            lhs: start_lt_end.into(),
-            rhs: end_in_bounds.into(),
-            result: condition,
-        }
-        .into(),
+    let (_, condition) = cfg.add_stmt_op_binary(
+        bb0,
+        BlockPosition::Append,
+        BinaryOperator::And,
+        start_lt_end.into(),
+        end_in_bounds.into(),
     );
-    body.basic_blocks[bb0].statements.push(
-        OpBoolToBranchPredicate {
-            value: condition.into(),
-            result: predicate,
-        }
-        .into(),
+    let (_, predicate) =
+        cfg.add_stmt_op_bool_to_branch_predicate(bb0, BlockPosition::Append, condition.into());
+    cfg.set_terminator(
+        bb0,
+        Terminator::branch_multiple(predicate.into(), [bb_some, bb_none]),
     );
-    body.basic_blocks[bb0].terminator = Terminator::Branch(Branch {
-        selector: Some(predicate),
-        branches: smallvec![bb_some, bb_none],
-    });
 
     // `Some` branch
-    body.basic_blocks[bb_some].statements.push(
-        OpPtrVariantPtr {
-            ptr: ret.into(),
-            variant_index: 1,
-            result: some_variant_ptr,
-        }
-        .into(),
-    );
+    let (_, some_variant_ptr) =
+        cfg.add_stmt_op_ptr_variant_ptr(bb_some, BlockPosition::Append, ret.into(), 1);
     // Compute the new slice pointer
-    body.basic_blocks[bb_some].statements.push(
-        OpOffsetSlicePtr {
-            slice_ptr: in_slice_ptr.into(),
-            offset: start.into(),
-            result: out_slice_ptr,
-        }
-        .into(),
+    let (_, out_slice_ptr) = cfg.add_stmt_op_offset_slice_pointer(
+        bb_some,
+        BlockPosition::Append,
+        in_slice_ptr.into(),
+        start.into(),
     );
     // Store the new slice pointer
-    body.basic_blocks[bb_some].statements.push(
-        OpPtrElementPtr {
-            element_ty: TY_U32,
-            ptr: some_variant_ptr.into(),
-            indices: thin_vec![InlineConst::U32(0).into(), InlineConst::U32(0).into()],
-            result: out_slice_ptr_ptr,
-        }
-        .into(),
+    let (_, out_slice_ptr_ptr) = cfg.add_stmt_op_ptr_element_ptr(
+        bb_some,
+        BlockPosition::Append,
+        slice_ptr_ty,
+        some_variant_ptr.into(),
+        [InlineConst::U32(0).into(), InlineConst::U32(0).into()],
     );
-    body.basic_blocks[bb_some].statements.push(
-        OpStore {
-            ptr: out_slice_ptr_ptr.into(),
-            value: out_slice_ptr.into(),
-        }
-        .into(),
+    cfg.add_stmt_op_store(
+        bb_some,
+        BlockPosition::Append,
+        out_slice_ptr_ptr.into(),
+        out_slice_ptr.into(),
     );
     // Compute the new len
-    body.basic_blocks[bb_some].statements.push(
-        OpBinary {
-            operator: BinaryOperator::Sub,
-            lhs: end.into(),
-            rhs: start.into(),
-            result: out_len,
-        }
-        .into(),
+    let (_, out_len) = cfg.add_stmt_op_binary(
+        bb_some,
+        BlockPosition::Append,
+        BinaryOperator::Sub,
+        end.into(),
+        start.into(),
     );
     // Store the new len
-    body.basic_blocks[bb_some].statements.push(
-        OpPtrElementPtr {
-            element_ty: TY_U32,
-            ptr: some_variant_ptr.into(),
-            indices: thin_vec![InlineConst::U32(0).into(), InlineConst::U32(1).into()],
-            result: out_len_ptr,
-        }
-        .into(),
+    let (_, out_len_ptr) = cfg.add_stmt_op_ptr_element_ptr(
+        bb_some,
+        BlockPosition::Append,
+        TY_U32,
+        some_variant_ptr.into(),
+        [InlineConst::U32(0).into(), InlineConst::U32(1).into()],
     );
-    body.basic_blocks[bb_some].statements.push(
-        OpStore {
-            ptr: out_len_ptr.into(),
-            value: out_len.into(),
-        }
-        .into(),
+    cfg.add_stmt_op_store(
+        bb_some,
+        BlockPosition::Append,
+        out_len_ptr.into(),
+        out_len.into(),
     );
     // Set the discriminant and return
-    body.basic_blocks[bb_some].statements.push(
-        OpSetDiscriminant {
-            ptr: ret.into(),
-            variant_index: 1,
-        }
-        .into(),
-    );
-    body.basic_blocks[bb_some].terminator = Terminator::Return(None);
+    cfg.add_stmt_op_set_discriminant(bb_some, BlockPosition::Append, ret.into(), 1);
+    cfg.set_terminator(bb_some, Terminator::return_void());
 
     // `None` branch
-    body.basic_blocks[bb_none].statements.push(
-        OpSetDiscriminant {
-            ptr: ret.into(),
-            variant_index: 0,
-        }
-        .into(),
-    );
-    body.basic_blocks[bb_none].terminator = Terminator::Return(None);
+    cfg.add_stmt_op_set_discriminant(bb_none, BlockPosition::Append, ret.into(), 0);
+    cfg.set_terminator(bb_none, Terminator::return_void());
 }

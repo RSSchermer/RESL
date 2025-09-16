@@ -1,9 +1,10 @@
 use indexmap::IndexSet;
 
 use crate::cfg::{
-    BasicBlock, Body, LocalValue, OpAlloca, OpAssign, OpBinary, OpBoolToBranchPredicate, OpCall,
-    OpCaseToBranchPredicate, OpGetDiscriminant, OpLoad, OpOffsetSlicePtr, OpPtrElementPtr,
-    OpPtrVariantPtr, OpSetDiscriminant, OpStore, OpUnary, Statement, Terminator, Value,
+    Assign, BasicBlock, Bind, Cfg, FunctionBody, LocalBinding, OpAlloca, OpBinary,
+    OpBoolToBranchPredicate, OpCall, OpCaseToBranchPredicate, OpGetDiscriminant, OpLoad,
+    OpOffsetSlicePtr, OpPtrElementPtr, OpPtrVariantPtr, OpSetDiscriminant, OpStore, OpUnary,
+    StatementData, Terminator, Uninitialized, Value,
 };
 use crate::cfg_to_rvsdg::control_tree::control_tree::{
     BranchingNode, ControlTree, ControlTreeNode, ControlTreeNodeKind, LinearNode, LoopNode,
@@ -16,6 +17,32 @@ pub trait WithReadValues {
         F: FnMut(&Value);
 }
 
+impl WithReadValues for Assign {
+    fn with_read_values<F>(&self, mut f: F)
+    where
+        F: FnMut(&Value),
+    {
+        f(&self.value());
+    }
+}
+
+impl WithReadValues for Bind {
+    fn with_read_values<F>(&self, mut f: F)
+    where
+        F: FnMut(&Value),
+    {
+        f(&self.value());
+    }
+}
+
+impl WithReadValues for Uninitialized {
+    fn with_read_values<F>(&self, mut f: F)
+    where
+        F: FnMut(&Value),
+    {
+    }
+}
+
 impl WithReadValues for OpAlloca {
     fn with_read_values<F>(&self, _: F)
     where
@@ -24,21 +51,12 @@ impl WithReadValues for OpAlloca {
     }
 }
 
-impl WithReadValues for OpAssign {
-    fn with_read_values<F>(&self, mut f: F)
-    where
-        F: FnMut(&Value),
-    {
-        f(&self.value);
-    }
-}
-
 impl WithReadValues for OpLoad {
     fn with_read_values<F>(&self, mut f: F)
     where
         F: FnMut(&Value),
     {
-        f(&self.ptr);
+        f(&self.pointer());
     }
 }
 
@@ -47,8 +65,8 @@ impl WithReadValues for OpStore {
     where
         F: FnMut(&Value),
     {
-        f(&self.ptr);
-        f(&self.value);
+        f(&self.pointer());
+        f(&self.value());
     }
 }
 
@@ -57,8 +75,8 @@ impl WithReadValues for OpPtrElementPtr {
     where
         F: FnMut(&Value),
     {
-        f(&self.ptr);
-        self.indices.iter().for_each(f);
+        f(&self.pointer());
+        self.indices().iter().for_each(f);
     }
 }
 
@@ -67,7 +85,7 @@ impl WithReadValues for OpPtrVariantPtr {
     where
         F: FnMut(&Value),
     {
-        f(&self.ptr);
+        f(&self.pointer());
     }
 }
 
@@ -76,7 +94,7 @@ impl WithReadValues for OpGetDiscriminant {
     where
         F: FnMut(&Value),
     {
-        f(&self.ptr);
+        f(&self.pointer());
     }
 }
 
@@ -85,7 +103,7 @@ impl WithReadValues for OpSetDiscriminant {
     where
         F: FnMut(&Value),
     {
-        f(&self.ptr);
+        f(&self.pointer());
     }
 }
 
@@ -94,8 +112,8 @@ impl WithReadValues for OpOffsetSlicePtr {
     where
         F: FnMut(&Value),
     {
-        f(&self.slice_ptr);
-        f(&self.offset);
+        f(&self.pointer());
+        f(&self.offset());
     }
 }
 
@@ -104,7 +122,7 @@ impl WithReadValues for OpUnary {
     where
         F: FnMut(&Value),
     {
-        f(&self.value);
+        f(&self.operand());
     }
 }
 
@@ -113,8 +131,8 @@ impl WithReadValues for OpBinary {
     where
         F: FnMut(&Value),
     {
-        f(&self.lhs);
-        f(&self.rhs);
+        f(&self.lhs());
+        f(&self.rhs());
     }
 }
 
@@ -123,7 +141,7 @@ impl WithReadValues for OpCall {
     where
         F: FnMut(&Value),
     {
-        self.args.iter().for_each(f);
+        self.arguments().iter().for_each(f);
     }
 }
 
@@ -132,7 +150,7 @@ impl WithReadValues for OpCaseToBranchPredicate {
     where
         F: FnMut(&Value),
     {
-        f(&self.value);
+        f(&self.value());
     }
 }
 
@@ -141,19 +159,19 @@ impl WithReadValues for OpBoolToBranchPredicate {
     where
         F: FnMut(&Value),
     {
-        f(&self.value);
+        f(&self.value());
     }
 }
 
 macro_rules! impl_with_read_values_statement {
     ($($op:ident,)*) => {
-        impl WithReadValues for Statement {
+        impl WithReadValues for StatementData {
             fn with_read_values<F>(&self, f: F)
             where
                 F: FnMut(&Value),
             {
                 match self {
-                    $(Statement::$op(op) => op.with_read_values(f),)*
+                    $(StatementData::$op(op) => op.with_read_values(f),)*
                 }
             }
         }
@@ -161,8 +179,10 @@ macro_rules! impl_with_read_values_statement {
 }
 
 impl_with_read_values_statement! {
+    Assign,
+    Bind,
+    Uninitialized,
     OpAlloca,
-    OpAssign,
     OpLoad,
     OpStore,
     OpPtrElementPtr,
@@ -180,13 +200,39 @@ impl_with_read_values_statement! {
 pub trait WithWrittenValues {
     fn with_written_values<F>(&self, f: F)
     where
-        F: FnMut(&LocalValue);
+        F: FnMut(&LocalBinding);
+}
+
+impl WithWrittenValues for Assign {
+    fn with_written_values<F>(&self, mut f: F)
+    where
+        F: FnMut(&LocalBinding),
+    {
+        f(&self.local_binding().into())
+    }
+}
+
+impl WithWrittenValues for Bind {
+    fn with_written_values<F>(&self, mut f: F)
+    where
+        F: FnMut(&LocalBinding),
+    {
+        f(&self.local_binding().into())
+    }
+}
+
+impl WithWrittenValues for Uninitialized {
+    fn with_written_values<F>(&self, _: F)
+    where
+        F: FnMut(&LocalBinding),
+    {
+    }
 }
 
 impl WithWrittenValues for OpStore {
     fn with_written_values<F>(&self, _: F)
     where
-        F: FnMut(&LocalValue),
+        F: FnMut(&LocalBinding),
     {
     }
 }
@@ -194,7 +240,7 @@ impl WithWrittenValues for OpStore {
 impl WithWrittenValues for OpSetDiscriminant {
     fn with_written_values<F>(&self, _: F)
     where
-        F: FnMut(&LocalValue),
+        F: FnMut(&LocalBinding),
     {
     }
 }
@@ -202,9 +248,9 @@ impl WithWrittenValues for OpSetDiscriminant {
 impl WithWrittenValues for OpCall {
     fn with_written_values<F>(&self, mut f: F)
     where
-        F: FnMut(&LocalValue),
+        F: FnMut(&LocalBinding),
     {
-        if let Some(result) = &self.result {
+        if let Some(result) = &self.result() {
             f(result);
         }
     }
@@ -216,9 +262,9 @@ macro_rules! impl_with_written_values_op {
             impl WithWrittenValues for $op {
                 fn with_written_values<F>(&self, mut f: F)
                 where
-                    F: FnMut(&LocalValue),
+                    F: FnMut(&LocalBinding),
                 {
-                    f(&self.result);
+                    f(&self.result());
                 }
             }
         )*
@@ -227,7 +273,6 @@ macro_rules! impl_with_written_values_op {
 
 impl_with_written_values_op! {
     OpAlloca,
-    OpAssign,
     OpLoad,
     OpPtrElementPtr,
     OpPtrVariantPtr,
@@ -241,13 +286,13 @@ impl_with_written_values_op! {
 
 macro_rules! impl_with_written_values_statement {
     ($($op:ident,)*) => {
-        impl WithWrittenValues for Statement {
+        impl WithWrittenValues for StatementData {
             fn with_written_values<F>(&self, f: F)
             where
-                F: FnMut(&LocalValue),
+                F: FnMut(&LocalBinding),
             {
                 match self {
-                    $(Statement::$op(op) => op.with_written_values(f),)*
+                    $(StatementData::$op(op) => op.with_written_values(f),)*
                 }
             }
         }
@@ -255,8 +300,10 @@ macro_rules! impl_with_written_values_statement {
 }
 
 impl_with_written_values_statement! {
+    Assign,
+    Bind,
+    Uninitialized,
     OpAlloca,
-    OpAssign,
     OpLoad,
     OpStore,
     OpPtrElementPtr,
@@ -273,18 +320,18 @@ impl_with_written_values_statement! {
 
 pub struct ReadWriteAnnotationVisitor<'a> {
     control_tree: &'a ControlTree,
-    body: &'a Body,
-    read_state: SliceAnnotation<LocalValue>,
-    write_state: SliceAnnotation<LocalValue>,
-    read_accum: IndexSet<LocalValue>,
-    write_accum: IndexSet<LocalValue>,
+    cfg: &'a Cfg,
+    read_state: SliceAnnotation<LocalBinding>,
+    write_state: SliceAnnotation<LocalBinding>,
+    read_accum: IndexSet<LocalBinding>,
+    write_accum: IndexSet<LocalBinding>,
 }
 
 impl<'a> ReadWriteAnnotationVisitor<'a> {
-    fn new(control_tree: &'a ControlTree, body: &'a Body) -> Self {
+    fn new(control_tree: &'a ControlTree, cfg: &'a Cfg) -> Self {
         ReadWriteAnnotationVisitor {
             control_tree,
-            body,
+            cfg,
             read_state: SliceAnnotation::new(control_tree.node_count()),
             write_state: SliceAnnotation::new(control_tree.node_count()),
             read_accum: Default::default(),
@@ -305,9 +352,9 @@ impl<'a> ReadWriteAnnotationVisitor<'a> {
         self.read_accum.clear();
         self.write_accum.clear();
 
-        match &self.body.basic_blocks[bb].terminator {
+        match self.cfg[bb].terminator() {
             Terminator::Branch(b) => {
-                if let Some(selector) = b.selector {
+                if let Some(selector) = b.selector() {
                     self.read_accum.insert(selector);
                 }
             }
@@ -318,7 +365,9 @@ impl<'a> ReadWriteAnnotationVisitor<'a> {
             }
         }
 
-        for statement in self.body.basic_blocks[bb].statements.iter().rev() {
+        for statement in self.cfg[bb].statements().iter().rev() {
+            let statement = &self.cfg[*statement];
+
             statement.with_written_values(|v| {
                 self.read_accum.shift_remove(v);
                 self.write_accum.insert(*v);
@@ -395,16 +444,18 @@ impl<'a> ReadWriteAnnotationVisitor<'a> {
         self.write_state.copy(data.inner, node);
     }
 
-    fn into_annotation_state(self) -> (SliceAnnotation<LocalValue>, SliceAnnotation<LocalValue>) {
+    fn into_annotation_state(
+        self,
+    ) -> (SliceAnnotation<LocalBinding>, SliceAnnotation<LocalBinding>) {
         (self.read_state, self.write_state)
     }
 }
 
 pub fn annotate_read_write(
     control_tree: &ControlTree,
-    body: &Body,
-) -> (SliceAnnotation<LocalValue>, SliceAnnotation<LocalValue>) {
-    let mut visitor = ReadWriteAnnotationVisitor::new(control_tree, body);
+    cfg: &Cfg,
+) -> (SliceAnnotation<LocalBinding>, SliceAnnotation<LocalBinding>) {
+    let mut visitor = ReadWriteAnnotationVisitor::new(control_tree, cfg);
 
     visitor.visit(control_tree.root());
     visitor.into_annotation_state()
@@ -415,50 +466,59 @@ mod tests {
     use smallvec::smallvec;
 
     use super::*;
-    use crate::cfg::{Branch, InlineConst, LocalValueData, OpAssign, OpBinary, Terminator};
+    use crate::cfg::{
+        Assign, BlockPosition, Branch, InlineConst, LocalBindingData, OpBinary, Terminator,
+    };
     use crate::cfg_to_rvsdg::control_flow_restructuring::{
         restructure_branches, restructure_loops, Graph,
     };
     use crate::ty::{TY_BOOL, TY_DUMMY, TY_U32};
-    use crate::{BinaryOperator, FnArg, FnSig};
+    use crate::{BinaryOperator, FnArg, FnSig, Function, Module, Symbol};
 
     #[test]
     fn annotate_read_write_bb_test() {
-        let mut body = Body::init(&FnSig {
-            name: Default::default(),
-            ty: TY_DUMMY,
-            args: vec![FnArg {
-                ty: TY_U32,
-                shader_io_binding: None,
-            }],
-            ret_ty: Some(TY_U32),
-        });
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
 
-        let x = body.params[0];
-        let c = body
-            .local_values
-            .insert(LocalValueData { ty: Some(TY_U32) });
-
-        let bb0 = body.append_block();
-
-        body.basic_blocks[bb0].statements.push(
-            OpBinary {
-                operator: BinaryOperator::Add,
-                lhs: x.into(),
-                rhs: 1u32.into(),
-                result: c.into(),
-            }
-            .into(),
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![FnArg {
+                    ty: TY_U32,
+                    shader_io_binding: None,
+                }],
+                ret_ty: Some(TY_U32),
+            },
         );
 
-        let mut graph = Graph::init(body);
+        let mut cfg = Cfg::new(module.ty.clone());
+
+        let body = cfg.register_function(&module, function);
+
+        let x = body.argument_values()[0];
+
+        let bb0 = body.entry_block();
+
+        let (_, c) = cfg.add_stmt_op_binary(
+            bb0,
+            BlockPosition::Append,
+            BinaryOperator::Add,
+            x.into(),
+            1u32.into(),
+        );
+
+        let mut graph = Graph::init(&mut cfg, function);
         let reentry_edges = restructure_loops(&mut graph);
         let branch_info = restructure_branches(&mut graph, &reentry_edges);
 
         let control_tree = ControlTree::generate(&graph, &reentry_edges, &branch_info);
-        let body = graph.into_inner();
 
-        let (read, write) = annotate_read_write(&control_tree, &body);
+        let (read, write) = annotate_read_write(&control_tree, &cfg);
 
         #[allow(non_snake_case)]
         {
@@ -476,126 +536,86 @@ mod tests {
 
     #[test]
     fn annotate_read_write_test() {
-        let mut body = Body::init(&FnSig {
-            name: Default::default(),
-            ty: TY_DUMMY,
-            args: vec![
-                FnArg {
-                    ty: TY_U32,
-                    shader_io_binding: None,
-                },
-                FnArg {
-                    ty: TY_U32,
-                    shader_io_binding: None,
-                },
-            ],
-            ret_ty: Some(TY_U32),
-        });
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
 
-        let x = body.params[0];
-        let y = body.params[1];
-        let c = body
-            .local_values
-            .insert(LocalValueData { ty: Some(TY_BOOL) });
-        let t = body
-            .local_values
-            .insert(LocalValueData { ty: Some(TY_U32) });
-        let r = body
-            .local_values
-            .insert(LocalValueData { ty: Some(TY_U32) });
-
-        let enter = body.append_block();
-        let bb0 = body.append_block();
-        let bb1 = body.append_block();
-        let bb2 = body.append_block();
-        let bb3 = body.append_block();
-        let bb4 = body.append_block();
-        let exit = body.append_block();
-
-        body.basic_blocks[enter].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb0],
-        });
-
-        body.basic_blocks[bb0].statements.push(
-            OpBinary {
-                operator: BinaryOperator::NotEq,
-                lhs: y.into(),
-                rhs: 0u32.into(),
-                result: c,
-            }
-            .into(),
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_U32,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: Some(TY_U32),
+            },
         );
-        body.basic_blocks[bb0].terminator = Terminator::Branch(Branch {
-            selector: Some(c),
-            branches: smallvec![bb1, bb2],
-        });
 
-        body.basic_blocks[bb1].statements.push(
-            OpAssign {
-                value: 0u32.into(),
-                result: r,
-            }
-            .into(),
+        let mut cfg = Cfg::new(module.ty.clone());
+
+        let body = cfg.register_function(&module, function);
+
+        let x = body.argument_values()[0];
+        let y = body.argument_values()[1];
+
+        let enter = body.entry_block();
+        let bb0 = cfg.add_basic_block(function);
+        let bb1 = cfg.add_basic_block(function);
+        let bb2 = cfg.add_basic_block(function);
+        let bb3 = cfg.add_basic_block(function);
+        let bb4 = cfg.add_basic_block(function);
+        let exit = cfg.add_basic_block(function);
+
+        let (_, r) = cfg.add_stmt_uninitialized(enter, BlockPosition::Append, TY_U32);
+        cfg.set_terminator(enter, Terminator::branch_single(bb0));
+
+        let (_, c) = cfg.add_stmt_op_binary(
+            bb0,
+            BlockPosition::Append,
+            BinaryOperator::NotEq,
+            y.into(),
+            0u32.into(),
         );
-        body.basic_blocks[bb1].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb4],
-        });
+        cfg.set_terminator(bb0, Terminator::branch_multiple(c, [bb1, bb2]));
 
-        body.basic_blocks[bb2].statements.push(
-            OpAssign {
-                value: y.into(),
-                result: t,
-            }
-            .into(),
+        cfg.add_stmt_assign(bb1, BlockPosition::Append, r, 0u32.into());
+        cfg.set_terminator(bb1, Terminator::branch_single(bb4));
+
+        let (_, t) = cfg.add_stmt_bind(bb2, BlockPosition::Append, y.into());
+        let (_, s) = cfg.add_stmt_op_binary(
+            bb2,
+            BlockPosition::Append,
+            BinaryOperator::Mod,
+            x.into(),
+            y.into(),
         );
-        body.basic_blocks[bb2].statements.push(
-            OpBinary {
-                operator: BinaryOperator::Mod,
-                lhs: x.into(),
-                rhs: y.into(),
-                result: y.into(),
-            }
-            .into(),
-        );
-        body.basic_blocks[bb2].statements.push(
-            OpAssign {
-                value: t.into(),
-                result: x,
-            }
-            .into(),
-        );
-        body.basic_blocks[bb2].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb3],
-        });
+        cfg.add_stmt_assign(bb2, BlockPosition::Append, y, s.into());
+        cfg.add_stmt_assign(bb2, BlockPosition::Append, x, t.into());
+        cfg.set_terminator(bb2, Terminator::branch_single(bb3));
 
-        body.basic_blocks[bb3].statements.push(
-            OpAssign {
-                value: Value::InlineConst(InlineConst::U32(1)),
-                result: r,
-            }
-            .into(),
-        );
-        body.basic_blocks[bb3].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb4],
-        });
+        cfg.add_stmt_assign(bb3, BlockPosition::Append, r, 1u32.into());
+        cfg.set_terminator(bb3, Terminator::branch_single(bb4));
 
-        body.basic_blocks[bb4].terminator = Terminator::Branch(Branch {
-            selector: Some(r),
-            branches: smallvec![exit, bb0],
-        });
+        cfg.set_terminator(bb4, Terminator::branch_multiple(r, [exit, bb0]));
 
-        body.basic_blocks[exit].terminator = Terminator::Return(Some(x.into()));
+        cfg.set_terminator(exit, Terminator::Return(Some(x.into())));
 
-        let mut graph = Graph::init(body);
+        let mut graph = Graph::init(&mut cfg, function);
+
         let reentry_edges = restructure_loops(&mut graph);
         let branch_info = restructure_branches(&mut graph, &reentry_edges);
 
         let control_tree = ControlTree::generate(&graph, &reentry_edges, &branch_info);
-        let body = graph.into_inner();
 
         // Control-tree layout:
         //
@@ -622,24 +642,24 @@ mod tests {
         //
         // Expected read and write annotations:
         //
-        //     | Node | Read       | Write      |
-        //     |------|------------|------------|
-        //     | A    | x, y       | r, c       |
-        //     | B    |            |            |
-        //     | C    | x, y       | r, c       |
-        //     | D    | x          |            |
-        //     | E    | x, y       | r, c       |
-        //     | F    | y          | c          |
-        //     | G    | x, y       | r          |
-        //     | H    | r          |            |
-        //     | I    |            | r          |
-        //     | J    | x, y       | r, x, y, t |
-        //     | K    |            | r          |
-        //     | L    | x, y       | x, y, t    |
-        //     | M    |            | r          |
+        //     | Node | Read       | Write         |
+        //     |------|------------|---------------|
+        //     | A    | x, y       | r, c          |
+        //     | B    |            |               |
+        //     | C    | x, y       | r, c          |
+        //     | D    | x          |               |
+        //     | E    | x, y       | r, c          |
+        //     | F    | y          | c             |
+        //     | G    | x, y       | r             |
+        //     | H    | r          |               |
+        //     | I    |            | r             |
+        //     | J    | x, y       | r, x, y, s, t |
+        //     | K    |            | r             |
+        //     | L    | x, y       | x, y, s, t    |
+        //     | M    |            | r             |
         //
 
-        let (read, write) = annotate_read_write(&control_tree, &body);
+        let (read, write) = annotate_read_write(&control_tree, &cfg);
 
         #[allow(non_snake_case)]
         {
@@ -685,9 +705,9 @@ mod tests {
             assert_eq!(write.get(G), &[r]);
             assert_eq!(write.get(H), &[]);
             assert_eq!(write.get(I), &[r]);
-            assert_eq!(write.get(J), &[r, x, y, t]);
+            assert_eq!(write.get(J), &[r, x, y, s, t]);
             assert_eq!(write.get(K), &[r]);
-            assert_eq!(write.get(L), &[x, y, t]);
+            assert_eq!(write.get(L), &[x, y, s, t]);
             assert_eq!(write.get(M), &[r]);
         }
     }

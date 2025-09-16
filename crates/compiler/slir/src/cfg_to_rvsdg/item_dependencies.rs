@@ -2,9 +2,10 @@ use indexmap::IndexSet;
 use rustc_hash::FxHashMap;
 
 use crate::cfg::{
-    BasicBlockData, Body, Cfg, InlineConst, OpAlloca, OpAssign, OpBinary, OpBoolToBranchPredicate,
-    OpCall, OpCaseToBranchPredicate, OpGetDiscriminant, OpLoad, OpOffsetSlicePtr, OpPtrElementPtr,
-    OpPtrVariantPtr, OpSetDiscriminant, OpStore, OpUnary, RootIdentifier, Statement, Value,
+    Assign, BasicBlockData, Bind, Cfg, FunctionBody, InlineConst, OpAlloca, OpBinary,
+    OpBoolToBranchPredicate, OpCall, OpCaseToBranchPredicate, OpGetDiscriminant, OpLoad,
+    OpOffsetSlicePtr, OpPtrElementPtr, OpPtrVariantPtr, OpSetDiscriminant, OpStore, OpUnary,
+    RootIdentifier, StatementData, Uninitialized, Value,
 };
 use crate::ty::Type;
 use crate::{Function, Module, StorageBinding, UniformBinding, WorkgroupBinding};
@@ -46,7 +47,7 @@ impl WithItemDependencies for Value {
         F: FnMut(Item),
     {
         if let Value::InlineConst(InlineConst::Ptr(ptr)) = self {
-            match ptr.base {
+            match ptr.root_identifier() {
                 RootIdentifier::Uniform(b) => {
                     f(Item::UniformBinding(b));
                 }
@@ -62,6 +63,32 @@ impl WithItemDependencies for Value {
     }
 }
 
+impl WithItemDependencies for Bind {
+    fn with_item_dependencies<F>(&self, mut f: F)
+    where
+        F: FnMut(Item),
+    {
+        self.value().with_item_dependencies(&mut f);
+    }
+}
+
+impl WithItemDependencies for Uninitialized {
+    fn with_item_dependencies<F>(&self, mut f: F)
+    where
+        F: FnMut(Item),
+    {
+    }
+}
+
+impl WithItemDependencies for Assign {
+    fn with_item_dependencies<F>(&self, mut f: F)
+    where
+        F: FnMut(Item),
+    {
+        self.value().with_item_dependencies(&mut f);
+    }
+}
+
 impl WithItemDependencies for OpAlloca {
     fn with_item_dependencies<F>(&self, _: F)
     where
@@ -70,21 +97,12 @@ impl WithItemDependencies for OpAlloca {
     }
 }
 
-impl WithItemDependencies for OpAssign {
-    fn with_item_dependencies<F>(&self, mut f: F)
-    where
-        F: FnMut(Item),
-    {
-        self.value.with_item_dependencies(&mut f);
-    }
-}
-
 impl WithItemDependencies for OpLoad {
     fn with_item_dependencies<F>(&self, mut f: F)
     where
         F: FnMut(Item),
     {
-        self.ptr.with_item_dependencies(&mut f);
+        self.pointer().with_item_dependencies(&mut f);
     }
 }
 
@@ -93,8 +111,8 @@ impl WithItemDependencies for OpStore {
     where
         F: FnMut(Item),
     {
-        self.ptr.with_item_dependencies(&mut f);
-        self.value.with_item_dependencies(&mut f);
+        self.pointer().with_item_dependencies(&mut f);
+        self.value().with_item_dependencies(&mut f);
     }
 }
 
@@ -103,9 +121,9 @@ impl WithItemDependencies for OpPtrElementPtr {
     where
         F: FnMut(Item),
     {
-        self.ptr.with_item_dependencies(&mut f);
+        self.pointer().with_item_dependencies(&mut f);
 
-        for index in &self.indices {
+        for index in self.indices() {
             index.with_item_dependencies(&mut f);
         }
     }
@@ -116,7 +134,7 @@ impl WithItemDependencies for OpPtrVariantPtr {
     where
         F: FnMut(Item),
     {
-        self.ptr.with_item_dependencies(&mut f);
+        self.pointer().with_item_dependencies(&mut f);
     }
 }
 
@@ -125,7 +143,7 @@ impl WithItemDependencies for OpGetDiscriminant {
     where
         F: FnMut(Item),
     {
-        self.ptr.with_item_dependencies(&mut f);
+        self.pointer().with_item_dependencies(&mut f);
     }
 }
 
@@ -134,7 +152,7 @@ impl WithItemDependencies for OpSetDiscriminant {
     where
         F: FnMut(Item),
     {
-        self.ptr.with_item_dependencies(&mut f);
+        self.pointer().with_item_dependencies(&mut f);
     }
 }
 
@@ -143,8 +161,8 @@ impl WithItemDependencies for OpOffsetSlicePtr {
     where
         F: FnMut(Item),
     {
-        self.slice_ptr.with_item_dependencies(&mut f);
-        self.offset.with_item_dependencies(&mut f);
+        self.pointer().with_item_dependencies(&mut f);
+        self.offset().with_item_dependencies(&mut f);
     }
 }
 
@@ -153,7 +171,7 @@ impl WithItemDependencies for OpUnary {
     where
         F: FnMut(Item),
     {
-        self.value.with_item_dependencies(&mut f);
+        self.operand().with_item_dependencies(&mut f);
     }
 }
 
@@ -162,8 +180,8 @@ impl WithItemDependencies for OpBinary {
     where
         F: FnMut(Item),
     {
-        self.lhs.with_item_dependencies(&mut f);
-        self.rhs.with_item_dependencies(&mut f);
+        self.lhs().with_item_dependencies(&mut f);
+        self.rhs().with_item_dependencies(&mut f);
     }
 }
 
@@ -172,11 +190,11 @@ impl WithItemDependencies for OpCall {
     where
         F: FnMut(Item),
     {
-        for arg in &self.args {
+        for arg in self.arguments() {
             arg.with_item_dependencies(&mut f);
         }
 
-        f(Item::Function(self.function));
+        f(Item::Function(self.callee()));
     }
 }
 
@@ -185,7 +203,7 @@ impl WithItemDependencies for OpCaseToBranchPredicate {
     where
         F: FnMut(Item),
     {
-        self.value.with_item_dependencies(&mut f);
+        self.value().with_item_dependencies(&mut f);
     }
 }
 
@@ -194,16 +212,16 @@ impl WithItemDependencies for OpBoolToBranchPredicate {
     where
         F: FnMut(Item),
     {
-        self.value.with_item_dependencies(&mut f);
+        self.value().with_item_dependencies(&mut f);
     }
 }
 
 macro_rules! impl_collect_dependencies_statement {
     ($($op:ident,)*) => {
-        impl WithItemDependencies for Statement {
+        impl WithItemDependencies for StatementData {
             fn with_item_dependencies<F>(&self, mut f: F) where F: FnMut(Item) {
                 match self {
-                    $(Statement::$op(s) => s.with_item_dependencies(&mut f),)*
+                    $(StatementData::$op(s) => s.with_item_dependencies(&mut f),)*
                 }
             }
         }
@@ -211,8 +229,10 @@ macro_rules! impl_collect_dependencies_statement {
 }
 
 impl_collect_dependencies_statement! {
+    Bind,
+    Uninitialized,
+    Assign,
     OpAlloca,
-    OpAssign,
     OpLoad,
     OpStore,
     OpPtrElementPtr,
@@ -227,24 +247,17 @@ impl_collect_dependencies_statement! {
     OpBoolToBranchPredicate,
 }
 
-impl WithItemDependencies for BasicBlockData {
-    fn with_item_dependencies<F>(&self, mut f: F)
-    where
-        F: FnMut(Item),
-    {
-        for statement in &self.statements {
-            statement.with_item_dependencies(&mut f);
-        }
-    }
-}
-
-fn collect_body_dependencies(body: &Body) -> IndexSet<Item> {
+fn collect_body_dependencies(cfg: &Cfg, function: Function) -> IndexSet<Item> {
     let mut dependencies = IndexSet::new();
 
-    for bb in body.basic_blocks.values() {
-        bb.with_item_dependencies(|item| {
-            dependencies.insert(item);
-        });
+    let body = &cfg[function];
+
+    for bb in body.basic_blocks() {
+        for statement in cfg[*bb].statements() {
+            cfg[*statement].with_item_dependencies(|item| {
+                dependencies.insert(item);
+            })
+        }
     }
 
     dependencies
@@ -255,10 +268,10 @@ pub type ItemDependencies = FxHashMap<Item, IndexSet<Item>>;
 pub fn item_dependencies(cfg: &Cfg) -> ItemDependencies {
     let mut dep_map = FxHashMap::default();
 
-    for (function, body) in cfg.function_body.iter() {
-        let dependencies = collect_body_dependencies(body);
+    for function in cfg.registered_functions() {
+        let dependencies = collect_body_dependencies(cfg, function);
 
-        dep_map.insert(Item::Function(*function), dependencies);
+        dep_map.insert(Item::Function(function), dependencies);
     }
 
     dep_map

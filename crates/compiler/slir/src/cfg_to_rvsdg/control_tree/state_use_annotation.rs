@@ -1,34 +1,32 @@
 use index_vec::{index_vec, IndexVec};
 
-use crate::cfg::{BasicBlock, Body, Statement};
+use crate::cfg::{BasicBlock, Cfg, StatementData};
 use crate::cfg_to_rvsdg::control_tree::{
     BranchingNode, ControlTree, ControlTreeNode, ControlTreeNodeKind, LinearNode, LoopNode,
 };
 
-impl Statement {
-    fn uses_state(&self) -> bool {
-        match self {
-            Statement::OpLoad(_)
-            | Statement::OpStore(_)
-            | Statement::OpGetDiscriminant(_)
-            | Statement::OpSetDiscriminant(_)
-            | Statement::OpCall(_) => true,
-            _ => false,
-        }
+fn stmt_uses_state(stmt: &StatementData) -> bool {
+    match stmt {
+        StatementData::OpLoad(_)
+        | StatementData::OpStore(_)
+        | StatementData::OpGetDiscriminant(_)
+        | StatementData::OpSetDiscriminant(_)
+        | StatementData::OpCall(_) => true,
+        _ => false,
     }
 }
 
 struct StateUseAnnotationVisitor<'a> {
     control_tree: &'a ControlTree,
-    body: &'a Body,
+    cfg: &'a Cfg,
     annotation_state: IndexVec<ControlTreeNode, bool>,
 }
 
 impl<'a> StateUseAnnotationVisitor<'a> {
-    fn new(control_tree: &'a ControlTree, body: &'a Body) -> Self {
+    fn new(control_tree: &'a ControlTree, cfg: &'a Cfg) -> Self {
         StateUseAnnotationVisitor {
             control_tree,
-            body,
+            cfg,
             annotation_state: index_vec![false; control_tree.node_count()],
         }
     }
@@ -43,10 +41,11 @@ impl<'a> StateUseAnnotationVisitor<'a> {
     }
 
     fn visit_basic_block(&mut self, (node, bb): (ControlTreeNode, BasicBlock)) {
-        self.annotation_state[node] = self.body.basic_blocks[bb]
-            .statements
+        self.annotation_state[node] = self.cfg[bb]
+            .statements()
             .iter()
-            .any(|s| s.uses_state());
+            .map(|s| &self.cfg[*s])
+            .any(stmt_uses_state);
     }
 
     fn visit_linear_node(&mut self, (node, data): (ControlTreeNode, &LinearNode)) {
@@ -78,9 +77,9 @@ impl<'a> StateUseAnnotationVisitor<'a> {
 
 pub fn annotate_state_use(
     control_tree: &ControlTree,
-    body: &Body,
+    cfg: &Cfg,
 ) -> IndexVec<ControlTreeNode, bool> {
-    let mut visitor = StateUseAnnotationVisitor::new(control_tree, body);
+    let mut visitor = StateUseAnnotationVisitor::new(control_tree, cfg);
 
     visitor.visit(control_tree.root());
 

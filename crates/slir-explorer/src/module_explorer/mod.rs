@@ -2,8 +2,8 @@ pub mod adt_explorer;
 pub mod cfg_explorer;
 pub mod function_explorer;
 pub mod inner;
-mod rvsdg_explorer;
-mod scf_explorer;
+pub mod rvsdg_explorer;
+pub mod scf_explorer;
 pub mod struct_explorer;
 pub mod tpe;
 
@@ -112,7 +112,7 @@ pub fn ModuleExplorer() -> impl IntoView {
                         }
 
                         if entry.header().identifier() == "cfg".as_bytes() {
-                            let decoded: slir::cfg::Cfg = bincode::serde::decode_from_std_read(
+                            let decoded: slir::cfg::CfgData = bincode::serde::decode_from_std_read(
                                 &mut entry,
                                 bincode::config::standard(),
                             )
@@ -156,7 +156,8 @@ pub fn ModuleExplorer() -> impl IntoView {
 
                     let module =
                         module.expect("SLIR arfifact should always contain a `module` entry");
-                    let cfg = cfg.expect("SLIR arfifact should always contain a `cfg` entry");
+                    let cfg_data = cfg.expect("SLIR arfifact should always contain a `cfg` entry");
+                    let cfg = slir::cfg::Cfg::from_ty_and_data(module.ty.clone(), cfg_data);
                     let rvsdg_initial = rvsdg_initial
                         .map(|data| slir::rvsdg::Rvsdg::from_ty_and_data(module.ty.clone(), data));
                     let rvsdg_transformed = rvsdg_transformed

@@ -1,8 +1,9 @@
 use indexmap::IndexSet;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::cfg::{BasicBlock, OpAssign};
+use crate::cfg::{Assign, BasicBlock, BlockPosition};
 use crate::cfg_to_rvsdg::control_flow_restructuring::{Edge, Graph};
+use crate::ty::TY_PREDICATE;
 
 pub struct Reachable {
     kind: ReachableKind,
@@ -238,8 +239,9 @@ fn restructure_branches_internal(
 
         continuation_node
     } else {
-        let continuation_node = graph.append_block();
-        let predicate = graph.add_value(Default::default());
+        let predicate = graph.add_value(TY_PREDICATE);
+        let continuation_node = graph.append_block_branch_multiple(predicate);
+
         let mut indices = FxHashMap::default();
 
         for (index, node) in tail_structure.continuation_nodes.iter().enumerate() {
@@ -274,34 +276,24 @@ fn restructure_branches_internal(
                 (branch_start, continuation_node)
             } else {
                 // Consolidate all continuation edges from this branch via a single node.
-                let new_end = graph.append_block();
-
-                graph.connect(Edge {
-                    source: new_end,
-                    dest: continuation_node,
-                });
+                let new_end = graph.append_block_branch_single(continuation_node);
 
                 (branch, new_end)
             };
 
             for edge in continuation_edges {
-                let intermediate = graph.append_block();
+                let intermediate = graph.append_block_branch_single(branch_end);
                 let index = *indices
                     .get(&edge.dest)
                     .expect("no continuation node for continuation edge");
 
-                graph.statements_mut(intermediate).push(
-                    OpAssign {
-                        value: (index as u32).into(),
-                        result: predicate,
-                    }
-                    .into(),
+                graph.add_stmt_assign(
+                    intermediate,
+                    BlockPosition::Append,
+                    predicate,
+                    (index as u32).into(),
                 );
                 graph.reconnect_dest(*edge, intermediate);
-                graph.connect(Edge {
-                    source: intermediate,
-                    dest: branch_end,
-                });
             }
 
             restructure_branches_internal(
@@ -351,18 +343,43 @@ mod tests {
     use smallvec::smallvec;
 
     use super::*;
-    use crate::cfg::{Body, Branch, Terminator};
+    use crate::cfg::{Branch, Cfg, FunctionBody, Terminator};
     use crate::ty::TY_DUMMY;
-    use crate::FnSig;
+    use crate::{FnArg, FnSig, Function, Module, Symbol};
 
     #[test]
     fn test_dominated_sets() {
-        let mut body = Body::init(&FnSig {
-            name: Default::default(),
-            ty: TY_DUMMY,
-            args: vec![],
-            ret_ty: None,
-        });
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_PREDICATE,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_PREDICATE,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: None,
+            },
+        );
+
+        let mut cfg = Cfg::new(module.ty.clone());
+
+        let body = cfg.register_function(&module, function);
+
+        let a0 = body.argument_values()[0];
+        let a1 = body.argument_values()[1];
 
         //
         //            bb0
@@ -384,26 +401,20 @@ mod tests {
         //            bb5
         //
 
-        let bb0 = body.append_block();
-        let bb1 = body.append_block();
-        let bb2 = body.append_block();
-        let bb3 = body.append_block();
-        let bb4 = body.append_block();
-        let bb5 = body.append_block();
+        let bb0 = body.entry_block();
+        let bb1 = cfg.add_basic_block(function);
+        let bb2 = cfg.add_basic_block(function);
+        let bb3 = cfg.add_basic_block(function);
+        let bb4 = cfg.add_basic_block(function);
+        let bb5 = cfg.add_basic_block(function);
 
-        body.basic_blocks[bb0].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb1, bb4],
-        });
-        body.basic_blocks[bb1].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb2, bb3],
-        });
-        body.basic_blocks[bb2].terminator = Terminator::Branch(Branch::single(bb5));
-        body.basic_blocks[bb3].terminator = Terminator::Branch(Branch::single(bb4));
-        body.basic_blocks[bb4].terminator = Terminator::Branch(Branch::single(bb5));
+        cfg.set_terminator(bb0, Terminator::branch_multiple(a0, [bb1, bb4]));
+        cfg.set_terminator(bb1, Terminator::branch_multiple(a1, [bb2, bb3]));
+        cfg.set_terminator(bb2, Terminator::branch_single(bb5));
+        cfg.set_terminator(bb3, Terminator::branch_single(bb4));
+        cfg.set_terminator(bb4, Terminator::branch_single(bb5));
 
-        let graph = Graph::init(body);
+        let graph = Graph::init(&mut cfg, function);
 
         let dominated_sets =
             dominated_sets(&graph, &FxHashSet::default(), graph.entry(), graph.exit());
@@ -422,12 +433,37 @@ mod tests {
 
     #[test]
     fn test_tail_structure_analyse() {
-        let mut body = Body::init(&FnSig {
-            name: Default::default(),
-            ty: TY_DUMMY,
-            args: vec![],
-            ret_ty: None,
-        });
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_PREDICATE,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_PREDICATE,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: None,
+            },
+        );
+
+        let mut cfg = Cfg::new(module.ty.clone());
+
+        let body = cfg.register_function(&module, function);
+
+        let a0 = body.argument_values()[0];
+        let a1 = body.argument_values()[1];
 
         //
         //            bb0
@@ -449,26 +485,20 @@ mod tests {
         //            bb5
         //
 
-        let bb0 = body.append_block();
-        let bb1 = body.append_block();
-        let bb2 = body.append_block();
-        let bb3 = body.append_block();
-        let bb4 = body.append_block();
-        let bb5 = body.append_block();
+        let bb0 = body.entry_block();
+        let bb1 = cfg.add_basic_block(function);
+        let bb2 = cfg.add_basic_block(function);
+        let bb3 = cfg.add_basic_block(function);
+        let bb4 = cfg.add_basic_block(function);
+        let bb5 = cfg.add_basic_block(function);
 
-        body.basic_blocks[bb0].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb1, bb4],
-        });
-        body.basic_blocks[bb1].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb2, bb3],
-        });
-        body.basic_blocks[bb2].terminator = Terminator::Branch(Branch::single(bb5));
-        body.basic_blocks[bb3].terminator = Terminator::Branch(Branch::single(bb4));
-        body.basic_blocks[bb4].terminator = Terminator::Branch(Branch::single(bb5));
+        cfg.set_terminator(bb0, Terminator::branch_multiple(a0, [bb1, bb4]));
+        cfg.set_terminator(bb1, Terminator::branch_multiple(a1, [bb2, bb3]));
+        cfg.set_terminator(bb2, Terminator::branch_single(bb5));
+        cfg.set_terminator(bb3, Terminator::branch_single(bb4));
+        cfg.set_terminator(bb4, Terminator::branch_single(bb5));
 
-        let graph = Graph::init(body);
+        let graph = Graph::init(&mut cfg, function);
 
         let head_end = find_head_end(&graph, &FxHashSet::default(), graph.entry(), graph.exit());
         let tail_structure =
@@ -523,14 +553,38 @@ mod tests {
 
     #[test]
     fn test_restructure_branches() {
-        let mut body = Body::init(&FnSig {
-            name: Default::default(),
-            ty: TY_DUMMY,
-            args: vec![],
-            ret_ty: None,
-        });
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
 
-        // Before:
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_PREDICATE,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_PREDICATE,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: None,
+            },
+        );
+
+        let mut cfg = Cfg::new(module.ty.clone());
+
+        let body = cfg.register_function(&module, function);
+
+        let a0 = body.argument_values()[0];
+        let a1 = body.argument_values()[1];
+
         //
         //            bb0
         //             | \
@@ -551,26 +605,20 @@ mod tests {
         //            bb5
         //
 
-        let bb0 = body.append_block();
-        let bb1 = body.append_block();
-        let bb2 = body.append_block();
-        let bb3 = body.append_block();
-        let bb4 = body.append_block();
-        let bb5 = body.append_block();
+        let bb0 = body.entry_block();
+        let bb1 = cfg.add_basic_block(function);
+        let bb2 = cfg.add_basic_block(function);
+        let bb3 = cfg.add_basic_block(function);
+        let bb4 = cfg.add_basic_block(function);
+        let bb5 = cfg.add_basic_block(function);
 
-        body.basic_blocks[bb0].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb1, bb4],
-        });
-        body.basic_blocks[bb1].terminator = Terminator::Branch(Branch {
-            selector: None,
-            branches: smallvec![bb2, bb3],
-        });
-        body.basic_blocks[bb2].terminator = Terminator::Branch(Branch::single(bb5));
-        body.basic_blocks[bb3].terminator = Terminator::Branch(Branch::single(bb4));
-        body.basic_blocks[bb4].terminator = Terminator::Branch(Branch::single(bb5));
+        cfg.set_terminator(bb0, Terminator::branch_multiple(a0, [bb1, bb4]));
+        cfg.set_terminator(bb1, Terminator::branch_multiple(a1, [bb2, bb3]));
+        cfg.set_terminator(bb2, Terminator::branch_single(bb5));
+        cfg.set_terminator(bb3, Terminator::branch_single(bb4));
+        cfg.set_terminator(bb4, Terminator::branch_single(bb5));
 
-        let mut graph = Graph::init(body.clone());
+        let mut graph = Graph::init(&mut cfg, function);
 
         let branch_info = restructure_branches(&mut graph, &FxHashSet::default());
 
@@ -604,53 +652,38 @@ mod tests {
         //              bb5
         //
 
-        let bb6 = body.append_block();
-        let bb7 = body.append_block();
-        let bb8 = body.append_block();
-        let bb9 = body.append_block();
-        let bb10 = body.append_block();
+        assert_eq!(graph.children(bb0).len(), 2);
+        assert_eq!(graph.children(bb0)[0], bb1);
 
-        assert_eq!(
-            FxHashSet::from_iter(graph.children(bb0).iter().copied()),
-            FxHashSet::from_iter([bb1, bb10])
-        );
-        assert_eq!(
-            FxHashSet::from_iter(graph.children(bb1).iter().copied()),
-            FxHashSet::from_iter([bb2, bb3])
-        );
-        assert_eq!(
-            FxHashSet::from_iter(graph.children(bb2).iter().copied()),
-            FxHashSet::from_iter([bb9])
-        );
-        assert_eq!(
-            FxHashSet::from_iter(graph.children(bb3).iter().copied()),
-            FxHashSet::from_iter([bb8])
-        );
-        assert_eq!(
-            FxHashSet::from_iter(graph.children(bb4).iter().copied()),
-            FxHashSet::from_iter([bb5])
-        );
+        let bb10 = graph.children(bb0)[1];
+
+        assert_eq!(graph.children(bb1), &[bb2, bb3]);
+
+        assert_eq!(graph.children(bb2).len(), 1);
+
+        let bb9 = graph.children(bb2)[0];
+
+        assert_eq!(graph.children(bb3).len(), 1);
+
+        let bb8 = graph.children(bb3)[0];
+
+        assert_eq!(graph.children(bb4), &[bb5]);
+
         assert!(graph.children(bb5).is_empty());
-        assert_eq!(
-            FxHashSet::from_iter(graph.children(bb6).iter().copied()),
-            FxHashSet::from_iter([bb4, bb5])
-        );
-        assert_eq!(
-            FxHashSet::from_iter(graph.children(bb7).iter().copied()),
-            FxHashSet::from_iter([bb6])
-        );
-        assert_eq!(
-            FxHashSet::from_iter(graph.children(bb8).iter().copied()),
-            FxHashSet::from_iter([bb7])
-        );
-        assert_eq!(
-            FxHashSet::from_iter(graph.children(bb9).iter().copied()),
-            FxHashSet::from_iter([bb7])
-        );
-        assert_eq!(
-            FxHashSet::from_iter(graph.children(bb10).iter().copied()),
-            FxHashSet::from_iter([bb6])
-        );
+
+        assert_eq!(graph.children(bb8).len(), 1);
+
+        let bb7 = graph.children(bb8)[0];
+
+        assert_eq!(graph.children(bb7).len(), 1);
+
+        let bb6 = graph.children(bb7)[0];
+
+        assert_eq!(graph.children(bb6), &[bb4, bb5]);
+
+        assert_eq!(graph.children(bb9), &[bb7]);
+
+        assert_eq!(graph.children(bb10), &[bb6]);
 
         assert_eq!(branch_info.len(), 3);
         assert_eq!(branch_info.get(&bb0), Some(&bb6));

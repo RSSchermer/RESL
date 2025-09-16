@@ -2,7 +2,7 @@ use std::mem;
 
 use indexmap::IndexSet;
 
-use crate::cfg::{BasicBlock, Body, Value};
+use crate::cfg::{BasicBlock, Cfg, FunctionBody, Value};
 use crate::cfg_to_rvsdg::control_tree::control_tree::{
     BranchingNode, ControlTree, ControlTreeNode, ControlTreeNodeKind, LinearNode, LoopNode,
 };
@@ -11,16 +11,16 @@ use crate::cfg_to_rvsdg::item_dependencies::{Item, WithItemDependencies};
 
 struct ItemDependencyAnnotationVisitor<'a> {
     control_tree: &'a ControlTree,
-    body: &'a Body,
+    cfg: &'a Cfg,
     annotations: SliceAnnotation<Item>,
     accum: IndexSet<Item>,
 }
 
 impl<'a> ItemDependencyAnnotationVisitor<'a> {
-    fn new(control_tree: &'a ControlTree, body: &'a Body) -> Self {
+    fn new(control_tree: &'a ControlTree, cfg: &'a Cfg) -> Self {
         ItemDependencyAnnotationVisitor {
             control_tree,
-            body,
+            cfg,
             annotations: SliceAnnotation::new(control_tree.node_count()),
             accum: Default::default(),
         }
@@ -38,9 +38,11 @@ impl<'a> ItemDependencyAnnotationVisitor<'a> {
     fn visit_basic_block(&mut self, (node, bb): (ControlTreeNode, BasicBlock)) {
         self.accum.clear();
 
-        self.body.basic_blocks[bb].with_item_dependencies(|item| {
-            self.accum.insert(item);
-        });
+        for statement in self.cfg[bb].statements() {
+            self.cfg[*statement].with_item_dependencies(|item| {
+                self.accum.insert(item);
+            })
+        }
 
         self.annotations.set(node, self.accum.iter().copied());
     }
@@ -83,11 +85,8 @@ impl<'a> ItemDependencyAnnotationVisitor<'a> {
     }
 }
 
-pub fn annotate_item_dependencies(
-    control_tree: &ControlTree,
-    body: &Body,
-) -> SliceAnnotation<Item> {
-    let mut visitor = ItemDependencyAnnotationVisitor::new(control_tree, body);
+pub fn annotate_item_dependencies(control_tree: &ControlTree, cfg: &Cfg) -> SliceAnnotation<Item> {
+    let mut visitor = ItemDependencyAnnotationVisitor::new(control_tree, cfg);
 
     visitor.visit(control_tree.root());
     visitor.into_annotation_state()

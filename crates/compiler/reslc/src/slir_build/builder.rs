@@ -3,14 +3,13 @@ use std::ops::{Deref, Range};
 
 use rustc_middle::bug;
 use rustc_middle::ty::inherent::SliceLike;
-use slir::cfg::{LocalValueData, Statement};
+use slir::cfg::BlockPosition;
 use smallvec::{smallvec, SmallVec};
 use stable_mir::abi;
 use stable_mir::abi::{ArgAbi, FnAbi, PassMode, ValueAbi};
 use stable_mir::mir::mono::{Instance, StaticDef};
 use stable_mir::target::MachineSize;
 use stable_mir::ty::{Align, IndexedVal, Span, VariantIdx};
-use thin_vec::thin_vec;
 
 use crate::slir_build::context::CodegenContext as Cx;
 use crate::slir_build::ty::Type;
@@ -26,7 +25,6 @@ use crate::stable_cg::{
 
 pub struct Builder<'a, 'tcx> {
     cx: &'a Cx<'a, 'tcx>,
-    function: slir::Function,
     basic_block: slir::cfg::BasicBlock,
 }
 
@@ -40,9 +38,9 @@ impl<'a, 'tcx> Deref for Builder<'a, 'tcx> {
 
 impl<'a, 'tcx> BackendTypes for Builder<'a, 'tcx> {
     type Value = Value;
-    type Local = slir::cfg::LocalValue;
+    type Local = slir::cfg::LocalBinding;
     type Function = slir::Function;
-    type BasicBlock = (slir::Function, slir::cfg::BasicBlock);
+    type BasicBlock = slir::cfg::BasicBlock;
     type Type = Type;
 }
 
@@ -122,7 +120,13 @@ impl<'a, 'tcx> ArgAbiBuilderMethods for Builder<'a, 'tcx> {
 
 impl<'a, 'tcx> AbiBuilderMethods for Builder<'a, 'tcx> {
     fn get_param(&mut self, index: usize) -> Self::Value {
-        self.cx.cfg.borrow().function_body[self.function].params[index].into()
+        let cfg = self.cx.cfg.borrow();
+        let function = cfg[self.basic_block].owner();
+
+        cfg.get_function_body(function)
+            .expect("function not registered")
+            .argument_values()[index]
+            .into()
     }
 }
 
@@ -151,22 +155,12 @@ macro_rules! unary_builder_methods {
             fn $method(&mut self, value: Self::Value) -> Self::Value {
                 let value = value.expect_value();
 
-                let module = self.module.borrow();
-                let mut cfg = self.cfg.borrow_mut();
-
-                let body = &mut cfg.function_body[self.function];
-                let ty = body.value_ty(&module, &value);
-                let mut bb = &mut body.basic_blocks[self.basic_block];
-
-                let result = body.local_values.insert(slir::cfg::LocalValueData {
-                    ty
-                });
-
-                bb.statements.push(slir::cfg::OpUnary {
-                    operator: slir::UnaryOperator::$op,
+                let (_, result) = self.cfg.borrow_mut().add_stmt_op_unary(
+                    self.basic_block,
+                    BlockPosition::Append,
+                    slir::UnaryOperator::$op,
                     value,
-                    result
-                }.into());
+                );
 
                 result.into()
             }
@@ -181,23 +175,13 @@ macro_rules! binary_builder_methods {
                 let lhs = lhs.expect_value();
                 let rhs = rhs.expect_value();
 
-                let module = self.module.borrow();
-                let mut cfg = self.cfg.borrow_mut();
-
-                let body = &mut cfg.function_body[self.function];
-                let ty = body.value_ty(&module, &lhs);
-                let mut bb = &mut body.basic_blocks[self.basic_block];
-
-                let result = body.local_values.insert(slir::cfg::LocalValueData {
-                    ty
-                });
-
-                bb.statements.push(slir::cfg::OpBinary {
-                    operator: slir::BinaryOperator::$op,
+                let (_, result) = self.cfg.borrow_mut().add_stmt_op_binary(
+                    self.basic_block,
+                    BlockPosition::Append,
+                    slir::BinaryOperator::$op,
                     lhs,
                     rhs,
-                    result
-                }.into());
+                );
 
                 result.into()
             }
@@ -209,12 +193,9 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
     type CodegenCx = Cx<'a, 'tcx>;
 
     fn build(cx: &'a Self::CodegenCx, llbb: Self::BasicBlock) -> Self {
-        let (function, basic_block) = llbb;
-
         Builder {
             cx,
-            function,
-            basic_block,
+            basic_block: llbb,
         }
     }
 
@@ -223,48 +204,36 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
     }
 
     fn llbb(&self) -> Self::BasicBlock {
-        (self.function, self.basic_block)
+        self.basic_block
     }
 
     fn set_span(&mut self, span: Span) {}
+
+    fn start_block(cx: &'a Self::CodegenCx, llfn: Self::Function) -> Self::BasicBlock {
+        cx.cfg.borrow()[llfn].entry_block()
+    }
 
     fn append_block(
         cx: &'a Self::CodegenCx,
         function: Self::Function,
         _name: &str,
     ) -> Self::BasicBlock {
-        let bb = cx.cfg.borrow_mut().function_body[function].append_block();
-
-        (function, bb)
+        cx.cfg.borrow_mut().add_basic_block(function)
     }
 
     fn as_local(&mut self, val: Self::Value) -> Self::Local {
         let val = val.expect_value();
 
-        // If the value already represents a local, return that local. Otherwise, initialize a new
-        // local with the value.
-        let ty = match val {
-            slir::cfg::Value::Local(local) => return local,
-            slir::cfg::Value::InlineConst(c) => c.ty(),
-            slir::cfg::Value::Const => todo!(),
-        };
+        // If the value already represents a local, return that local.
+        if let slir::cfg::Value::Local(local) = val {
+            return local;
+        }
 
-        let mut cfg = self.cfg.borrow_mut();
-        let mut body = &mut cfg.function_body[self.function];
-
-        let local = body
-            .local_values
-            .insert(slir::cfg::LocalValueData { ty: Some(ty) });
-
-        let mut bb = &mut body.basic_blocks[self.basic_block];
-
-        bb.statements.push(
-            slir::cfg::OpAssign {
-                value: val,
-                result: local,
-            }
-            .into(),
-        );
+        // Otherwise create a new local binding.
+        let (_, local) =
+            self.cfg
+                .borrow_mut()
+                .add_stmt_bind(self.basic_block, BlockPosition::Append, val);
 
         local
     }
@@ -274,33 +243,33 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
     }
 
     fn append_sibling_block(&mut self, _name: &str) -> Self::BasicBlock {
-        let bb = self.cfg.borrow_mut().function_body[self.function].append_block();
+        let mut cfg = self.cfg.borrow_mut();
+        let function = cfg[self.basic_block].owner();
 
-        (self.function, bb)
+        cfg.add_basic_block(function)
     }
 
     fn switch_to_block(&mut self, llbb: Self::BasicBlock) {
-        let (function, basic_block) = llbb;
-
-        self.function = function;
-        self.basic_block = basic_block;
+        self.basic_block = llbb;
     }
 
     fn ret_void(&mut self) {
-        self.cfg.borrow_mut().function_body[self.function].basic_blocks[self.basic_block]
-            .terminator = slir::cfg::Terminator::Return(None);
+        self.cfg
+            .borrow_mut()
+            .set_terminator(self.basic_block, slir::cfg::Terminator::return_void());
     }
 
     fn ret(&mut self, v: Self::Value) {
-        let value = v.expect_value();
-
-        self.cfg.borrow_mut().function_body[self.function].basic_blocks[self.basic_block]
-            .terminator = slir::cfg::Terminator::Return(Some(value));
+        self.cfg.borrow_mut().set_terminator(
+            self.basic_block,
+            slir::cfg::Terminator::return_value(v.expect_value()),
+        );
     }
 
     fn br(&mut self, dest: Self::BasicBlock) {
-        self.cfg.borrow_mut().function_body[self.function].basic_blocks[self.basic_block]
-            .terminator = slir::cfg::Terminator::Branch(slir::cfg::Branch::single(dest.1))
+        self.cfg
+            .borrow_mut()
+            .set_terminator(self.basic_block, slir::cfg::Terminator::branch_single(dest));
     }
 
     fn cond_br(
@@ -310,25 +279,17 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         else_llbb: Self::BasicBlock,
     ) {
         let mut cfg = self.cfg.borrow_mut();
-        let body = &mut cfg.function_body[self.function];
-        let bb = &mut body.basic_blocks[self.basic_block];
 
-        let predicate = body
-            .local_values
-            .insert(slir::cfg::LocalValueData::predicate());
-
-        bb.statements.push(
-            slir::cfg::OpBoolToBranchPredicate {
-                value: cond.expect_value(),
-                result: predicate,
-            }
-            .into(),
+        let (_, predicate) = cfg.add_stmt_op_bool_to_branch_predicate(
+            self.basic_block,
+            BlockPosition::Append,
+            cond.expect_value(),
         );
 
-        bb.terminator = slir::cfg::Terminator::Branch(slir::cfg::Branch {
-            selector: Some(predicate),
-            branches: smallvec![then_llbb.1, else_llbb.1],
-        })
+        cfg.set_terminator(
+            self.basic_block,
+            slir::cfg::Terminator::branch_multiple(predicate, [then_llbb, else_llbb]),
+        );
     }
 
     fn switch(
@@ -338,12 +299,12 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         cases: impl IntoIterator<Item = (u128, Self::BasicBlock)>,
     ) {
         let mut predicate_cases = vec![];
-        let mut branches = smallvec![];
+        let mut branches: SmallVec<[_; 2]> = smallvec![];
 
         // Note: this loop has to run before we borrow the `cfg` below, as the `cases` iterator will
         // actually call [Builder::append_block], which will also want to borrow the `cfg`, leading
         // to an "already borrowed" error.
-        for (case, (_, branch)) in cases {
+        for (case, branch) in cases {
             let Ok(case) = u32::try_from(case) else {
                 bug!("validation should not have allowed a case that does not fit a `u32`");
             };
@@ -352,27 +313,24 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
             branches.push(branch);
         }
 
+        // TODO: in our current examples the else block is always an "unreachable" block, which the
+        // RVSDG construction algorithm doesn't like. Figure our if we can just always omit the else
+        // block or if we need to handle unreachable blocks.
+        // branches.push(else_llbb);
+
         let mut cfg = self.cfg.borrow_mut();
-        let body = &mut cfg.function_body[self.function];
-        let bb = &mut body.basic_blocks[self.basic_block];
 
-        let predicate = body
-            .local_values
-            .insert(slir::cfg::LocalValueData::predicate());
-
-        bb.statements.push(
-            slir::cfg::OpCaseToBranchPredicate {
-                value: v.expect_value(),
-                cases: predicate_cases,
-                result: predicate,
-            }
-            .into(),
+        let (_, predicate) = cfg.add_stmt_op_case_to_branch_predicate(
+            self.basic_block,
+            BlockPosition::Append,
+            v.expect_value(),
+            predicate_cases,
         );
 
-        bb.terminator = slir::cfg::Terminator::Branch(slir::cfg::Branch {
-            selector: Some(predicate),
-            branches,
-        })
+        cfg.set_terminator(
+            self.basic_block,
+            slir::cfg::Terminator::branch_multiple(predicate, branches),
+        );
     }
 
     fn unreachable(&mut self) {}
@@ -380,14 +338,11 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
     fn get_discriminant(&mut self, ptr: Self::Value) -> Self::Value {
         let ptr = ptr.expect_value();
 
-        let mut cfg = self.cfg.borrow_mut();
-        let mut body = &mut cfg.function_body[self.function];
-        let mut bb = &mut body.basic_blocks[self.basic_block];
-
-        let result = body.local_values.insert(slir::cfg::LocalValueData::u32());
-
-        bb.statements
-            .push(slir::cfg::OpGetDiscriminant { ptr, result }.into());
+        let (_, result) = self.cfg.borrow_mut().add_stmt_op_get_discriminant(
+            self.basic_block,
+            BlockPosition::Append,
+            ptr,
+        );
 
         result.into()
     }
@@ -396,12 +351,12 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         let ptr = ptr.expect_value();
         let variant_index = variant_index.to_index() as u32;
 
-        let mut cfg = self.cfg.borrow_mut();
-        let mut body = &mut cfg.function_body[self.function];
-        let mut bb = &mut body.basic_blocks[self.basic_block];
-
-        bb.statements
-            .push(slir::cfg::OpSetDiscriminant { ptr, variant_index }.into());
+        self.cfg.borrow_mut().add_stmt_op_set_discriminant(
+            self.basic_block,
+            BlockPosition::Append,
+            ptr,
+            variant_index,
+        );
     }
 
     unary_builder_methods! {
@@ -531,53 +486,29 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
 
     fn alloca(&mut self, layout: TyAndLayout) -> Self::Value {
         let ty = self.cx.ty_and_layout_resolve(layout);
-        let ptr_ty = self
-            .module
-            .borrow_mut()
-            .ty
-            .register(slir::ty::TypeKind::Ptr(ty));
-
-        let mut cfg = self.cfg.borrow_mut();
-        let mut body = &mut cfg.function_body[self.function];
-        let mut bb = &mut body.basic_blocks[self.basic_block];
-
-        let result = body
-            .local_values
-            .insert(slir::cfg::LocalValueData { ty: Some(ptr_ty) });
-
-        bb.statements
-            .push(slir::cfg::OpAlloca { ty, result }.into());
+        let (_, result) =
+            self.cfg
+                .borrow_mut()
+                .add_stmt_op_alloca(self.basic_block, BlockPosition::Append, ty);
 
         result.into()
     }
 
     fn assign(&mut self, local: Self::Local, value: Self::Value) {
-        let mut cfg = self.cfg.borrow_mut();
-        let mut body = &mut cfg.function_body[self.function];
-        let mut bb = &mut body.basic_blocks[self.basic_block];
-
-        bb.statements.push(
-            slir::cfg::OpAssign {
-                value: value.expect_value(),
-                result: local,
-            }
-            .into(),
+        self.cfg.borrow_mut().add_stmt_assign(
+            self.basic_block,
+            BlockPosition::Append,
+            local,
+            value.expect_value(),
         );
     }
 
     fn load(&mut self, ty: Self::Type, ptr: Self::Value, _align: Align) -> Self::Value {
-        let ty = ty.expect_slir_type();
-        let ptr = ptr.expect_value();
-
-        let mut cfg = self.cfg.borrow_mut();
-        let mut body = &mut cfg.function_body[self.function];
-        let mut bb = &mut body.basic_blocks[self.basic_block];
-
-        let result = body
-            .local_values
-            .insert(slir::cfg::LocalValueData { ty: Some(ty) });
-
-        bb.statements.push(slir::cfg::OpLoad { ptr, result }.into());
+        let (_, result) = self.cfg.borrow_mut().add_stmt_op_load(
+            self.basic_block,
+            BlockPosition::Append,
+            ptr.expect_value(),
+        );
 
         result.into()
     }
@@ -641,40 +572,26 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         };
 
         let elem_ty = elem_ty.expect_slir_type();
-        let elem_ptr_ty = self
-            .module
-            .borrow_mut()
-            .ty
-            .register(slir::ty::TypeKind::Ptr(elem_ty));
         let elem = elem.expect_value();
         let dest = dest.val.llval.expect_value();
 
         let mut cfg = self.cfg.borrow_mut();
-        let mut body = &mut cfg.function_body[self.function];
-        let mut bb = &mut body.basic_blocks[self.basic_block];
 
         for i in 0..count {
             let index = self.const_usize(i).expect_value();
-            let elem_ptr = body.local_values.insert(LocalValueData {
-                ty: Some(elem_ptr_ty),
-            });
-
-            bb.statements.push(
-                slir::cfg::OpPtrElementPtr {
-                    element_ty: elem_ty,
-                    ptr: dest,
-                    indices: thin_vec![index],
-                    result: elem_ptr,
-                }
-                .into(),
+            let (_, elem_ptr) = cfg.add_stmt_op_ptr_element_ptr(
+                self.basic_block,
+                BlockPosition::Append,
+                elem_ty,
+                dest,
+                [index],
             );
 
-            bb.statements.push(
-                slir::cfg::OpStore {
-                    ptr: elem_ptr.into(),
-                    value: elem,
-                }
-                .into(),
+            cfg.add_stmt_op_store(
+                self.basic_block,
+                BlockPosition::Append,
+                elem_ptr.into(),
+                elem,
             );
         }
     }
@@ -683,11 +600,12 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         let value = val.expect_value();
         let ptr = ptr.expect_value();
 
-        let mut cfg = self.cfg.borrow_mut();
-        let mut body = &mut cfg.function_body[self.function];
-        let mut bb = &mut body.basic_blocks[self.basic_block];
-
-        bb.statements.push(slir::cfg::OpStore { ptr, value }.into());
+        self.cfg.borrow_mut().add_stmt_op_store(
+            self.basic_block,
+            BlockPosition::Append,
+            ptr,
+            value,
+        );
 
         Value::Void
     }
@@ -709,66 +627,27 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         indices: &[Self::Value],
     ) -> Self::Value {
         let elem_ty = ty.expect_slir_type();
-        let elem_ptr_ty = self
-            .module
-            .borrow_mut()
-            .ty
-            .register(slir::ty::TypeKind::Ptr(elem_ty));
-        let indices = indices.iter().map(|i| i.expect_value()).collect();
 
-        let mut cfg = self.cfg.borrow_mut();
-        let mut body = &mut cfg.function_body[self.function];
-        let mut bb = &mut body.basic_blocks[self.basic_block];
-
-        let result = body.local_values.insert(slir::cfg::LocalValueData {
-            ty: Some(elem_ptr_ty),
-        });
-
-        bb.statements.push(
-            slir::cfg::OpPtrElementPtr {
-                element_ty: elem_ty,
-                ptr: ptr.expect_value(),
-                indices,
-                result,
-            }
-            .into(),
+        let (_, result) = self.cfg.borrow_mut().add_stmt_op_ptr_element_ptr(
+            self.basic_block,
+            BlockPosition::Append,
+            elem_ty,
+            ptr.expect_value(),
+            indices.iter().map(|i| i.expect_value()),
         );
 
         result.into()
     }
 
     fn ptr_variant_ptr(&mut self, ptr: Self::Value, variant_idx: VariantIdx) -> Self::Value {
+        let ptr = ptr.expect_value();
         let variant_index = variant_idx.to_index();
 
-        let mut module = self.module.borrow_mut();
-        let mut cfg = self.cfg.borrow_mut();
-        let mut body = &mut cfg.function_body[self.function];
-
-        let ptr = ptr.expect_value();
-        let ptr_ty = body.value_ty(&module, &ptr).unwrap();
-
-        let slir::ty::TypeKind::Ptr(pointee_ty) = *module.ty.kind(ptr_ty) else {
-            bug!("pointer value should have pointer type")
-        };
-        let slir::ty::TypeKind::Enum(enum_data) = &*module.ty.kind(pointee_ty) else {
-            bug!("pointer-variant-pointer should only be called on a pointer to an enum type");
-        };
-        let Some(variant_ty) = enum_data.variants.get(variant_index).copied() else {
-            bug!("variant index out of bounds");
-        };
-        let variant_ptr_ty = module.ty.register(slir::ty::TypeKind::Ptr(variant_ty));
-
-        let result = body.local_values.insert(slir::cfg::LocalValueData {
-            ty: Some(variant_ptr_ty),
-        });
-
-        body.basic_blocks[self.basic_block].statements.push(
-            slir::cfg::OpPtrVariantPtr {
-                ptr,
-                variant_index: variant_index as u32,
-                result,
-            }
-            .into(),
+        let (_, result) = self.cfg.borrow_mut().add_stmt_op_ptr_variant_ptr(
+            self.basic_block,
+            BlockPosition::Append,
+            ptr,
+            variant_index as u32,
         );
 
         result.into()
@@ -780,24 +659,14 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         offset: Self::Value,
         ty: Self::Type,
     ) -> Self::Value {
-        let mut module = self.module.borrow_mut();
-        let mut cfg = self.cfg.borrow_mut();
-        let mut body = &mut cfg.function_body[self.function];
+        let ptr = ptr.expect_value();
+        let offset = offset.expect_value();
 
-        let ptr_ty = module
-            .ty
-            .register(slir::ty::TypeKind::Ptr(ty.expect_slir_type()));
-        let result = body
-            .local_values
-            .insert(slir::cfg::LocalValueData { ty: Some(ptr_ty) });
-
-        body.basic_blocks[self.basic_block].statements.push(
-            slir::cfg::OpOffsetSlicePtr {
-                slice_ptr: ptr.expect_value(),
-                offset: offset.expect_value(),
-                result,
-            }
-            .into(),
+        let (_, result) = self.cfg.borrow_mut().add_stmt_op_offset_slice_pointer(
+            self.basic_block,
+            BlockPosition::Append,
+            ptr,
+            offset,
         );
 
         result.into()
@@ -860,23 +729,12 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         let lhs = lhs.expect_value();
         let rhs = rhs.expect_value();
 
-        let module = self.module.borrow();
-        let mut cfg = self.cfg.borrow_mut();
-
-        let body = &mut cfg.function_body[self.function];
-
-        let result = body.local_values.insert(slir::cfg::LocalValueData {
-            ty: Some(slir::ty::TY_BOOL),
-        });
-
-        body.basic_blocks[self.basic_block].statements.push(
-            slir::cfg::OpBinary {
-                operator,
-                lhs,
-                rhs,
-                result,
-            }
-            .into(),
+        let (_, result) = self.cfg.borrow_mut().add_stmt_op_binary(
+            self.basic_block,
+            BlockPosition::Append,
+            operator,
+            lhs,
+            rhs,
         );
 
         result.into()
@@ -904,20 +762,15 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
     }
 
     fn extract_value(&mut self, agg_val: Self::Value, idx: u64) -> Self::Value {
-        let module = self.module.borrow();
-        let mut cfg = self.cfg.borrow_mut();
-
-        let body = &mut cfg.function_body[self.function];
+        let cfg = self.cfg.borrow();
 
         let agg_val = agg_val.expect_value();
-        let agg_ty = body
-            .value_ty(&module, &agg_val)
-            .expect("value must be typed");
-        let agg_ty_kind = module.ty.kind(agg_ty);
+        let agg_ty = cfg.value_ty(&agg_val);
+        let agg_ty_kind = cfg.ty().kind(agg_ty);
         let slir::ty::TypeKind::Ptr(pointee_ty) = *agg_ty_kind else {
             bug!("can only extract value from a pointer to an aggregate type");
         };
-        let pointee_ty_kind = module.ty.kind(pointee_ty);
+        let pointee_ty_kind = cfg.ty().kind(pointee_ty);
 
         let val_ty = match &*pointee_ty_kind {
             slir::ty::TypeKind::Struct(struct_data) => struct_data.fields[idx as usize].ty,
@@ -928,7 +781,6 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
 
         let index = slir::cfg::InlineConst::U32(idx as u32);
 
-        mem::drop(module);
         mem::drop(cfg);
 
         let val_ptr = self.ptr_element_ptr(val_ty.into(), agg_val.into(), &[index.into()]);
@@ -984,23 +836,14 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         _instance: Option<&Instance>,
     ) -> Self::Value {
         let function = llfn.expect_fn_addr();
-        let args = args.iter().map(|a| a.expect_value()).collect();
+        let args = args.iter().map(|a| a.expect_value());
 
-        let mut cfg = self.cfg.borrow_mut();
-        let mut body = &mut cfg.function_body[self.function];
-
-        let result = llty.fn_decl_ret_ty().map(|ty| {
-            body.local_values
-                .insert(slir::cfg::LocalValueData { ty: Some(ty) })
-        });
-
-        body.basic_blocks[self.basic_block].statements.push(
-            slir::cfg::OpCall {
-                function,
-                args,
-                result,
-            }
-            .into(),
+        let (_, result) = self.cfg.borrow_mut().add_stmt_op_call(
+            &self.module.borrow().fn_sigs,
+            self.basic_block,
+            BlockPosition::Append,
+            function,
+            args,
         );
 
         if let Some(result) = result {
