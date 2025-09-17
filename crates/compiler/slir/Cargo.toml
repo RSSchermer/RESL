@@ -4,6 +4,7 @@ description = "Shading Language Intermediate Representation"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 
 [dependencies]
 indexmap = { workspace = true, features = ["serde"] }
