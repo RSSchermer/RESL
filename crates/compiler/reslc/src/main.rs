@@ -45,15 +45,25 @@ mod stable_cg;
 use std::process::ExitCode;
 use std::{env, process};
 
-use rustc_driver::catch_with_exit_code;
+use rustc_driver::{args, catch_with_exit_code, init_rustc_env_logger};
+use rustc_session::config::ErrorOutputType;
+use rustc_session::EarlyDiagCtxt;
 
 rustc_fluent_macro::fluent_messages! { "../messages.ftl" }
 
 fn main() -> ExitCode {
-    let rustc_args = env::args().into_iter().skip(1).collect();
+    let early_dcx = EarlyDiagCtxt::new(ErrorOutputType::default());
+
+    init_rustc_env_logger(&early_dcx);
+
+    let args = args::raw_args(&early_dcx)
+        .unwrap()
+        .into_iter()
+        .skip(1)
+        .collect();
 
     let exit_code = catch_with_exit_code(|| {
-        compiler::run(rustc_args);
+        compiler::run(args);
 
         Ok(())
     });

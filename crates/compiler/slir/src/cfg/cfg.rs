@@ -1524,34 +1524,23 @@ impl Cfg {
 
     pub fn add_stmt_op_call(
         &mut self,
-        function_registry: &FnSigRegistry,
         bb: BasicBlock,
         position: BlockPosition,
         callee: Function,
+        ret_ty: Option<Type>,
         arguments: impl IntoIterator<Item = Value>,
     ) -> (Statement, Option<LocalBinding>) {
         let owner = self.basic_blocks[bb].owner;
-        let sig = function_registry
-            .get(callee)
-            .expect("function not registered");
 
         let mut collected_args = thin_vec![];
 
         for (i, arg) in arguments.into_iter().enumerate() {
             self.validate_value(owner, &arg, &format!("argument {}", i));
 
-            let value_ty = self.value_ty(&arg);
-            assert!(
-                self.ty.is_compatible(value_ty, sig.args[i].ty),
-                "argument {}'s type must be compatible with the type indicated by the function's \
-                signature",
-                i
-            );
-
             collected_args.push(arg);
         }
 
-        let result = sig.ret_ty.map(|ty| self.add_local_binding(owner, ty));
+        let result = ret_ty.map(|ty| self.add_local_binding(owner, ty));
 
         let stmt = self.statements.insert(
             OpCall {

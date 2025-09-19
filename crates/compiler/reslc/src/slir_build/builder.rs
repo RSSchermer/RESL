@@ -839,10 +839,10 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         let args = args.iter().map(|a| a.expect_value());
 
         let (_, result) = self.cfg.borrow_mut().add_stmt_op_call(
-            &self.module.borrow().fn_sigs,
             self.basic_block,
             BlockPosition::Append,
             function,
+            llty.fn_decl_ret_ty(),
             args,
         );
 

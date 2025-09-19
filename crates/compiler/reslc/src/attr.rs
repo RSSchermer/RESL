@@ -3,7 +3,7 @@ use rustc_hir::Target;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::{ErrorGuaranteed, Span};
 
-const ATTRIBUTE_NAMESPACE: &'static str = "resl";
+use crate::compiler::ATTRIBUTE_NAMESPACE;
 
 trait Attr: Sized {
     fn try_from_ast(

@@ -1,6 +1,8 @@
 [package]
 name = "test-example-hello-world"
+edition.workspace = true
 publish = false
 
 [dependencies]
+resl = { path = "../../../crates/library/resl" }
 simple-lib = { path = "../simple_lib" }

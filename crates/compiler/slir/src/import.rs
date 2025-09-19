@@ -68,6 +68,7 @@ impl FunctionImporter {
             .get_function_body(function)
             .expect("function not registered in source CFG");
         let dst_body = dst_cfg.register_function(dst_module, function);
+        let dst_entry_block = dst_body.entry_block();
 
         for (src_arg, dst_arg) in src_body
             .argument_values()
@@ -80,27 +81,25 @@ impl FunctionImporter {
         // First make sure all basic blocks are present in the destination CFG so we can connect the
         // branching terminators in any order.
         for src_bb in src_body.basic_blocks() {
-            let dst_bb = dst_cfg.add_basic_block(function);
+            let dst_bb = if *src_bb == src_body.entry_block() {
+                dst_entry_block
+            } else {
+                dst_cfg.add_basic_block(function)
+            };
 
             self.bb_mapping.insert(*src_bb, dst_bb);
         }
 
         for src_bb in src_body.basic_blocks() {
-            self.import_basic_block(dst_module, src_cfg, dst_cfg, *src_bb);
+            self.import_basic_block(src_cfg, dst_cfg, *src_bb);
         }
     }
 
-    fn import_basic_block(
-        &mut self,
-        module: &Module,
-        src: &Cfg,
-        dst: &mut Cfg,
-        src_bb: BasicBlock,
-    ) {
+    fn import_basic_block(&mut self, src: &Cfg, dst: &mut Cfg, src_bb: BasicBlock) {
         let dst_bb = *self.bb_mapping.get(&src_bb).unwrap();
 
         for statement in src[src_bb].statements() {
-            self.import_statement(module, src, dst, dst_bb, *statement);
+            self.import_statement(src, dst, dst_bb, *statement);
         }
 
         let terminator = match src[src_bb].terminator() {
@@ -125,7 +124,6 @@ impl FunctionImporter {
 
     fn import_statement(
         &mut self,
-        module: &Module,
         src: &Cfg,
         dst: &mut Cfg,
         dst_bb: BasicBlock,
@@ -157,11 +155,13 @@ impl FunctionImporter {
             }
             StatementData::OpUnary(_) => self.import_stmt_op_unary(src, dst, dst_bb, src_stmt),
             StatementData::OpBinary(_) => self.import_stmt_op_binary(src, dst, dst_bb, src_stmt),
-            StatementData::OpCall(_) => {
-                self.import_stmt_op_call(module, src, dst, dst_bb, src_stmt)
+            StatementData::OpCall(_) => self.import_stmt_op_call(src, dst, dst_bb, src_stmt),
+            StatementData::OpCaseToBranchPredicate(_) => {
+                self.import_stmt_op_case_to_branch_predicate(src, dst, dst_bb, src_stmt)
             }
-            StatementData::OpCaseToBranchPredicate(_) => {}
-            StatementData::OpBoolToBranchPredicate(_) => {}
+            StatementData::OpBoolToBranchPredicate(_) => {
+                self.import_stmt_op_bool_to_branch_predicate(src, dst, dst_bb, src_stmt)
+            }
         }
     }
 
@@ -396,7 +396,6 @@ impl FunctionImporter {
 
     fn import_stmt_op_call(
         &mut self,
-        module: &Module,
         src: &Cfg,
         dst: &mut Cfg,
         dst_bb: BasicBlock,
@@ -404,19 +403,19 @@ impl FunctionImporter {
     ) {
         let src_data = src[src_stmt].expect_op_call();
         let callee = src_data.callee();
+        let ret_ty = src_data.result().map(|v| {
+            let src_ty = src[v].ty();
+
+            dst.ty().import(src.ty(), src_ty)
+        });
         let dst_arguments = src_data
             .arguments()
             .iter()
             .map(|v| self.dst_value(dst, *v))
             .collect::<Vec<_>>();
 
-        let (_, result) = dst.add_stmt_op_call(
-            &module.fn_sigs,
-            dst_bb,
-            BlockPosition::Append,
-            callee,
-            dst_arguments,
-        );
+        let (_, result) =
+            dst.add_stmt_op_call(dst_bb, BlockPosition::Append, callee, ret_ty, dst_arguments);
 
         if let Some(result) = result {
             self.local_value_mapping

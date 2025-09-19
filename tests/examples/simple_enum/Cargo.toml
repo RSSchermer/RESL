@@ -1,3 +1,4 @@
 [package]
 name = "test-example-simple-enum"
+edition.workspace = true
 publish = false

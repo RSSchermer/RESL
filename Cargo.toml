@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "crates/compiler/reslc",
     "crates/compiler/slir",
+    "crates/library/resl",
+    "crates/library/resl_macros",
     "crates/resl_cli",
     "crates/slir-explorer",
     "tests/examples/hello_world",
@@ -15,6 +17,8 @@ members = [
 default-members = [
     "crates/compiler/reslc",
     "crates/compiler/slir",
+    "crates/library/resl",
+    "crates/library/resl_macros",
     "crates/resl_cli",
     "crates/slir-explorer",
 ]
@@ -36,11 +40,14 @@ index_vec = "0.1"
 internment = "0.8"
 itertools = "0.14"
 ordered-float = "4.6"
+proc-macro2 = "1.0"
 regex = "1.11"
 rustc-hash = "2.1"
 serde = "1.0"
 slir = { path = "./crates/compiler/slir", version = "0.1.0" }
 slotmap = "1.0"
 smallvec = "1.13"
+syn = "2.0"
 thin-vec = "0.2"
 thiserror = "2.0"
+quote = "1.0"

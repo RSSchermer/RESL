@@ -1,3 +1,4 @@
+use std::env;
 use std::fs::File;
 
 use ar::{GnuBuilder, Header};
@@ -9,54 +10,70 @@ use rustc_middle::ty::TyCtxt;
 use rustc_session::config::{CrateType, DebugInfo};
 use rustc_session::output::out_filename;
 use rustc_span::def_id::LOCAL_CRATE;
+use rustc_target::spec::TargetTuple;
 
 use crate::abi;
 use crate::codegen::codegen_shader_modules;
 use crate::context::ReslContext;
 
 pub const LIB_MODULE_FILENAME: &str = "lib.slir";
+pub const ATTRIBUTE_NAMESPACE: &'static str = "resl_tool";
 
 pub fn run(args: Vec<String>) {
-    let mut compiler = ReslCompiler {};
+    let mut compiler = ReslCompiler {
+        compile_resl: false,
+    };
 
     run_compiler(&args, &mut compiler);
 }
 
-pub struct ReslCompiler {}
+pub struct ReslCompiler {
+    compile_resl: bool,
+}
 
 impl Callbacks for ReslCompiler {
     fn config(&mut self, config: &mut interface::Config) {
-        // Use the `register_tool` feature to register the `resl` tool to make rustc pass through
-        // `#[resl::...]` attributes.
-        let crate_attr = &mut config.opts.unstable_opts.crate_attr;
-        crate_attr.push("feature(register_tool)".to_string());
-        crate_attr.push("register_tool(resl)".to_string());
+        self.compile_resl = !config
+            .opts
+            .crate_types
+            .iter()
+            .any(|ct| ct == &CrateType::ProcMacro);
 
-        // With `DebugInfo::Full`, stable_cg generates a bunch of extra alloca statements for locals
-        // into which the function argument values get copied; it does this as a work-around to be
-        // able to attach debug-info. For our purposes, this just adds noise, so set the debug-info
-        // level to `DebugInfo::Limited`.
-        config.opts.debuginfo = DebugInfo::Limited;
+        if self.compile_resl {
+            // Use the `register_tool` feature to register the `resl` tool to make rustc pass through
+            // `#[resl::...]` attributes.
+            let crate_attr = &mut config.opts.unstable_opts.crate_attr;
+            crate_attr.push("feature(register_tool)".to_string());
+            crate_attr.push(format!("register_tool({})", ATTRIBUTE_NAMESPACE));
 
-        // We never want to generate overflow panics code for the GPU, not even in debug mode, so
-        // when compiling RESL we always disable these checks.
-        config.opts.cg.overflow_checks = Some(false);
+            // With `DebugInfo::Full`, stable_cg generates a bunch of extra alloca statements for locals
+            // into which the function argument values get copied; it does this as a work-around to be
+            // able to attach debug-info. For our purposes, this just adds noise, so set the debug-info
+            // level to `DebugInfo::Limited`.
+            config.opts.debuginfo = DebugInfo::Limited;
 
-        // Disable certain MIR transformations
-        config.opts.unstable_opts.inline_mir = Some(false);
-        config.opts.unstable_opts.mir_enable_passes.extend([
-            ("GVN".to_string(), false),
-            // Disable raw pointer UB checks. We don't currently allow user code to use raw
-            // pointers (only references), so this type UB should not be possible. The checks
-            // also involve pointer casting operations that the backend cannot support, and if
-            // the check were to fail, we would not be able to unwind/abort.
-            ("CheckAlignment".to_string(), false),
-            ("CheckNull".to_string(), false),
-        ]);
+            // We never want to generate overflow panics code for the GPU, not even in debug mode, so
+            // when compiling RESL we always disable these checks.
+            config.opts.cg.overflow_checks = Some(false);
 
-        config.override_queries = Some(|_, providers| {
-            abi::provide(providers);
-        });
+            // Disable certain MIR transformations
+            config.opts.unstable_opts.inline_mir = Some(false);
+            config.opts.unstable_opts.mir_enable_passes.extend([
+                ("GVN".to_string(), false),
+                // Disable raw pointer UB checks. We don't currently allow user code to use raw
+                // pointers (only references), so this type UB should not be possible. The checks
+                // also involve pointer casting operations that the backend cannot support, and if
+                // the check were to fail, we would not be able to unwind/abort.
+                ("CheckAlignment".to_string(), false),
+                ("CheckNull".to_string(), false),
+            ]);
+
+            config.override_queries = Some(|_, providers| {
+                abi::provide(providers);
+            });
+
+            env::set_var("RESLC", "1");
+        }
     }
 
     fn after_analysis<'tcx>(
@@ -64,9 +81,13 @@ impl Callbacks for ReslCompiler {
         _compiler: &interface::Compiler,
         tcx: TyCtxt<'tcx>,
     ) -> Compilation {
-        compile_resl(tcx);
+        if self.compile_resl {
+            compile_resl(tcx);
 
-        Compilation::Stop
+            Compilation::Stop
+        } else {
+            Compilation::Continue
+        }
     }
 }
 
