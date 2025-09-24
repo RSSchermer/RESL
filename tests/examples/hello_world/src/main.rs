@@ -1,6 +1,6 @@
 #![feature(stmt_expr_attributes)]
 
-use resl::*;
+use resl::prelude::*;
 
 #[gpu]
 pub fn or_3(a: u32, b: u32, c: u32) -> u32 {
@@ -9,6 +9,8 @@ pub fn or_3(a: u32, b: u32, c: u32) -> u32 {
 
 #[shader_module]
 pub mod shader {
+    use resl::prelude::*;
+
     fn external_dependency(a: u32, b: u32, c: u32, d: u32) -> u32 {
         simple_lib::or_3(a, b, c) | d
     }
@@ -21,6 +23,12 @@ pub mod shader {
         }
 
         i
+    }
+
+    #[shader_io]
+    struct ShaderIO {
+        #[location(0)]
+        a: u32,
     }
 
     struct LargeStruct {

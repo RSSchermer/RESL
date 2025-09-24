@@ -1,14 +1,18 @@
 #![feature(stmt_expr_attributes)]
 
-#[resl_tool::shader_module]
+use resl::prelude::*;
+
+#[shader_module]
 pub mod shader {
-    #[resl_tool::workgroup]
-    static VALUES: [u32; 4] = [10, 20, 30, 40];
+    use resl::prelude::*;
 
-    #[resl_tool::workgroup]
-    static mut VALUE: u32 = 0;
+    #[resource(group = 0, binding = 0)]
+    static VALUES: Uniform<[u32; 4]>;
 
-    #[resl_tool::compute]
+    #[workgroup_shared]
+    static VALUE: Workgroup<u32> = workgroup!(0);
+
+    #[compute]
     fn entry_point_local_range() {
         let data = [10, 20, 30, 40];
 
@@ -20,12 +24,12 @@ pub mod shader {
             };
 
             unsafe {
-                VALUE = value;
+                *VALUE.as_mut_unchecked() = value;
             }
         }
     }
 
-    #[resl_tool::compute]
+    #[compute]
     fn entry_point_global_range() {
         if let Some(slice) = VALUES.get(1..3) {
             let value = if let Some(element) = slice.get(1) {
@@ -35,20 +39,18 @@ pub mod shader {
             };
 
             unsafe {
-                VALUE = value;
+                *VALUE.as_mut_unchecked() = value;
             }
         }
     }
 
-    #[resl_tool::compute]
+    #[compute]
     fn entry_point_slice_destructuring() {
-        let slice = &VALUES;
-
-        if let [a, tail @ ..] = slice {
+        if let [a, tail @ ..] = VALUES.as_ref() {
             let b = tail.get(0).copied().unwrap_or(10);
 
             unsafe {
-                VALUE = *a + b;
+                *VALUE.as_mut_unchecked() = *a + b;
             }
         }
     }

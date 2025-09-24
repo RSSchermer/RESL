@@ -1,23 +1,19 @@
-use std::ops::Deref;
-
 use indexmap::IndexMap;
 use rustc_ast::{IsAuto, Mutability};
 use rustc_hir::{
-    BodyId, FnSig, GenericBounds, Generics, HirId, Impl, Item, ItemId, ItemKind, Mod, Safety,
-    TraitItemRef, Ty, VariantData,
+    BodyId, EnumDef, FnSig, GenericBounds, Generics, HirId, Impl, Item, ItemId, ItemKind, Mod,
+    Safety, TraitItemRef, Ty, VariantData,
 };
-use rustc_middle::hir;
 use rustc_span::def_id::{DefId, LocalDefId, LocalModDefId};
 use rustc_span::source_map::Spanned;
 use rustc_span::Span;
-
-use crate::context::ReslContext as Cx;
 
 pub struct HirExt {
     pub shader_source_requests: Vec<ShaderSourceRequest>,
     pub mod_ext: IndexMap<LocalModDefId, ModExt>,
     pub fn_ext: IndexMap<LocalDefId, FnExt>,
     pub struct_ext: IndexMap<ItemId, StructExt>,
+    pub enum_ext: IndexMap<ItemId, EnumExt>,
     pub trait_ext: IndexMap<ItemId, TraitExt>,
     pub const_ext: IndexMap<ItemId, ConstExt>,
     pub static_ext: IndexMap<ItemId, StaticExt>,
@@ -34,6 +30,7 @@ impl HirExt {
             mod_ext: Default::default(),
             fn_ext: Default::default(),
             struct_ext: Default::default(),
+            enum_ext: Default::default(),
             trait_ext: Default::default(),
             const_ext: Default::default(),
             static_ext: Default::default(),
@@ -90,6 +87,12 @@ impl HirExt {
                         item,
                         kind: ExtendedItemKind::Struct(variant_data, generics, ext),
                     })
+            }
+            ItemKind::Enum(enum_def, generics) => {
+                self.enum_ext.get(&item.item_id()).map(|ext| ExtendedItem {
+                    item,
+                    kind: ExtendedItemKind::Enum(enum_def, generics, ext),
+                })
             }
             ItemKind::Trait(is_auto, safety, generics, bounds, items) => {
                 self.trait_ext.get(&item.item_id()).map(|ext| ExtendedItem {
@@ -279,6 +282,14 @@ impl<'hir, 'ext> ExtendedItem<'hir, 'ext> {
         }
     }
 
+    pub fn expect_enum(self) -> (&'hir EnumDef<'hir>, &'hir Generics<'hir>, &'ext EnumExt) {
+        if let ExtendedItemKind::Enum(variant_data, generics, ext) = self.kind {
+            (variant_data, generics, ext)
+        } else {
+            panic!("expected enum")
+        }
+    }
+
     pub fn expect_const(self) -> (&'hir Ty<'hir>, &'hir Generics<'hir>, BodyId, &'ext ConstExt) {
         if let ExtendedItemKind::Const(ty, generics, body_id, ext) = self.kind {
             (ty, generics, body_id, ext)
@@ -321,6 +332,7 @@ pub enum ExtendedItemKind<'hir, 'ext> {
         &'hir Generics<'hir>,
         &'ext StructExt,
     ),
+    Enum(&'hir EnumDef<'hir>, &'hir Generics<'hir>, &'ext EnumExt),
     Const(&'hir Ty<'hir>, &'hir Generics<'hir>, BodyId, &'ext ConstExt),
     Static(&'hir Ty<'hir>, Mutability, BodyId, &'ext StaticExt),
     Mod(&'hir Mod<'hir>, &'ext ModExt),
@@ -329,7 +341,7 @@ pub enum ExtendedItemKind<'hir, 'ext> {
 #[derive(Debug)]
 pub enum FnExt {
     GpuFn,
-    Compute(Option<WorkgroupSize>),
+    Compute(WorkgroupSize),
     VertexEntryPoint,
     FragmentEntryPoint,
 }
@@ -342,6 +354,9 @@ pub struct TraitExt {}
 
 #[derive(Debug)]
 pub struct StructExt {}
+
+#[derive(Debug)]
+pub struct EnumExt {}
 
 #[derive(Debug)]
 pub struct FieldExt {
@@ -361,26 +376,16 @@ pub struct ConstExt {
 }
 
 #[derive(Debug)]
-pub struct ResourceBindingGroup {
-    pub value: u32,
-    pub span: Span,
-}
-
-#[derive(Debug)]
-pub struct ResourceBindingBinding {
-    pub value: u32,
-    pub span: Span,
-}
-
-#[derive(Debug)]
 pub struct ResourceBinding {
-    pub group: ResourceBindingGroup,
-    pub binding: ResourceBindingBinding,
+    pub group: u32,
+    pub binding: u32,
+    pub span: Span,
 }
 
 #[derive(Debug)]
 pub enum StaticExt {
     Uniform(ResourceBinding),
     Storage(ResourceBinding),
+    StorageMut(ResourceBinding),
     Workgroup,
 }

@@ -147,107 +147,63 @@ impl Attr for AttrGpu {
 
     fn valid_target(&self, target: &Target) -> bool {
         match target {
-            Target::Fn | Target::Method(_) | Target::Impl => true,
+            Target::Fn
+            | Target::Method(_)
+            | Target::Trait
+            | Target::Impl
+            | Target::Struct
+            | Target::Enum => true,
             _ => false,
         }
     }
 }
 
-/// Decorates traits for which implementations may be GPU compatible
-///
-/// See also [resl::gpu_trait].
-#[derive(Debug)]
-pub struct AttrGpuTrait {
-    pub span: Span,
-}
-
-impl Attr for AttrGpuTrait {
-    impl_attr_from_ast_no_args!(AttrGpuTrait, "gpu_trait");
-
-    fn valid_target(&self, target: &Target) -> bool {
-        match target {
-            Target::Trait => true,
-            _ => false,
-        }
-    }
-}
-
-/// Decorates ADT declaration to indicate that the type may be used in `gpu` functions.
-///
-/// See also [resl::maybe_gpu].
-#[derive(Debug)]
-pub struct AttrMaybeGpu {
-    pub span: Span,
-}
-
-impl Attr for AttrMaybeGpu {
-    impl_attr_from_ast_no_args!(AttrMaybeGpu, "maybe_gpu");
-
-    fn valid_target(&self, target: &Target) -> bool {
-        match target {
-            Target::Struct => true,
-            _ => false,
-        }
-    }
-}
-
-/// Decorates "uniform" resource bindings on `static` items (that must be owned by a `mod` with the
-/// `#[shader_module]` attribute).
+/// Decorates "uniform" and "storage" resource bindings on `static` items (that must be owned by a
+/// `mod` with the `#[shader_module]` attribute).
 ///
 /// These are initially written as:
 ///
 /// ```
-/// uniform x: u32;
+/// #[buffer_bound(group = 0, binding = 0)]
+/// static X: Uniform<u32>;
 /// ```
 ///
-/// The `#[shader_module]` attribute macro rewrites these to:
+/// The `#[buffer_bound]` attribute macro rewrites these to:
 ///
 /// ```
-/// #[resl::uniform]
-/// static x: u32 = ...;
+/// #[resl::buffer_bound(0, 0)]
+/// static X: Uniform<u32> = unsafe { core::mem::zeroed() };
 /// ```
-///
-/// (where the initializer in a dummy value).
 #[derive(Debug)]
-pub struct AttrUniform {
+pub struct AttrResource {
+    pub group: u32,
+    pub binding: u32,
     pub span: Span,
 }
 
-impl Attr for AttrUniform {
-    impl_attr_from_ast_no_args!(AttrUniform, "uniform");
+impl Attr for AttrResource {
+    fn try_from_ast(
+        tcx: TyCtxt<'_>,
+        attr: &rustc_hir::Attribute,
+    ) -> Result<Option<Self>, ErrorGuaranteed> {
+        if attr_matches_name(attr, "buffer_bound") {
+            if let Some(meta_item_list) = attr.meta_item_list()
+                && meta_item_list.len() == 2
+            {
+                return Ok(Some(AttrResource {
+                    group: expect_u32(tcx, &meta_item_list[0])?,
+                    binding: expect_u32(tcx, &meta_item_list[1])?,
+                    span: Default::default(),
+                }));
+            }
 
-    fn valid_target(&self, target: &Target) -> bool {
-        match target {
-            Target::Static => true,
-            _ => false,
+            Err(tcx
+                .dcx()
+                .span_err(attr.span, "`buffer_bound` attribute expected two arguments"))
+        } else {
+            Ok(None)
         }
     }
-}
-
-/// Decorates "storage" resource bindings on `static` items (that must be owned by a `mod` with the
-/// `#[shader_module]` attribute).
-///
-/// These are initially written as:
-///
-/// ```
-/// storage x: u32;
-/// ```
-///
-/// The `#[shader_module]` attribute macro rewrites these to:
-///
-/// ```
-/// #[resl::storage]
-/// static x: u32 = ...;
-/// ```
-///
-/// (where the initializer in a dummy value).
-#[derive(Debug)]
-pub struct AttrStorage {
-    pub span: Span,
-}
-
-impl Attr for AttrStorage {
-    impl_attr_from_ast_no_args!(AttrStorage, "storage");
 
     fn valid_target(&self, target: &Target) -> bool {
         match target {
@@ -273,12 +229,12 @@ impl Attr for AttrStorage {
 /// static x: u32 = 0;
 /// ```
 #[derive(Debug)]
-pub struct AttrWorkgroup {
+pub struct AttrWorkgroupShared {
     pub span: Span,
 }
 
-impl Attr for AttrWorkgroup {
-    impl_attr_from_ast_no_args!(AttrWorkgroup, "workgroup");
+impl Attr for AttrWorkgroupShared {
+    impl_attr_from_ast_no_args!(AttrWorkgroupShared, "workgroup_shared");
 
     fn valid_target(&self, target: &Target) -> bool {
         match target {
@@ -316,48 +272,6 @@ impl Attr for AttrOverride {
     fn valid_target(&self, target: &Target) -> bool {
         match target {
             Target::Const => true,
-            _ => false,
-        }
-    }
-}
-
-/// Decorates `static` items (that must also be decorated with a `#[uniform]` or `#[storage]`
-/// attribute) to set a resource group ID.
-///
-/// See also [resl::group].
-#[derive(Debug)]
-pub struct AttrGroup {
-    pub group_id: u32,
-    pub span: Span,
-}
-
-impl Attr for AttrGroup {
-    impl_attr_from_ast_single_int_arg!(AttrGroup, group_id, "group");
-
-    fn valid_target(&self, target: &Target) -> bool {
-        match target {
-            Target::Static => true,
-            _ => false,
-        }
-    }
-}
-
-/// Decorates `static` items (that must also be decorated with a `#[uniform]` or `#[storage]`
-/// attribute) to set a resource binding ID.
-///
-/// See also [resl::binding].
-#[derive(Debug)]
-pub struct AttrBinding {
-    pub binding_id: u32,
-    pub span: Span,
-}
-
-impl Attr for AttrBinding {
-    impl_attr_from_ast_single_int_arg!(AttrBinding, binding_id, "binding");
-
-    fn valid_target(&self, target: &Target) -> bool {
-        match target {
-            Target::Static => true,
             _ => false,
         }
     }
@@ -404,14 +318,42 @@ impl Attr for AttrOverrideRequired {
 /// Decorates `fn` items (that must be owned by a `mod` with the `#[shader_module]` attribute) to
 /// indicate that the function may be used as a "compute" shader entry-point.
 ///
+/// Takes 3 arguments for the x, y and z dimensions of the workgroup thread grid.
+///
 /// See also [resl::compute].
 #[derive(Debug)]
 pub struct AttrCompute {
+    pub workgroup_size: (u32, u32, u32),
     pub span: Span,
 }
 
 impl Attr for AttrCompute {
-    impl_attr_from_ast_no_args!(AttrCompute, "compute");
+    fn try_from_ast(
+        tcx: TyCtxt<'_>,
+        attr: &rustc_hir::Attribute,
+    ) -> Result<Option<Self>, ErrorGuaranteed> {
+        if attr_matches_name(attr, "compute") {
+            if let Some(meta_item_list) = attr.meta_item_list()
+                && meta_item_list.len() == 3
+            {
+                let x = expect_u32(tcx, &meta_item_list[0])?;
+                let y = expect_u32(tcx, &meta_item_list[1])?;
+                let z = expect_u32(tcx, &meta_item_list[2])?;
+
+                return Ok(Some(AttrCompute {
+                    workgroup_size: (x, y, z),
+                    span: attr.span,
+                }));
+            }
+
+            return Err(tcx.dcx().span_err(
+                attr.span,
+                "the `workgroup_size` attribute expects at least one and at most three arguments",
+            ));
+        }
+
+        Ok(None)
+    }
 
     fn valid_target(&self, target: &Target) -> bool {
         match target {
@@ -452,58 +394,6 @@ pub struct AttrFragment {
 
 impl Attr for AttrFragment {
     impl_attr_from_ast_no_args!(AttrFragment, "fragment");
-
-    fn valid_target(&self, target: &Target) -> bool {
-        match target {
-            Target::Fn => true,
-            _ => false,
-        }
-    }
-}
-
-/// Decorates `fn` items (that must also be decorated with the `#[compute]` attribute) to
-/// specify the workgroup size.
-///
-/// See also [resl::workgroup_size].
-#[derive(Debug)]
-pub struct AttrWorkgroupSize {
-    pub workgroup_size: (u32, u32, u32),
-    pub span: Span,
-}
-
-impl Attr for AttrWorkgroupSize {
-    fn try_from_ast(
-        tcx: TyCtxt<'_>,
-        attr: &rustc_hir::Attribute,
-    ) -> Result<Option<Self>, ErrorGuaranteed> {
-        if attr_matches_name(attr, "workgroup_size") {
-            if let Some(meta_item_list) = attr.meta_item_list()
-                && (1..=3).contains(&meta_item_list.len())
-            {
-                let x = expect_u32(tcx, &meta_item_list[0])?;
-                let y = meta_item_list
-                    .get(1)
-                    .map(|item| expect_u32(tcx, item))
-                    .transpose()?;
-                let z = meta_item_list
-                    .get(2)
-                    .map(|item| expect_u32(tcx, item))
-                    .transpose()?;
-
-                return Ok(Some(AttrWorkgroupSize {
-                    workgroup_size: (x, y.unwrap_or(1), z.unwrap_or(1)),
-                    span: attr.span,
-                }));
-            }
-
-            return Err(tcx.dcx().span_err(
-                attr.span,
-                "the `workgroup_size` attribute expects at least one and at most three arguments",
-            ));
-        }
-
-        Ok(None)
-    }
 
     fn valid_target(&self, target: &Target) -> bool {
         match target {
@@ -829,20 +719,14 @@ register_attributes!(
     shader_source_request => AttrShaderSourceRequest,
     shader_module => AttrShaderModule,
     gpu => AttrGpu,
-    gpu_trait => AttrGpuTrait,
-    maybe_gpu => AttrMaybeGpu,
-    uniform => AttrUniform,
-    storage => AttrStorage,
-    workgroup => AttrWorkgroup,
+    resource => AttrResource,
+    workgroup_shared => AttrWorkgroupShared,
     override_ => AttrOverride,
-    group => AttrGroup,
-    binding => AttrBinding,
     override_id => AttrOverrideId,
     override_required => AttrOverrideRequired,
     compute => AttrCompute,
     vertex => AttrVertex,
     fragment => AttrFragment,
-    workgroup_size => AttrWorkgroupSize,
     location => AttrLocation,
     builtin => AttrBuiltin,
     invariant => AttrInvariant,

@@ -4,8 +4,8 @@ use rustc_hir::def::{DefKind, Res};
 use rustc_hir::intravisit::Visitor;
 use rustc_hir::{
     intravisit, Arm, ConstBlock, Expr, ExprField, ExprKind, FieldDef, ForeignItem, GenericParam,
-    Impl, ImplItem, ImplItemKind, Item, ItemKind, MethodKind, Param, PatField, Stmt, StmtKind,
-    Target, UseKind, Variant,
+    Impl, ImplItem, ImplItemKind, Item, ItemKind, MethodKind, Param, PatField, QPath, Stmt,
+    StmtKind, Target, TyKind, UseKind, Variant,
 };
 use rustc_middle::hir::nested_filter;
 use rustc_middle::ty::TyCtxt;
@@ -14,14 +14,13 @@ use rustc_span::source_map::{respan, Spanned};
 use rustc_span::{ErrorGuaranteed, Span};
 
 use crate::attr::{
-    collect_resl_attributes, AttrBlendSrc, AttrInterpolate, AttrWorkgroupSize, Attributes,
-    BuiltinName, InterpolationSamplingName, InterpolationTypeName,
+    collect_resl_attributes, AttrBlendSrc, AttrInterpolate, Attributes, BuiltinName,
+    InterpolationSamplingName, InterpolationTypeName,
 };
 use crate::hir_ext::{
-    BlendSrc, ConstExt, FieldExt, FnExt, HirExt, ImplExt, Interpolation, InterpolationSampling,
-    InterpolationType, ModExt, OverrideId, ParamExt, ResourceBinding, ResourceBindingBinding,
-    ResourceBindingGroup, ShaderIOBinding, ShaderSourceRequest, StaticExt, StructExt, TraitExt,
-    WorkgroupSize,
+    BlendSrc, ConstExt, EnumExt, FieldExt, FnExt, HirExt, ImplExt, Interpolation,
+    InterpolationSampling, InterpolationType, ModExt, OverrideId, ParamExt, ResourceBinding,
+    ShaderIOBinding, ShaderSourceRequest, StaticExt, StructExt, TraitExt, WorkgroupSize,
 };
 
 // Borrowed from https://github.com/Rust-GPU/rust-gpu
@@ -86,38 +85,6 @@ fn try_build_shader_source_request(
             "expected a block expression for a shader source request",
         ))
     }
-}
-
-fn try_resolve_resource_binding(
-    tcx: TyCtxt<'_>,
-    attrs: &Attributes,
-    span: Span,
-) -> Result<ResourceBinding, ErrorGuaranteed> {
-    let group = if let Some(group) = &attrs.group {
-        ResourceBindingGroup {
-            value: group.group_id,
-            span: group.span,
-        }
-    } else {
-        return Err(tcx
-            .sess
-            .dcx()
-            .span_err(span, "a resource binding must specify a `group` attribute"));
-    };
-
-    let binding = if let Some(binding) = &attrs.binding {
-        ResourceBindingBinding {
-            value: binding.binding_id,
-            span: binding.span,
-        }
-    } else {
-        return Err(tcx.dcx().span_err(
-            span,
-            "a resource binding must specify a `binding` attribute",
-        ));
-    };
-
-    Ok(ResourceBinding { group, binding })
 }
 
 fn try_blend_src_from_attr(
@@ -236,15 +203,6 @@ fn try_maybe_shader_io_binding(
     }))
 }
 
-fn workgroup_size_from_attr(attr: Option<&AttrWorkgroupSize>) -> Option<WorkgroupSize> {
-    attr.map(|a| WorkgroupSize {
-        x: a.workgroup_size.0,
-        y: a.workgroup_size.1,
-        z: a.workgroup_size.2,
-        span: a.span,
-    })
-}
-
 pub struct Locator<'a, 'tcx> {
     tcx: TyCtxt<'tcx>,
     hir_ext: &'a mut HirExt,
@@ -296,37 +254,56 @@ impl<'a, 'tcx> Locator<'a, 'tcx> {
     }
 
     fn visit_item_static(&mut self, item: &Item<'tcx>, attrs: &Attributes) {
-        let count = [
-            attrs.uniform.is_some(),
-            attrs.storage.is_some(),
-            attrs.workgroup.is_some(),
-        ]
-        .into_iter()
-        .filter(|v| *v)
-        .count();
+        let count = [attrs.resource.is_some(), attrs.workgroup_shared.is_some()]
+            .into_iter()
+            .filter(|v| *v)
+            .count();
 
         if count > 1 {
-            // `override_required` attributes are not declared by the user, but added in the macro
-            // expansion stage, so this would indicate a bug the macro(s).
             self.tcx.dcx().span_bug(
                 item.span,
-                "the `uniform`, `storage` and `workgroup` attributes are mutually exclusive",
+                "the `buffer_bound` and `workgroup_shared` attributes are mutually exclusive",
             );
         }
 
-        if attrs.uniform.is_some() {
-            if let Ok(resource_binding) = try_resolve_resource_binding(self.tcx, attrs, item.span) {
-                self.hir_ext
-                    .static_ext
-                    .insert(item.item_id(), StaticExt::Uniform(resource_binding));
-            }
-        } else if attrs.storage.is_some() {
-            if let Ok(resource_binding) = try_resolve_resource_binding(self.tcx, attrs, item.span) {
-                self.hir_ext
-                    .static_ext
-                    .insert(item.item_id(), StaticExt::Storage(resource_binding));
-            }
-        } else if attrs.workgroup.is_some() {
+        if let Some(attr) = attrs.resource.as_ref() {
+            let (ty, _, _) = item.expect_static();
+
+            let TyKind::Path(path) = ty.kind else {
+                self.tcx
+                    .dcx()
+                    .span_bug(item.span, "expected a static with a path type");
+            };
+            let QPath::Resolved(None, path) = path else {
+                self.tcx
+                    .dcx()
+                    .span_bug(item.span, "expected a static with a path type");
+            };
+
+            let resource_binding = ResourceBinding {
+                group: attr.group,
+                binding: attr.binding,
+                span: attr.span,
+            };
+            let resource_kind = path.segments.last().unwrap().ident.name;
+
+            // Note: this is a bit of a hack to resolve the resource kind, but it should work as
+            // we assert in the `#[resource(...)]` attribute macro that the static's type implements
+            // the `resl::resource::Resource` trait, which is a sealed trait only implemented by a
+            // known set of types.
+
+            let static_ext = match resource_kind.as_str() {
+                "Uniform" => StaticExt::Uniform(resource_binding),
+                "Storage" => StaticExt::Storage(resource_binding),
+                "StorageMut" => StaticExt::StorageMut(resource_binding),
+                _ => self.tcx.dcx().span_bug(
+                    attr.span,
+                    "the `static` item's type is not a valid resource type",
+                ),
+            };
+
+            self.hir_ext.static_ext.insert(item.item_id(), static_ext);
+        } else if attrs.workgroup_shared.is_some() {
             self.hir_ext
                 .static_ext
                 .insert(item.item_id(), StaticExt::Workgroup);
@@ -353,15 +330,6 @@ impl<'a, 'tcx> Locator<'a, 'tcx> {
             return;
         }
 
-        if attrs.workgroup_size.is_some() && attrs.compute.is_none() {
-            self.tcx.dcx().span_err(
-                item.span,
-                "the `workgroup_size` attribute must be accompanied by a `compute` attribute",
-            );
-
-            return;
-        }
-
         let def_id = item.owner_id.def_id;
 
         if attrs.gpu.is_some() {
@@ -378,12 +346,16 @@ impl<'a, 'tcx> Locator<'a, 'tcx> {
                 .insert(def_id, FnExt::FragmentEntryPoint);
         }
 
-        if attrs.compute.is_some() {
-            let workgroup_size = workgroup_size_from_attr(attrs.workgroup_size.as_ref());
-
-            self.hir_ext
-                .fn_ext
-                .insert(def_id, FnExt::Compute(workgroup_size));
+        if let Some(attr) = &attrs.compute {
+            self.hir_ext.fn_ext.insert(
+                def_id,
+                FnExt::Compute(WorkgroupSize {
+                    x: attr.workgroup_size.0,
+                    y: attr.workgroup_size.1,
+                    z: attr.workgroup_size.2,
+                    span: attr.span,
+                }),
+            );
         }
     }
 
@@ -401,13 +373,19 @@ impl<'a, 'tcx> Locator<'a, 'tcx> {
     }
 
     fn visit_item_struct(&mut self, item: &Item<'tcx>, attrs: &Attributes) {
-        if attrs.maybe_gpu.is_some() {
+        if attrs.gpu.is_some() {
             self.hir_ext.struct_ext.insert(item.item_id(), StructExt {});
         }
     }
 
+    fn visit_item_enum(&mut self, item: &Item<'tcx>, attrs: &Attributes) {
+        if attrs.gpu.is_some() {
+            self.hir_ext.enum_ext.insert(item.item_id(), EnumExt {});
+        }
+    }
+
     fn visit_item_trait(&mut self, item: &Item<'tcx>, attrs: &Attributes) {
-        if attrs.gpu_trait.is_some() {
+        if attrs.gpu.is_some() {
             self.hir_ext.trait_ext.insert(item.item_id(), TraitExt {});
         }
     }
@@ -438,6 +416,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Locator<'a, 'tcx> {
             ItemKind::Fn { .. } => self.visit_item_fn(item, &attrs),
             ItemKind::Mod(_) => self.visit_item_mod(item, &attrs),
             ItemKind::Struct(_, _) => self.visit_item_struct(item, &attrs),
+            ItemKind::Enum(_, _) => self.visit_item_enum(item, &attrs),
             ItemKind::Trait(_, _, _, _, _) => self.visit_item_trait(item, &attrs),
             ItemKind::Impl(_) => self.visit_item_impl(item, &attrs),
             _ => (),

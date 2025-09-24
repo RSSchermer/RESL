@@ -15,5 +15,7 @@ quote = { workspace = true }
 [dependencies.syn]
 workspace = true
 features = [
-    "full"
+    "full",
+    "visit",
+    "visit-mut"
 ]

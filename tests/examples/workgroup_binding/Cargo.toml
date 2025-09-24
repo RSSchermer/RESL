@@ -2,3 +2,6 @@
 name = "test-example-workgroup-binding"
 edition.workspace = true
 publish = false
+
+[dependencies]
+resl = { path = "../../../crates/library/resl" }

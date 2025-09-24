@@ -72,7 +72,7 @@ impl Callbacks for ReslCompiler {
                 abi::provide(providers);
             });
 
-            env::set_var("RESLC", "1");
+            env::set_var("IS_RESLC_PASS", "1");
         }
     }
 

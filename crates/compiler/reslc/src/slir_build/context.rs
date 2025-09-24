@@ -88,8 +88,8 @@ fn shader_io_binding_to_slir(shader_io_binding: ShaderIOBinding) -> slir::Shader
 
 fn resource_binding_to_slir(resource_binding: &ResourceBinding) -> slir::ResourceBinding {
     slir::ResourceBinding {
-        group: resource_binding.group.value,
-        binding: resource_binding.binding.value,
+        group: resource_binding.group,
+        binding: resource_binding.binding,
     }
 }
 
@@ -396,7 +396,18 @@ impl<'a, 'tcx> PreDefineCodegenMethods for CodegenContext<'a, 'tcx> {
                 let b = module.storage_bindings.register(slir::StorageBindingData {
                     ty,
                     resource_binding: resource_binding_to_slir(resource_binding),
-                    writable: mutability.is_mut(),
+                    writable: false,
+                });
+
+                self.static_to_slir
+                    .borrow_mut()
+                    .insert(def, SlirStatic::Storage(b));
+            }
+            StaticExt::StorageMut(resource_binding) => {
+                let b = module.storage_bindings.register(slir::StorageBindingData {
+                    ty,
+                    resource_binding: resource_binding_to_slir(resource_binding),
+                    writable: true,
                 });
 
                 self.static_to_slir
@@ -441,18 +452,10 @@ impl<'a, 'tcx> PreDefineCodegenMethods for CodegenContext<'a, 'tcx> {
             }
 
             match fn_ext {
-                FnExt::Compute(size) => {
-                    let (x, y, z) = if let Some(size) = size {
-                        (size.x, size.y, size.z)
-                    } else {
-                        (1, 1, 1)
-                    };
-
-                    self.module
-                        .borrow_mut()
-                        .entry_points
-                        .register(function, slir::EntryPointKind::Compute(x, y, z))
-                }
+                FnExt::Compute(size) => self.module.borrow_mut().entry_points.register(
+                    function,
+                    slir::EntryPointKind::Compute(size.x, size.y, size.z),
+                ),
                 FnExt::VertexEntryPoint => self
                     .module
                     .borrow_mut()

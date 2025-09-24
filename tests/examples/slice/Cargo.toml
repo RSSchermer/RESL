@@ -2,3 +2,6 @@
 name = "test-example-slice"
 edition.workspace = true
 publish = false
+
+[dependencies]
+resl = { path = "../../../crates/library/resl" }

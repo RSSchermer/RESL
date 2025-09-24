@@ -1,9 +1,9 @@
-use std::env;
-
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{quote, quote_spanned, ToTokens};
 use syn::{parse_macro_input, Item};
+
+use crate::IS_RESLC_PASS;
 
 pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
     if !attr.is_empty() {
@@ -16,11 +16,10 @@ pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     let item = parse_macro_input!(item as Item);
-    let is_reslc_pass = env::var("RESLC").is_ok();
 
     match item {
         Item::Mod(_) => {
-            if is_reslc_pass {
+            if *IS_RESLC_PASS {
                 quote! {
                     #[resl_tool::shader_module]
                     #item

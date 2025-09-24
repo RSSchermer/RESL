@@ -1,9 +1,13 @@
 #![feature(stmt_expr_attributes)]
 
-#[resl::shader_module]
+use resl::prelude::*;
+
+#[shader_module]
 pub mod shader {
-    #[resl::workgroup]
-    static mut VALUE: u32 = 0;
+    use resl::prelude::*;
+
+    #[workgroup_shared]
+    static VALUE: Workgroup<u32> = workgroup!(0);
 
     fn test(v: u32) -> Result<u32, ()> {
         if v > 10 {
@@ -13,10 +17,10 @@ pub mod shader {
         }
     }
 
-    #[resl::compute]
+    #[compute]
     fn main() {
         unsafe {
-            VALUE = if let Ok(new_value) = test(VALUE) {
+            *VALUE.as_mut_unchecked() = if let Ok(new_value) = test(*VALUE.as_ref_unchecked()) {
                 new_value
             } else {
                 0

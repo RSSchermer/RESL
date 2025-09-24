@@ -10,30 +10,35 @@ pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
         let span = Span::call_site();
 
         return quote_spanned! { span =>
-            compile_error!("the `gpu` attribute does not accept any arguments");
+            compile_error!("the `fragment` attribute does not accept any arguments");
         }
         .into();
     }
 
     let item = parse_macro_input!(item as Item);
 
+    let expansion = quote! {
+        #[allow(unused)]
+        #item
+    };
+
     match item {
-        Item::Fn(_) | Item::Trait(_) | Item::Impl(_) => {
+        Item::Fn(_) => {
             if *IS_RESLC_PASS {
                 quote! {
-                    #[resl_tool::gpu]
-                    #item
+                    #[resl_tool::fragment]
+                    #expansion
                 }
                 .into()
             } else {
-                item.to_token_stream().into()
+                expansion.into()
             }
         }
         _ => {
             let span = Span::call_site();
 
             quote_spanned! { span =>
-                compile_error!("the `gpu` attribute can only be applied to `fn`, `trait` and `impl` items");
+                compile_error!("the `fragment` attribute can only be applied to functions");
             }
             .into()
         }
