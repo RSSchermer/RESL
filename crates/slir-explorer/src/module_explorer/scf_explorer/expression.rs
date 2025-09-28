@@ -96,6 +96,16 @@ pub fn Expression(
             }"])"
         }
         .into_any(),
+        ExpressionKind::OpCallBuiltin(op) => view! {
+            {op.callee().ident().as_str()}"("{
+                op.arguments().iter().map(|arg| view! {
+                    <Expression module expression=*arg highlight />
+                }.into_any())
+                .intersperse_with(|| view! {", "}.into_any())
+                .collect_view()
+            }")"
+        }
+        .into_any(),
     }
 }
 

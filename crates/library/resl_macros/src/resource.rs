@@ -86,16 +86,16 @@ pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
     // are all zero-sized types. This way we don't have to expose some hidden unsafe initializer
     // functions for these types, as these types are never meant to be constructed.
     let expansion = quote! {
-        #assert_resource
-
         #(#attrs)*
         #static_token #ident #colon_token #ty = unsafe { core::mem::zeroed() } #semi_token
+
+        #assert_resource
     };
 
     if *IS_RESLC_PASS {
         quote! {
-            #[resl_tool::resource(#group, #binding)]
-            #expansion;
+            #[reslc::resource(#group, #binding)]
+            #expansion
         }
         .into()
     } else {

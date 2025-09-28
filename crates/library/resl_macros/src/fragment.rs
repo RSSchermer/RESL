@@ -26,7 +26,7 @@ pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
         Item::Fn(_) => {
             if *IS_RESLC_PASS {
                 quote! {
-                    #[resl_tool::fragment]
+                    #[reslc::fragment]
                     #expansion
                 }
                 .into()

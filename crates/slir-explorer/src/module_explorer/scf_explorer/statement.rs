@@ -47,6 +47,10 @@ pub fn Statement(
             <Store module statement highlight /><br/>
         }
         .into_any(),
+        StatementKind::CallBuiltin(_) => view! {
+            <CallBuiltin module statement highlight /><br/>
+        }
+        .into_any(),
     }
 }
 
@@ -233,8 +237,30 @@ pub fn Store(
     let stmt = module_data.expect_scf()[statement].kind().expect_store();
 
     view! {
-        <Expression module expression=stmt.pointer() highlight />
-        " *= "
+        "*"<Expression module expression=stmt.pointer() highlight />
+        " = "
         <Expression module expression=stmt.value() highlight />";"<br/>
+    }
+}
+
+#[component]
+pub fn CallBuiltin(
+    module: StoredValue<ModuleData>,
+    statement: slir::scf::Statement,
+    highlight: HighlightSignal,
+) -> impl IntoView {
+    let module_data = module.read_value();
+    let stmt = module_data.expect_scf()[statement]
+        .kind()
+        .expect_call_builtin();
+
+    view! {
+        {stmt.callee().ident().as_str()}"("{
+            stmt.arguments().iter().map(|arg| view! {
+                <Expression module expression=*arg highlight />
+            }.into_any())
+            .intersperse_with(|| view! {", "}.into_any())
+            .collect_view()
+        }")"
     }
 }

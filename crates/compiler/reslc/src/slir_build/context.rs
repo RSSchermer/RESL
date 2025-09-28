@@ -10,8 +10,8 @@ use stable_mir::abi::{
 use stable_mir::mir::alloc::GlobalAlloc;
 use stable_mir::mir::mono::{Instance, StaticDef};
 use stable_mir::target::{MachineInfo, MachineSize};
-use stable_mir::ty::{Align, Allocation, RigidTy, TyKind};
-use stable_mir::{abi, CrateDef};
+use stable_mir::ty::{Align, Allocation, GenericArgKind, RigidTy, TyKind};
+use stable_mir::{abi, CrateDef, Symbol};
 
 use crate::context::ReslContext;
 use crate::hir_ext::{
@@ -145,6 +145,10 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
     }
 
     fn ty_and_layout_register(&self, layout: TyAndLayout) -> slir::ty::Type {
+        if let Some(ty) = self.try_register_as_reslc_mem_resource_ty(layout) {
+            return ty;
+        }
+
         let shape = layout.layout.shape();
 
         // Handle enums before scalar primitives, as there enum types that cam present as scalar
@@ -175,6 +179,39 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
                 self.register_struct(&shape, offsets, layout)
             }
         }
+    }
+
+    /// Unpacks memory container types.
+    ///
+    /// Certain types is the RESL standard library acts as proxies for device-controlled memory
+    /// resources (e.g., the `resl::resource::Storage` type). Such wrappers help us achieve the
+    /// interface we want to expose, but end up being noise at lower levels of compilation. We
+    /// therefore unpack these types here.
+    fn try_register_as_reslc_mem_resource_ty(&self, layout: TyAndLayout) -> Option<slir::ty::Type> {
+        let ty = layout.ty;
+
+        if let TyKind::RigidTy(RigidTy::Adt(def, generics)) = ty.kind() {
+            if !def
+                .attrs_by_path(&["reslc".into(), "mem_resource_ty".into()])
+                .is_empty()
+            {
+                let Some(GenericArgKind::Type(ty)) = generics.0.first() else {
+                    panic!("`resl::mem_resource_ty` must always have a type parameter");
+                };
+
+                let layout = ty
+                    .layout()
+                    .expect("type must have a known layout during codegen");
+                let slir_ty = self.ty_and_layout_resolve(TyAndLayout {
+                    ty: *ty,
+                    layout: layout.into(),
+                });
+
+                return Some(slir_ty);
+            }
+        }
+
+        None
     }
 
     fn resolve_scalar_ty(&self, scalar: abi::Scalar, layout: TyAndLayout) -> slir::ty::Type {

@@ -5,9 +5,10 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::cfg::{
     Assign, BasicBlock, Bind, Cfg, FunctionBody, InlineConst, LocalBinding, OpAlloca, OpBinary,
-    OpBoolToBranchPredicate, OpCall, OpCaseToBranchPredicate, OpGetDiscriminant, OpLoad,
-    OpOffsetSlicePtr, OpPtrElementPtr, OpPtrVariantPtr, OpSetDiscriminant, OpStore, OpUnary,
-    RootIdentifier, StatementData, Terminator, Uninitialized, Value,
+    OpBoolToBranchPredicate, OpCall, OpCallBuiltin, OpCaseToBranchPredicate, OpExtractValue,
+    OpGetDiscriminant, OpLoad, OpOffsetSlicePtr, OpPtrElementPtr, OpPtrVariantPtr,
+    OpSetDiscriminant, OpStore, OpUnary, RootIdentifier, StatementData, Terminator, Uninitialized,
+    Value,
 };
 use crate::cfg_to_rvsdg::control_flow_restructuring::{
     restructure_branches, restructure_loops, Graph,
@@ -309,6 +310,7 @@ impl<'a> RegionBuilder<'a> {
             StatementData::OpAlloca(op) => self.visit_op_alloca(op),
             StatementData::OpLoad(op) => self.visit_op_load(op),
             StatementData::OpStore(op) => self.visit_op_store(op),
+            StatementData::OpExtractValue(op) => self.visit_op_extract_value(op),
             StatementData::OpPtrElementPtr(op) => self.visit_op_ptr_element_ptr(op),
             StatementData::OpPtrVariantPtr(op) => self.visit_op_ptr_variant_ptr(op),
             StatementData::OpGetDiscriminant(op) => self.visit_op_get_discriminant(op),
@@ -317,6 +319,7 @@ impl<'a> RegionBuilder<'a> {
             StatementData::OpUnary(op) => self.visit_op_unary(op),
             StatementData::OpBinary(op) => self.visit_op_binary(op),
             StatementData::OpCall(op) => self.visit_op_call(op),
+            StatementData::OpCallBuiltin(op) => self.visit_op_call_builtin(op),
             StatementData::OpCaseToBranchPredicate(op) => {
                 self.visit_op_case_to_branch_predicate(op)
             }
@@ -378,6 +381,25 @@ impl<'a> RegionBuilder<'a> {
             .add_op_store(self.region, ptr_input, value_input, self.state_origin);
 
         self.state_origin = StateOrigin::Node(node);
+    }
+
+    fn visit_op_extract_value(&mut self, op: &OpExtractValue) {
+        let aggregate_input = self.resolve_value(op.aggregate());
+        let index_inputs = op
+            .indices()
+            .iter()
+            .copied()
+            .map(|v| self.resolve_value(v))
+            .collect::<Vec<_>>();
+        let node = self.rvsdg.add_op_extract_element(
+            self.region,
+            op.element_ty(),
+            aggregate_input,
+            index_inputs,
+        );
+
+        self.input_state_tracker
+            .insert_value_node(self.cfg, op.result(), node, 0);
     }
 
     fn visit_op_ptr_element_ptr(&mut self, op: &OpPtrElementPtr) {
@@ -487,6 +509,24 @@ impl<'a> RegionBuilder<'a> {
         }
 
         self.state_origin = StateOrigin::Node(node);
+    }
+
+    fn visit_op_call_builtin(&mut self, op: &OpCallBuiltin) {
+        let callee = op.callee().clone();
+        let arg_inputs = op
+            .arguments()
+            .iter()
+            .copied()
+            .map(|v| self.resolve_value(v))
+            .collect::<Vec<_>>();
+        let node = self
+            .rvsdg
+            .add_op_call_builtin(self.module, self.region, callee, arg_inputs);
+
+        if let Some(result) = op.result() {
+            self.input_state_tracker
+                .insert_value_node(self.cfg, result, node, 0);
+        }
     }
 
     fn visit_op_case_to_branch_predicate(&mut self, op: &OpCaseToBranchPredicate) {

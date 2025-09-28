@@ -9,6 +9,7 @@ use slotmap::SlotMap;
 use smallvec::{smallvec, SmallVec};
 use thin_vec::{thin_vec, ThinVec};
 
+use crate::builtin_function::BuiltinFunction;
 use crate::ty::{Type, TypeKind, TypeRegistry, TY_BOOL, TY_F32, TY_I32, TY_PREDICATE, TY_U32};
 use crate::{
     BinaryOperator, FnSigRegistry, Function, Module, StorageBinding, UnaryOperator, UniformBinding,
@@ -289,6 +290,32 @@ impl OpStore {
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OpExtractValue {
+    element_ty: Type,
+    aggregate: Value,
+    indices: ThinVec<Value>,
+    result: LocalBinding,
+}
+
+impl OpExtractValue {
+    pub fn element_ty(&self) -> Type {
+        self.element_ty
+    }
+
+    pub fn aggregate(&self) -> Value {
+        self.aggregate
+    }
+
+    pub fn indices(&self) -> &[Value] {
+        &self.indices
+    }
+
+    pub fn result(&self) -> LocalBinding {
+        self.result
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct OpPtrElementPtr {
     element_ty: Type,
     pointer: Value,
@@ -456,6 +483,27 @@ impl OpCall {
     }
 }
 
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OpCallBuiltin {
+    callee: BuiltinFunction,
+    arguments: ThinVec<Value>,
+    result: Option<LocalBinding>,
+}
+
+impl OpCallBuiltin {
+    pub fn callee(&self) -> &BuiltinFunction {
+        &self.callee
+    }
+
+    pub fn arguments(&self) -> &[Value] {
+        &self.arguments
+    }
+
+    pub fn result(&self) -> Option<LocalBinding> {
+        self.result
+    }
+}
+
 /// Converts an integer [value] into a branch selector predicate by comparing it against a list of
 /// cases.
 ///
@@ -526,6 +574,7 @@ gen_statement! {
     OpAlloca,
     OpLoad,
     OpStore,
+    OpExtractValue,
     OpPtrElementPtr,
     OpPtrVariantPtr,
     OpGetDiscriminant,
@@ -534,6 +583,7 @@ gen_statement! {
     OpUnary,
     OpBinary,
     OpCall,
+    OpCallBuiltin,
     OpCaseToBranchPredicate,
     OpBoolToBranchPredicate,
 }
@@ -584,6 +634,14 @@ impl StatementData {
             op
         } else {
             panic!("expected statement to be a store operation")
+        }
+    }
+
+    pub fn expect_op_extract_value(&self) -> &OpExtractValue {
+        if let StatementData::OpExtractValue(op) = self {
+            op
+        } else {
+            panic!("expected statement to be a extract-value operation")
         }
     }
 
@@ -648,6 +706,14 @@ impl StatementData {
             op
         } else {
             panic!("expected statement to be a call operation")
+        }
+    }
+
+    pub fn expect_op_call_builtin(&self) -> &OpCallBuiltin {
+        if let StatementData::OpCallBuiltin(op) = self {
+            op
+        } else {
+            panic!("expected statement to be a call-builtin operation")
         }
     }
 
@@ -1251,6 +1317,54 @@ impl Cfg {
         stmt
     }
 
+    pub fn add_stmt_op_extract_value(
+        &mut self,
+        bb: BasicBlock,
+        position: BlockPosition,
+        element_ty: Type,
+        aggregate: Value,
+        indices: impl IntoIterator<Item = Value>,
+    ) -> (Statement, LocalBinding) {
+        let owner = self.basic_blocks[bb].owner;
+
+        self.validate_value(owner, &aggregate, "aggregate");
+
+        let aggregate_ty = self.value_ty(&aggregate);
+
+        assert!(
+            self.ty.kind(aggregate_ty).is_aggregate(),
+            "expected aggregate argument to have an aggregate type"
+        );
+
+        let mut collected_indices = thin_vec![];
+
+        for (i, value) in indices.into_iter().enumerate() {
+            self.validate_value(owner, &value, &format!("index {}", i));
+
+            let ty = self.value_ty(&value);
+
+            assert_eq!(ty, TY_U32, "index {} must be a u32", i);
+
+            collected_indices.push(value);
+        }
+
+        let result = self.add_local_binding(owner, element_ty);
+
+        let stmt = self.statements.insert(
+            OpExtractValue {
+                element_ty,
+                aggregate,
+                indices: collected_indices,
+                result,
+            }
+            .into(),
+        );
+
+        self.basic_blocks[bb].add_statement(position, stmt);
+
+        (stmt, result)
+    }
+
     pub fn add_stmt_op_ptr_element_ptr(
         &mut self,
         bb: BasicBlock,
@@ -1544,6 +1658,47 @@ impl Cfg {
 
         let stmt = self.statements.insert(
             OpCall {
+                callee,
+                arguments: collected_args,
+                result,
+            }
+            .into(),
+        );
+
+        self.basic_blocks[bb].add_statement(position, stmt);
+
+        (stmt, result)
+    }
+
+    pub fn add_stmt_op_call_builtin(
+        &mut self,
+        bb: BasicBlock,
+        position: BlockPosition,
+        callee: BuiltinFunction,
+        arguments: impl IntoIterator<Item = Value>,
+    ) -> (Statement, Option<LocalBinding>) {
+        let owner = self.basic_blocks[bb].owner;
+
+        let mut collected_args = thin_vec![];
+
+        for (i, arg) in arguments.into_iter().enumerate() {
+            self.validate_value(owner, &arg, &format!("argument {}", i));
+            assert_eq!(
+                self.value_ty(&arg),
+                callee.arguments()[i],
+                "argument {} does not match the expected type",
+                i
+            );
+
+            collected_args.push(arg);
+        }
+
+        let result = callee
+            .return_type()
+            .map(|ty| self.add_local_binding(owner, ty));
+
+        let stmt = self.statements.insert(
+            OpCallBuiltin {
                 callee,
                 arguments: collected_args,
                 result,

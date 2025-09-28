@@ -6,6 +6,7 @@ use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
 
+use crate::builtin_function::BuiltinFunction;
 use crate::ty::{Type, TypeKind, TypeRegistry, TY_BOOL, TY_F32, TY_I32, TY_U32};
 use crate::{
     BinaryOperator, Function, Module, StorageBinding, StorageBindingRegistry, UnaryOperator,
@@ -145,6 +146,22 @@ impl OpCaseToSwitchPredicate {
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct OpCallBuiltin {
+    callee: BuiltinFunction,
+    arguments: Vec<Expression>,
+}
+
+impl OpCallBuiltin {
+    pub fn callee(&self) -> &BuiltinFunction {
+        &self.callee
+    }
+
+    pub fn arguments(&self) -> &[Expression] {
+        &self.arguments
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub enum ExpressionKind {
     LocalValue(LocalBinding),
     UniformValue(UniformBinding),
@@ -163,6 +180,7 @@ pub enum ExpressionKind {
     OpLoad(Expression),
     OpBoolToSwitchPredicate(Expression),
     OpCaseToSwitchPredicate(OpCaseToSwitchPredicate),
+    OpCallBuiltin(OpCallBuiltin),
 }
 
 impl ExpressionKind {
@@ -299,6 +317,14 @@ impl ExpressionKind {
             op
         } else {
             panic!("expected a case-to-switch-predicate operation expression");
+        }
+    }
+
+    pub fn expect_op_call_builtin(&self) -> &OpCallBuiltin {
+        if let ExpressionKind::OpCallBuiltin(op) = self {
+            op
+        } else {
+            panic!("expected a call-builtin operation expression");
         }
     }
 }
@@ -580,6 +606,7 @@ pub enum StatementKind {
     ExprBinding(ExprBinding),
     Alloca(Alloca),
     Store(Store),
+    CallBuiltin(OpCallBuiltin),
 }
 
 impl StatementKind {
@@ -660,6 +687,14 @@ impl StatementKind {
             stmt
         } else {
             panic!("expected a store statement");
+        }
+    }
+
+    pub fn expect_call_builtin(&self) -> &OpCallBuiltin {
+        if let StatementKind::CallBuiltin(stmt) = self {
+            stmt
+        } else {
+            panic!("expected a call-builtin statement");
         }
     }
 }
@@ -975,6 +1010,38 @@ impl Scf {
         self.expressions.insert(ExpressionData {
             ty: TY_U32,
             kind: ExpressionKind::OpCaseToSwitchPredicate(OpCaseToSwitchPredicate { case, cases }),
+        })
+    }
+
+    pub fn make_expr_op_call_builtin(
+        &mut self,
+        callee: BuiltinFunction,
+        arguments: impl IntoIterator<Item = Expression>,
+    ) -> Expression {
+        let Some(ret_ty) = callee.return_type() else {
+            panic!(
+                "only function calls that return a value can be made into an expression; \
+            try adding a call-builtin statement instead"
+            )
+        };
+
+        let mut collected_args = Vec::new();
+
+        for (i, arg) in arguments.into_iter().enumerate() {
+            let arg_ty = self.expressions[arg].ty;
+            let expected_ty = callee.arguments()[i];
+
+            assert_eq!(arg_ty, expected_ty, "argument {} has wrong type", i);
+
+            collected_args.push(arg);
+        }
+
+        self.expressions.insert(ExpressionData {
+            ty: ret_ty,
+            kind: ExpressionKind::OpCallBuiltin(OpCallBuiltin {
+                callee,
+                arguments: collected_args,
+            }),
         })
     }
 
@@ -1295,6 +1362,36 @@ impl Scf {
 
         let statement = self.statements.insert(StatementData {
             kind: StatementKind::Store(Store { pointer, value }),
+        });
+
+        self.blocks[block].add_statement(position, statement);
+
+        statement
+    }
+
+    pub fn add_stmt_call_builtin(
+        &mut self,
+        block: Block,
+        position: BlockPosition,
+        callee: BuiltinFunction,
+        arguments: impl IntoIterator<Item = Expression>,
+    ) -> Statement {
+        let mut collected_args = Vec::new();
+
+        for (i, arg) in arguments.into_iter().enumerate() {
+            let arg_ty = self.expressions[arg].ty;
+            let expected_ty = callee.arguments()[i];
+
+            assert_eq!(arg_ty, expected_ty, "argument {} has wrong type", i);
+
+            collected_args.push(arg);
+        }
+
+        let statement = self.statements.insert(StatementData {
+            kind: StatementKind::CallBuiltin(OpCallBuiltin {
+                callee,
+                arguments: collected_args,
+            }),
         });
 
         self.blocks[block].add_statement(position, statement);

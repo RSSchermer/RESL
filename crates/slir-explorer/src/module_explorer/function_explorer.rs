@@ -40,6 +40,13 @@ pub fn FunctionExplorer(
                         }}
                     </span>
                     ")"
+                    {move || {
+                        module.read_value().module.fn_sigs[function].ret_ty.map(|ty| {
+                            view! {
+                                " -> " <Type module ty/>
+                            }
+                        })
+                    }}
                 </div>
                 <TabList selected_value=mode>
                     <Tab value="cfg">

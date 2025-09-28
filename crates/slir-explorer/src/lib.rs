@@ -1,3 +1,5 @@
+#![feature(iter_intersperse)]
+
 pub mod app;
 pub mod module_explorer;
 pub mod module_list;

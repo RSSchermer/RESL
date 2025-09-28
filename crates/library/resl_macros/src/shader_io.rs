@@ -30,7 +30,7 @@ pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     if *IS_RESLC_PASS {
         quote! {
-            #[resl_tool::shader_io]
+            #[reslc::shader_io]
             #struct_decl
         }
         .into()
@@ -56,7 +56,7 @@ fn process_path(path: &mut Path) -> bool {
     {
         if *IS_RESLC_PASS {
             path.segments
-                .insert(0, Ident::new("resl_tool", Span::call_site()).into());
+                .insert(0, Ident::new("reslc", Span::call_site()).into());
         } else {
             return false;
         }

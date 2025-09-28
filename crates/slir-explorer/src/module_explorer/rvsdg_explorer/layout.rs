@@ -990,6 +990,9 @@ impl NodeLayout {
                 SimpleNode::OpApply(op) => {
                     NodeContent::FnApply("apply".into(), op.resolve_fn(module))
                 }
+                SimpleNode::OpCallBuiltin(op) => {
+                    NodeContent::PlainText(op.callee().ident().as_str().into())
+                }
                 SimpleNode::OpUnary(op) => NodeContent::PlainText(op.operator().to_string().into()),
                 SimpleNode::OpBinary(op) => {
                     NodeContent::PlainText(op.operator().to_string().into())

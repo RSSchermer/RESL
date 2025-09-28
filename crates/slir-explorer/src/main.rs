@@ -1,3 +1,5 @@
+#![feature(iter_intersperse)]
+
 #[cfg(feature = "ssr")]
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {

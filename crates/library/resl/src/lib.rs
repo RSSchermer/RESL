@@ -1,3 +1,5 @@
+#![feature(core_intrinsics)]
+
 pub mod resource;
 pub mod workgroup;
 

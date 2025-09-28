@@ -186,6 +186,7 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
             OpCaseToSwitchPredicate(_) => self.visit_op_case_to_switch_predicate(node),
             OpBoolToSwitchPredicate(_) => self.visit_op_bool_to_switch_predicate(node),
             OpU32ToSwitchPredicate(_) => self.visit_op_u32_to_switch_predicate(node),
+            OpCallBuiltin(_) => self.visit_op_call_builtin(node),
             _ => {
                 panic!("node kind not currently supported by SLIR's structured control-flow format")
             }
@@ -334,6 +335,28 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
             .make_expr_op_case_to_switch_predicate(case_expr, data.cases().iter().copied());
 
         self.bind_and_map_expr(node, 0, expr);
+    }
+
+    fn visit_op_call_builtin(&mut self, node: rvsdg::Node) {
+        let data = self.rvsdg[node].expect_op_call_builtin();
+        let callee = data.callee().clone();
+        let arguments = data
+            .argument_inputs()
+            .iter()
+            .map(|input| self.value_mapping.mapping(input.origin));
+
+        if data.value_output().is_some() {
+            let expr = self.scf.make_expr_op_call_builtin(callee, arguments);
+
+            self.bind_and_map_expr(node, 0, expr);
+        } else {
+            self.scf.add_stmt_call_builtin(
+                self.dst_block,
+                BlockPosition::Append,
+                callee,
+                arguments,
+            );
+        }
     }
 
     fn bind_and_map_expr(&mut self, node: rvsdg::Node, output: u32, expr: Expression) {

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
 use thiserror::Error;
 
+use crate::builtin_function::BuiltinFunction;
 use crate::cfg::OpCaseToBranchPredicate;
 use crate::ty::{
     Type, TypeKind, TypeRegistry, TY_BOOL, TY_F32, TY_I32, TY_PREDICATE, TY_PTR_U32, TY_U32,
@@ -594,6 +595,18 @@ impl NodeData {
             op
         } else {
             panic!("expected node to be an `apply` operation")
+        }
+    }
+
+    pub fn is_op_call_builtin(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::OpCallBuiltin(_)))
+    }
+
+    pub fn expect_op_call_builtin(&self) -> &OpCallBuiltin {
+        if let NodeKind::Simple(SimpleNode::OpCallBuiltin(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be an `call-builtin` operation")
         }
     }
 
@@ -1575,6 +1588,53 @@ impl Connectivity for OpApply {
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OpCallBuiltin {
+    callee: BuiltinFunction,
+    value_inputs: Vec<ValueInput>,
+    value_output: Option<ValueOutput>,
+}
+
+impl OpCallBuiltin {
+    pub fn callee(&self) -> &BuiltinFunction {
+        &self.callee
+    }
+
+    pub fn argument_inputs(&self) -> &[ValueInput] {
+        &self.value_inputs
+    }
+
+    pub fn value_output(&self) -> Option<&ValueOutput> {
+        self.value_output.as_ref()
+    }
+}
+
+impl Connectivity for OpCallBuiltin {
+    fn value_inputs(&self) -> &[ValueInput] {
+        &self.value_inputs
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        &mut self.value_inputs
+    }
+
+    fn value_outputs(&self) -> &[ValueOutput] {
+        self.value_output.as_slice()
+    }
+
+    fn value_outputs_mut(&mut self) -> &mut [ValueOutput] {
+        self.value_output.as_mut_slice()
+    }
+
+    fn state(&self) -> Option<&State> {
+        None
+    }
+
+    fn state_mut(&mut self) -> Option<&mut State> {
+        None
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct OpUnary {
     operator: UnaryOperator,
     input: ValueInput,
@@ -2189,6 +2249,7 @@ gen_simple_node! {
     OpAddPtrOffset,
     OpGetPtrOffset,
     OpApply,
+    OpCallBuiltin,
     OpUnary,
     OpBinary,
     OpCaseToSwitchPredicate,
@@ -3228,6 +3289,60 @@ impl Rvsdg {
         });
 
         self.link_state(region, node, state_origin);
+        self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
+
+        node
+    }
+
+    pub fn add_op_call_builtin(
+        &mut self,
+        module: &Module,
+        region: Region,
+        callee: BuiltinFunction,
+        argument_inputs: impl IntoIterator<Item = ValueInput>,
+    ) -> Node {
+        let mut value_inputs = argument_inputs.into_iter().collect::<Vec<_>>();
+
+        // The total length of the value_inputs also includes the function input, so subtract `1`.
+        let arg_count = value_inputs.len();
+
+        // Validate the value input arguments
+        assert_eq!(
+            callee.arguments().len(),
+            arg_count,
+            "function expects {} arguments, but {} were provided",
+            callee.arguments().len(),
+            arg_count
+        );
+        for i in 0..arg_count {
+            let sig_arg_ty = callee.arguments()[i];
+            let value_input_ty = value_inputs[i].ty;
+
+            assert_eq!(
+                sig_arg_ty,
+                value_input_ty,
+                "argument `{}` expects a value of type `{}`, but a value input of type `{}` was provided",
+                i,
+                sig_arg_ty.to_string(module),
+                value_input_ty.to_string(module)
+            );
+        }
+
+        let value_output = callee.return_type().map(|ty| ValueOutput::new(ty));
+
+        let node = self.nodes.insert(NodeData {
+            kind: NodeKind::Simple(
+                OpCallBuiltin {
+                    callee,
+                    value_inputs,
+                    value_output,
+                }
+                .into(),
+            ),
+            region: Some(region),
+        });
+
         self.regions[region].nodes.insert(node);
         self.connect_node_value_inputs(node);
 

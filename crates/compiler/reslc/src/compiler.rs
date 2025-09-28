@@ -17,7 +17,7 @@ use crate::codegen::codegen_shader_modules;
 use crate::context::ReslContext;
 
 pub const LIB_MODULE_FILENAME: &str = "lib.slir";
-pub const ATTRIBUTE_NAMESPACE: &'static str = "resl_tool";
+pub const ATTRIBUTE_NAMESPACE: &'static str = "reslc";
 
 pub fn run(args: Vec<String>) {
     let mut compiler = ReslCompiler {
@@ -40,6 +40,8 @@ impl Callbacks for ReslCompiler {
             .any(|ct| ct == &CrateType::ProcMacro);
 
         if self.compile_resl {
+            config.crate_cfg.push("reslc".to_string());
+
             // Use the `register_tool` feature to register the `resl` tool to make rustc pass through
             // `#[resl::...]` attributes.
             let crate_attr = &mut config.opts.unstable_opts.crate_attr;

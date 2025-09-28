@@ -18,10 +18,10 @@ pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
     let item = parse_macro_input!(item as Item);
 
     match item {
-        Item::Fn(_) | Item::Trait(_) | Item::Impl(_) => {
+        Item::Fn(_) | Item::Trait(_) | Item::Impl(_) | Item::Struct(_) | Item::Enum(_) => {
             if *IS_RESLC_PASS {
                 quote! {
-                    #[resl_tool::gpu]
+                    #[reslc::gpu]
                     #item
                 }
                 .into()

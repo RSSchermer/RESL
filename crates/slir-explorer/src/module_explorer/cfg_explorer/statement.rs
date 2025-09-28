@@ -29,6 +29,9 @@ pub fn Statement(
         slir::cfg::StatementData::OpStore(_) => {
             view! { <OpStore module function statement highlight/> }.into_any()
         }
+        slir::cfg::StatementData::OpExtractValue(_) => {
+            view! { <OpExtractValue module function statement highlight/> }.into_any()
+        }
         slir::cfg::StatementData::OpPtrElementPtr(_) => {
             view! { <OpPtrElementPtr module function statement highlight/> }.into_any()
         }
@@ -52,6 +55,9 @@ pub fn Statement(
         }
         slir::cfg::StatementData::OpCall(_) => {
             view! { <OpCall module function statement highlight/> }.into_any()
+        }
+        slir::cfg::StatementData::OpCallBuiltin(_) => {
+            view! { <OpCallBuiltin module function statement highlight/> }.into_any()
         }
         slir::cfg::StatementData::OpCaseToBranchPredicate(_) => {
             view! { <OpCaseToBranchPredicate module function statement highlight/> }.into_any()
@@ -169,6 +175,30 @@ pub fn OpStore(
     view! {
         "store "<Value module function value highlight/>
         " into "<Value module function value=pointer highlight/>
+    }
+}
+
+#[component]
+pub fn OpExtractValue(
+    module: StoredValue<ModuleData>,
+    function: slir::Function,
+    statement: slir::cfg::Statement,
+    highlight: HighlightSignal,
+) -> impl IntoView {
+    let data = module.read_value();
+    let stmt = data.cfg[statement].expect_op_extract_value();
+    let aggregate = stmt.aggregate();
+    let indices = stmt.indices().to_vec();
+    let binding = stmt.result();
+
+    view! {
+        <Value module function value=binding.into() highlight/>
+        " = "<Value module function value=aggregate highlight/>
+        {move || {
+            indices.iter().map(|i| view! {
+                "."<Value module function value=*i highlight/>
+            }).collect_view()
+        }}
     }
 }
 
@@ -357,6 +387,41 @@ pub fn OpCall(
             {callee.name.to_string()}
         </a>
         "("{arg_views}")"
+    }
+}
+
+#[component]
+pub fn OpCallBuiltin(
+    module: StoredValue<ModuleData>,
+    function: slir::Function,
+    statement: slir::cfg::Statement,
+    highlight: HighlightSignal,
+) -> impl IntoView {
+    let data = module.read_value();
+    let stmt = data.cfg[statement].expect_op_call_builtin();
+    let callee = stmt.callee();
+    let binding = stmt.result();
+
+    let mut arg_views = Vec::new();
+    let mut is_first = true;
+
+    for arg in stmt.arguments().iter().copied() {
+        if !is_first {
+            arg_views.push(view! {", "}.into_any());
+        }
+
+        arg_views.push(view! { <Value module function value=arg highlight/> }.into_any());
+
+        is_first = false;
+    }
+
+    view! {
+        {{move || binding.map(|binding | view! {
+            <Value module function value=binding.into() highlight/>
+            " = "
+        })}}
+
+        {callee.ident().as_str()} "(" {arg_views} ")"
     }
 }
 

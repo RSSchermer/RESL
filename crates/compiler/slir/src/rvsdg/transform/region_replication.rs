@@ -150,6 +150,7 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
             Simple(OpAddPtrOffset(_)) => self.replicate_op_add_ptr_offset_node(node),
             Simple(OpGetPtrOffset(_)) => self.replicate_op_get_ptr_offset_node(node),
             Simple(OpApply(_)) => self.replicate_op_apply_node(node),
+            Simple(OpCallBuiltin(_)) => self.replicate_op_call_builtin_node(node),
             Simple(OpUnary(_)) => self.replicate_op_unary_node(node),
             Simple(OpBinary(_)) => self.replicate_op_binary_node(node),
             Simple(OpCaseToSwitchPredicate(_)) => {
@@ -432,6 +433,23 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
             fn_input,
             argument_inputs,
             state_origin,
+        )
+    }
+
+    fn replicate_op_call_builtin_node(&mut self, node: Node) -> Node {
+        let data = self.rvsdg[node].expect_op_call_builtin();
+        let builtin_function = data.callee().clone();
+        let argument_inputs = data
+            .argument_inputs()
+            .iter()
+            .map(|input| self.mapped_value_input(input))
+            .collect::<Vec<_>>();
+
+        self.rvsdg.add_op_call_builtin(
+            self.module,
+            self.dst_region,
+            builtin_function,
+            argument_inputs,
         )
     }
 

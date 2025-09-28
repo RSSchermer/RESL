@@ -3,9 +3,9 @@ use rustc_hash::FxHashMap;
 
 use crate::cfg::{
     Assign, BasicBlockData, Bind, Cfg, FunctionBody, InlineConst, OpAlloca, OpBinary,
-    OpBoolToBranchPredicate, OpCall, OpCaseToBranchPredicate, OpGetDiscriminant, OpLoad,
-    OpOffsetSlicePtr, OpPtrElementPtr, OpPtrVariantPtr, OpSetDiscriminant, OpStore, OpUnary,
-    RootIdentifier, StatementData, Uninitialized, Value,
+    OpBoolToBranchPredicate, OpCall, OpCallBuiltin, OpCaseToBranchPredicate, OpExtractValue,
+    OpGetDiscriminant, OpLoad, OpOffsetSlicePtr, OpPtrElementPtr, OpPtrVariantPtr,
+    OpSetDiscriminant, OpStore, OpUnary, RootIdentifier, StatementData, Uninitialized, Value,
 };
 use crate::ty::Type;
 use crate::{Function, Module, StorageBinding, UniformBinding, WorkgroupBinding};
@@ -116,6 +116,19 @@ impl WithItemDependencies for OpStore {
     }
 }
 
+impl WithItemDependencies for OpExtractValue {
+    fn with_item_dependencies<F>(&self, mut f: F)
+    where
+        F: FnMut(Item),
+    {
+        self.aggregate().with_item_dependencies(&mut f);
+
+        for index in self.indices() {
+            index.with_item_dependencies(&mut f);
+        }
+    }
+}
+
 impl WithItemDependencies for OpPtrElementPtr {
     fn with_item_dependencies<F>(&self, mut f: F)
     where
@@ -198,6 +211,17 @@ impl WithItemDependencies for OpCall {
     }
 }
 
+impl WithItemDependencies for OpCallBuiltin {
+    fn with_item_dependencies<F>(&self, mut f: F)
+    where
+        F: FnMut(Item),
+    {
+        for arg in self.arguments() {
+            arg.with_item_dependencies(&mut f);
+        }
+    }
+}
+
 impl WithItemDependencies for OpCaseToBranchPredicate {
     fn with_item_dependencies<F>(&self, mut f: F)
     where
@@ -235,6 +259,7 @@ impl_collect_dependencies_statement! {
     OpAlloca,
     OpLoad,
     OpStore,
+    OpExtractValue,
     OpPtrElementPtr,
     OpPtrVariantPtr,
     OpGetDiscriminant,
@@ -243,6 +268,7 @@ impl_collect_dependencies_statement! {
     OpUnary,
     OpBinary,
     OpCall,
+    OpCallBuiltin,
     OpCaseToBranchPredicate,
     OpBoolToBranchPredicate,
 }

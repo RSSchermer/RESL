@@ -61,8 +61,8 @@ pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     if *IS_RESLC_PASS {
         quote! {
-            #[resl_tool::workgroup_shared]
-            #expansion;
+            #[reslc::workgroup_shared]
+            #expansion
         }
         .into()
     } else {
@@ -75,10 +75,10 @@ mod kw {
 }
 
 struct WorkgroupMacro {
-    pub workgroup_kw: kw::workgroup,
-    pub bang_token: Token![!],
-    pub delimiter: MacroDelimiter,
-    pub tokens: proc_macro2::TokenStream,
+    _workgroup_kw: kw::workgroup,
+    _bang_token: Token![!],
+    _delimiter: MacroDelimiter,
+    tokens: proc_macro2::TokenStream,
 }
 
 fn parse_delimiter(input: ParseStream) -> syn::Result<(MacroDelimiter, proc_macro2::TokenStream)> {
@@ -105,9 +105,9 @@ impl Parse for WorkgroupMacro {
         let tokens;
 
         Ok(WorkgroupMacro {
-            workgroup_kw: input.parse()?,
-            bang_token: input.parse()?,
-            delimiter: {
+            _workgroup_kw: input.parse()?,
+            _bang_token: input.parse()?,
+            _delimiter: {
                 let (delimiter, content) = parse_delimiter(input)?;
                 tokens = content;
                 delimiter

@@ -24,7 +24,7 @@ static PAT_RANGE_USIZE_SLICE_INDEX_GET: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^<std::ops::Range<usize> as std::slice::SliceIndex<\[[^]]+]>>::get$").unwrap()
 });
 
-pub fn maybe_define_special_case(item: MonoItem, cx: &CodegenContext) -> Option<MonoItem> {
+pub fn maybe_shim(item: MonoItem, cx: &CodegenContext) -> Option<MonoItem> {
     let MonoItem::Fn(instance) = item else {
         return Some(item);
     };

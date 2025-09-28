@@ -21,7 +21,7 @@ pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
         Item::Mod(_) => {
             if *IS_RESLC_PASS {
                 quote! {
-                    #[resl_tool::shader_module]
+                    #[reslc::shader_module]
                     #item
                 }
                 .into()

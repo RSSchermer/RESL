@@ -38,7 +38,7 @@ pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
         Item::Fn(_) => {
             if *IS_RESLC_PASS {
                 quote! {
-                    #[resl_tool::compute(#x, #y, #z)]
+                    #[reslc::compute(#x, #y, #z)]
                     #expansion
                 }
                 .into()

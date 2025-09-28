@@ -262,7 +262,7 @@ impl<'a, 'tcx> Locator<'a, 'tcx> {
         if count > 1 {
             self.tcx.dcx().span_bug(
                 item.span,
-                "the `buffer_bound` and `workgroup_shared` attributes are mutually exclusive",
+                "the `resource` and `workgroup_shared` attributes are mutually exclusive",
             );
         }
 

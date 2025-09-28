@@ -292,20 +292,26 @@ impl<'a, V: CodegenObject> OperandRef<V> {
     /// For other cases, see `immediate`.
     pub fn immediate_or_packed_pair<Bx: BuilderMethods<'a, Value = V>>(self, bx: &mut Bx) -> V {
         if let OperandValue::Pair(a, b) = self.val {
-            let llty = bx.cx().immediate_backend_type(self.layout);
+            let a_layout = self.layout.field(0);
+            let b_layout = self.layout.field(1);
 
-            debug!(
-                "Operand::immediate_or_packed_pair: packing {:?} into {:?}",
-                self, llty
-            );
+            let a_llty = bx.immediate_backend_type(a_layout);
+            let b_llty = bx.immediate_backend_type(b_layout);
 
             // Reconstruct the immediate aggregate.
-            let mut llpair = bx.const_poison(llty);
+            let mut alloca = bx.alloca(self.layout);
 
-            llpair = bx.insert_value(llpair, a, 0);
-            llpair = bx.insert_value(llpair, b, 1);
+            let a_ptr = bx.ptr_element_ptr(a_llty, alloca, &[bx.const_usize(0)]);
 
-            llpair
+            bx.store(a, a_ptr, a_layout.layout.shape().abi_align);
+
+            let b_ptr = bx.ptr_element_ptr(b_llty, alloca, &[bx.const_usize(1)]);
+
+            bx.store(b, b_ptr, b_layout.layout.shape().abi_align);
+
+            let llty = bx.immediate_backend_type(self.layout);
+
+            bx.load(llty, alloca, self.layout.layout.shape().abi_align)
         } else {
             self.immediate()
         }

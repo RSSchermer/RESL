@@ -138,6 +138,9 @@ impl FunctionImporter {
             StatementData::OpAlloca(_) => self.import_stmt_op_alloca(src, dst, dst_bb, src_stmt),
             StatementData::OpLoad(_) => self.import_stmt_op_load(src, dst, dst_bb, src_stmt),
             StatementData::OpStore(_) => self.import_stmt_op_store(src, dst, dst_bb, src_stmt),
+            StatementData::OpExtractValue(_) => {
+                self.import_stmt_op_extract_value(src, dst, dst_bb, src_stmt)
+            }
             StatementData::OpPtrElementPtr(_) => {
                 self.import_stmt_op_ptr_element_ptr(src, dst, dst_bb, src_stmt)
             }
@@ -156,6 +159,9 @@ impl FunctionImporter {
             StatementData::OpUnary(_) => self.import_stmt_op_unary(src, dst, dst_bb, src_stmt),
             StatementData::OpBinary(_) => self.import_stmt_op_binary(src, dst, dst_bb, src_stmt),
             StatementData::OpCall(_) => self.import_stmt_op_call(src, dst, dst_bb, src_stmt),
+            StatementData::OpCallBuiltin(_) => {
+                self.import_stmt_op_call_builtin(src, dst, dst_bb, src_stmt)
+            }
             StatementData::OpCaseToBranchPredicate(_) => {
                 self.import_stmt_op_case_to_branch_predicate(src, dst, dst_bb, src_stmt)
             }
@@ -255,6 +261,34 @@ impl FunctionImporter {
         let dst_value = self.dst_value(dst, src_data.value());
 
         dst.add_stmt_op_store(dst_bb, BlockPosition::Append, dst_pointer, dst_value);
+    }
+
+    fn import_stmt_op_extract_value(
+        &mut self,
+        src: &Cfg,
+        dst: &mut Cfg,
+        dst_bb: BasicBlock,
+        src_stmt: Statement,
+    ) {
+        let src_data = src[src_stmt].expect_op_extract_value();
+        let dst_aggregate = self.dst_value(dst, src_data.aggregate());
+        let dst_indices = src_data
+            .indices()
+            .iter()
+            .map(|v| self.dst_value(dst, *v))
+            .collect::<Vec<_>>();
+        let element_ty = src_data.element_ty();
+
+        let (_, dst_result) = dst.add_stmt_op_extract_value(
+            dst_bb,
+            BlockPosition::Append,
+            element_ty,
+            dst_aggregate,
+            dst_indices,
+        );
+
+        self.local_value_mapping
+            .insert(src_data.result(), dst_result);
     }
 
     fn import_stmt_op_ptr_element_ptr(
@@ -416,6 +450,30 @@ impl FunctionImporter {
 
         let (_, result) =
             dst.add_stmt_op_call(dst_bb, BlockPosition::Append, callee, ret_ty, dst_arguments);
+
+        if let Some(result) = result {
+            self.local_value_mapping
+                .insert(src_data.result().unwrap(), result);
+        }
+    }
+
+    fn import_stmt_op_call_builtin(
+        &mut self,
+        src: &Cfg,
+        dst: &mut Cfg,
+        dst_bb: BasicBlock,
+        src_stmt: Statement,
+    ) {
+        let src_data = src[src_stmt].expect_op_call_builtin();
+        let callee = src_data.callee().clone();
+        let dst_arguments = src_data
+            .arguments()
+            .iter()
+            .map(|v| self.dst_value(dst, *v))
+            .collect::<Vec<_>>();
+
+        let (_, result) =
+            dst.add_stmt_op_call_builtin(dst_bb, BlockPosition::Append, callee, dst_arguments);
 
         if let Some(result) = result {
             self.local_value_mapping

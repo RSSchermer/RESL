@@ -2,9 +2,9 @@ use indexmap::IndexSet;
 
 use crate::cfg::{
     Assign, BasicBlock, Bind, Cfg, FunctionBody, LocalBinding, OpAlloca, OpBinary,
-    OpBoolToBranchPredicate, OpCall, OpCaseToBranchPredicate, OpGetDiscriminant, OpLoad,
-    OpOffsetSlicePtr, OpPtrElementPtr, OpPtrVariantPtr, OpSetDiscriminant, OpStore, OpUnary,
-    StatementData, Terminator, Uninitialized, Value,
+    OpBoolToBranchPredicate, OpCall, OpCallBuiltin, OpCaseToBranchPredicate, OpExtractValue,
+    OpGetDiscriminant, OpLoad, OpOffsetSlicePtr, OpPtrElementPtr, OpPtrVariantPtr,
+    OpSetDiscriminant, OpStore, OpUnary, StatementData, Terminator, Uninitialized, Value,
 };
 use crate::cfg_to_rvsdg::control_tree::control_tree::{
     BranchingNode, ControlTree, ControlTreeNode, ControlTreeNodeKind, LinearNode, LoopNode,
@@ -67,6 +67,16 @@ impl WithReadValues for OpStore {
     {
         f(&self.pointer());
         f(&self.value());
+    }
+}
+
+impl WithReadValues for OpExtractValue {
+    fn with_read_values<F>(&self, mut f: F)
+    where
+        F: FnMut(&Value),
+    {
+        f(&self.aggregate());
+        self.indices().iter().for_each(f);
     }
 }
 
@@ -145,6 +155,15 @@ impl WithReadValues for OpCall {
     }
 }
 
+impl WithReadValues for OpCallBuiltin {
+    fn with_read_values<F>(&self, f: F)
+    where
+        F: FnMut(&Value),
+    {
+        self.arguments().iter().for_each(f);
+    }
+}
+
 impl WithReadValues for OpCaseToBranchPredicate {
     fn with_read_values<F>(&self, mut f: F)
     where
@@ -185,6 +204,7 @@ impl_with_read_values_statement! {
     OpAlloca,
     OpLoad,
     OpStore,
+    OpExtractValue,
     OpPtrElementPtr,
     OpPtrVariantPtr,
     OpGetDiscriminant,
@@ -193,6 +213,7 @@ impl_with_read_values_statement! {
     OpUnary,
     OpBinary,
     OpCall,
+    OpCallBuiltin,
     OpCaseToBranchPredicate,
     OpBoolToBranchPredicate,
 }
@@ -256,6 +277,17 @@ impl WithWrittenValues for OpCall {
     }
 }
 
+impl WithWrittenValues for OpCallBuiltin {
+    fn with_written_values<F>(&self, mut f: F)
+    where
+        F: FnMut(&LocalBinding),
+    {
+        if let Some(result) = &self.result() {
+            f(result);
+        }
+    }
+}
+
 macro_rules! impl_with_written_values_op {
     ($($op:ident,)*) => {
         $(
@@ -274,6 +306,7 @@ macro_rules! impl_with_written_values_op {
 impl_with_written_values_op! {
     OpAlloca,
     OpLoad,
+    OpExtractValue,
     OpPtrElementPtr,
     OpPtrVariantPtr,
     OpGetDiscriminant,
@@ -306,6 +339,7 @@ impl_with_written_values_statement! {
     OpAlloca,
     OpLoad,
     OpStore,
+    OpExtractValue,
     OpPtrElementPtr,
     OpPtrVariantPtr,
     OpGetDiscriminant,
@@ -314,6 +348,7 @@ impl_with_written_values_statement! {
     OpUnary,
     OpBinary,
     OpCall,
+    OpCallBuiltin,
     OpCaseToBranchPredicate,
     OpBoolToBranchPredicate,
 }

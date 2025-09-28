@@ -186,20 +186,20 @@ impl Attr for AttrResource {
         tcx: TyCtxt<'_>,
         attr: &rustc_hir::Attribute,
     ) -> Result<Option<Self>, ErrorGuaranteed> {
-        if attr_matches_name(attr, "buffer_bound") {
+        if attr_matches_name(attr, "resource") {
             if let Some(meta_item_list) = attr.meta_item_list()
                 && meta_item_list.len() == 2
             {
                 return Ok(Some(AttrResource {
                     group: expect_u32(tcx, &meta_item_list[0])?,
                     binding: expect_u32(tcx, &meta_item_list[1])?,
-                    span: Default::default(),
+                    span: attr.span,
                 }));
             }
 
             Err(tcx
                 .dcx()
-                .span_err(attr.span, "`buffer_bound` attribute expected two arguments"))
+                .span_err(attr.span, "`resource` attribute expected two arguments"))
         } else {
             Ok(None)
         }

@@ -762,35 +762,49 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
     }
 
     fn extract_value(&mut self, agg_val: Self::Value, idx: u64) -> Self::Value {
-        let cfg = self.cfg.borrow();
+        fn val_ty(kind: &slir::ty::TypeKind, idx: u64) -> slir::ty::Type {
+            match kind {
+                slir::ty::TypeKind::Struct(struct_data) => struct_data.fields[idx as usize].ty,
+                slir::ty::TypeKind::Array { element_ty, .. }
+                | slir::ty::TypeKind::Slice { element_ty } => *element_ty,
+                _ => bug!("can only extract value from an aggregate type"),
+            }
+        }
+
+        let mut cfg = self.cfg.borrow_mut();
 
         let agg_val = agg_val.expect_value();
         let agg_ty = cfg.value_ty(&agg_val);
         let agg_ty_kind = cfg.ty().kind(agg_ty);
-        let slir::ty::TypeKind::Ptr(pointee_ty) = *agg_ty_kind else {
-            bug!("can only extract value from a pointer to an aggregate type");
-        };
-        let pointee_ty_kind = cfg.ty().kind(pointee_ty);
-
-        let val_ty = match &*pointee_ty_kind {
-            slir::ty::TypeKind::Struct(struct_data) => struct_data.fields[idx as usize].ty,
-            slir::ty::TypeKind::Array { element_ty, .. }
-            | slir::ty::TypeKind::Slice { element_ty } => *element_ty,
-            _ => bug!("can only extract value from a pointer to an aggregate type"),
-        };
 
         let index = slir::cfg::InlineConst::U32(idx as u32);
 
-        mem::drop(cfg);
+        if let slir::ty::TypeKind::Ptr(pointee_ty) = *agg_ty_kind {
+            let pointee_ty_kind = cfg.ty().kind(pointee_ty);
+            let val_ty = val_ty(&pointee_ty_kind, idx);
 
-        let val_ptr = self.ptr_element_ptr(val_ty.into(), agg_val.into(), &[index.into()]);
+            mem::drop(cfg);
 
-        self.load(val_ty.into(), val_ptr, 0)
+            let val_ptr = self.ptr_element_ptr(val_ty.into(), agg_val.into(), &[index.into()]);
+
+            self.load(val_ty.into(), val_ptr, 0)
+        } else {
+            let val_ty = val_ty(&agg_ty_kind, idx);
+
+            let (_, result) = cfg.add_stmt_op_extract_value(
+                self.basic_block,
+                BlockPosition::Append,
+                val_ty,
+                agg_val,
+                [index.into()],
+            );
+
+            result.into()
+        }
     }
 
     fn insert_value(&mut self, agg_val: Self::Value, elt: Self::Value, idx: u64) -> Self::Value {
-        // TODO: this is a placeholder for testing
-        slir::cfg::InlineConst::U32(0).into()
+        todo!()
     }
 
     fn atomic_cmpxchg(
