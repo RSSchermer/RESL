@@ -1,15 +1,15 @@
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span};
-use quote::{quote, quote_spanned, ToTokens};
-use syn::{parse, parse_macro_input, Attribute, Field, Item, Meta, Path, PathSegment};
-
-use crate::IS_RESLC_PASS;
+use quote::quote;
+use syn::token::Paren;
+use syn::{
+    parse_macro_input, Field, Item, MacroDelimiter, Meta, MetaList, Path, PathArguments,
+    PathSegment,
+};
 
 pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
     if !attr.is_empty() {
-        let span = Span::call_site();
-
-        return quote_spanned! { span =>
+        return quote! {
             compile_error!("the `gpu` attribute does not accept any arguments");
         }
         .into();
@@ -18,9 +18,7 @@ pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
     let item = parse_macro_input!(item as Item);
 
     let Item::Struct(mut struct_decl) = item else {
-        let span = Span::call_site();
-
-        return quote_spanned! { span =>
+        return quote! {
             compile_error!("the `shader_io` attribute can only be applied to `struct` items");
         }
         .into();
@@ -28,39 +26,55 @@ pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     struct_decl.fields.iter_mut().for_each(adjust_field);
 
-    if *IS_RESLC_PASS {
-        quote! {
-            #[reslc::shader_io]
-            #struct_decl
-        }
-        .into()
-    } else {
-        struct_decl.to_token_stream().into()
+    quote! {
+        #[cfg_attr(reslc, reslc::shader_io)]
+        #struct_decl
     }
+    .into()
 }
 
 fn adjust_field(field: &mut Field) {
-    field.attrs.retain_mut(|attr| match &mut attr.meta {
-        Meta::Path(path) => process_path(path),
-        Meta::List(list) => process_path(&mut list.path),
-        _ => true,
-    })
+    for attr in &mut field.attrs {
+        if is_shader_io_path(attr.meta.path()) {
+            adjust_meta(&mut attr.meta);
+        }
+    }
 }
 
-fn process_path(path: &mut Path) -> bool {
-    if path.is_ident("location")
+/// Wraps the meta in a `cfg_attr` outer meta and prepends the tool path.
+///
+/// For example:
+///
+/// ```
+/// location(0)
+/// ```
+///
+/// Becomes:
+///
+/// ```
+/// cfg_attr(reslc, reslc::location(0))
+/// ```
+fn adjust_meta(meta: &mut Meta) {
+    let mut tokens = quote! {
+        reslc, reslc::#meta
+    };
+
+    let cfg_attr_path = PathSegment {
+        ident: Ident::new("cfg_attr", Span::call_site()),
+        arguments: PathArguments::None,
+    };
+
+    *meta = Meta::List(MetaList {
+        path: cfg_attr_path.into(),
+        delimiter: MacroDelimiter::Paren(Paren::default()),
+        tokens,
+    });
+}
+
+fn is_shader_io_path(path: &Path) -> bool {
+    path.is_ident("location")
         || path.is_ident("builtin")
         || path.is_ident("invariant")
         || path.is_ident("interpolate")
         || path.is_ident("blend_src")
-    {
-        if *IS_RESLC_PASS {
-            path.segments
-                .insert(0, Ident::new("reslc", Span::call_site()).into());
-        } else {
-            return false;
-        }
-    }
-
-    true
 }

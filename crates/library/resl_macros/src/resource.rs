@@ -1,11 +1,9 @@
 use proc_macro::TokenStream;
-use proc_macro2::{Ident, Span};
-use quote::{quote, quote_spanned, ToTokens};
+use proc_macro2::Ident;
+use quote::{quote, quote_spanned};
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 use syn::{meta, parse_macro_input, Attribute, LitInt, StaticMutability, Token, Type, Visibility};
-
-use crate::IS_RESLC_PASS;
 
 pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut group: Option<LitInt> = None;
@@ -25,17 +23,15 @@ pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     parse_macro_input!(attr with attr_parser);
 
-    let span = Span::call_site();
-
     let Some(group) = group else {
-        return quote_spanned! { span =>
+        return quote! {
             compile_error!("the `resource` attribute requires a `group` property");
         }
         .into();
     };
 
     let Some(binding) = binding else {
-        return quote_spanned! { span =>
+        return quote! {
             compile_error!("the `resource` attribute requires a `binding` property");
         }
         .into();
@@ -85,22 +81,14 @@ pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
     // known set of zero-sized types, we can safely call `core::mem::zeroed()` to do this, as these
     // are all zero-sized types. This way we don't have to expose some hidden unsafe initializer
     // functions for these types, as these types are never meant to be constructed.
-    let expansion = quote! {
+    quote! {
+        #[cfg_attr(reslc, reslc::resource(#group, #binding))]
         #(#attrs)*
         #static_token #ident #colon_token #ty = unsafe { core::mem::zeroed() } #semi_token
 
         #assert_resource
-    };
-
-    if *IS_RESLC_PASS {
-        quote! {
-            #[reslc::resource(#group, #binding)]
-            #expansion
-        }
-        .into()
-    } else {
-        expansion.into()
     }
+    .into()
 }
 
 pub struct BufferBoundStatic {

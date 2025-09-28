@@ -1,21 +1,16 @@
 use proc_macro::TokenStream;
-use proc_macro2::{Delimiter, Ident, Span, TokenTree};
-use quote::{quote, quote_spanned, ToTokens};
+use proc_macro2::{Delimiter, Ident, TokenTree};
+use quote::{quote, quote_spanned};
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 use syn::token::{Brace, Bracket, Paren};
 use syn::{
-    meta, parse_macro_input, Attribute, Expr, LitInt, Macro, MacroDelimiter, Path,
-    StaticMutability, Token, Type, Visibility,
+    parse_macro_input, Attribute, MacroDelimiter, StaticMutability, Token, Type, Visibility,
 };
-
-use crate::IS_RESLC_PASS;
 
 pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
     if !attr.is_empty() {
-        let span = Span::call_site();
-
-        return quote_spanned! { span =>
+        return quote! {
             compile_error!("the `workgroup_shared` attribute does not accept any arguments");
         }
         .into();
@@ -54,20 +49,15 @@ pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
     } = item;
 
     let expr = workgroup_macro.tokens;
-    let expansion = quote! {
-        #(#attrs)*
-        #static_token #ident #colon_token #ty #eq_token unsafe { resl::workgroup::__init_workgroup(#expr) } #semi_token
-    };
 
-    if *IS_RESLC_PASS {
-        quote! {
-            #[reslc::workgroup_shared]
-            #expansion
-        }
-        .into()
-    } else {
-        expansion.into()
+    quote! {
+        #[cfg_attr(reslc, reslc::workgroup_shared)]
+        #(#attrs)*
+        #static_token #ident #colon_token #ty #eq_token unsafe {
+            resl::workgroup::__init_workgroup(#expr)
+        } #semi_token
     }
+    .into()
 }
 
 mod kw {

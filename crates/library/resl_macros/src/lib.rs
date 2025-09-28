@@ -14,8 +14,6 @@ mod shader_module;
 mod vertex;
 mod workgroup_shared;
 
-static IS_RESLC_PASS: LazyLock<bool> = LazyLock::new(|| env::var("IS_RESLC_PASS").is_ok());
-
 #[proc_macro_attribute]
 pub fn compute(attr: TokenStream, item: TokenStream) -> TokenStream {
     compute::expand_attribute(attr, item)

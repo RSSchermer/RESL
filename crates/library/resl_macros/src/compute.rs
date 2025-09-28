@@ -1,9 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
-use quote::{quote, quote_spanned, ToTokens};
+use quote::quote;
 use syn::{meta, parse_macro_input, Item, LitInt};
-
-use crate::IS_RESLC_PASS;
 
 pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut x = LitInt::new("1", Span::call_site());
@@ -29,30 +27,16 @@ pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let item = parse_macro_input!(item as Item);
 
-    let expansion = quote! {
-        #[allow(unused)]
-        #item
-    };
-
     match item {
-        Item::Fn(_) => {
-            if *IS_RESLC_PASS {
-                quote! {
-                    #[reslc::compute(#x, #y, #z)]
-                    #expansion
-                }
-                .into()
-            } else {
-                expansion.into()
-            }
+        Item::Fn(_) => quote! {
+            #[cfg_attr(reslc, reslc::compute(#x, #y, #z))]
+            #[allow(unused)]
+            #item
         }
-        _ => {
-            let span = Span::call_site();
-
-            quote_spanned! { span =>
-                compile_error!("the `compute` attribute can only be applied to functions");
-            }
-            .into()
+        .into(),
+        _ => quote! {
+            compile_error!("the `compute` attribute can only be applied to functions");
         }
+        .into(),
     }
 }
