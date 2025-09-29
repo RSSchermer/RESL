@@ -54,7 +54,7 @@ pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
         #[cfg_attr(reslc, reslc::workgroup_shared)]
         #(#attrs)*
         #static_token #ident #colon_token #ty #eq_token unsafe {
-            resl::workgroup::__init_workgroup(#expr)
+            resl::mem::__init_workgroup(#expr)
         } #semi_token
     }
     .into()
