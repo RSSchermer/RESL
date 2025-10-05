@@ -9,8 +9,9 @@ use slotmap::SlotMap;
 use crate::builtin_function::BuiltinFunction;
 use crate::ty::{Type, TypeKind, TypeRegistry, TY_BOOL, TY_F32, TY_I32, TY_U32};
 use crate::{
-    BinaryOperator, Function, Module, StorageBinding, StorageBindingRegistry, UnaryOperator,
-    UniformBinding, UniformBindingRegistry, WorkgroupBinding, WorkgroupBindingRegistry,
+    BinaryOperator, Constant, ConstantRegistry, Function, Module, StorageBinding,
+    StorageBindingRegistry, UnaryOperator, UniformBinding, UniformBindingRegistry,
+    WorkgroupBinding, WorkgroupBindingRegistry,
 };
 
 slotmap::new_key_type! {
@@ -54,7 +55,8 @@ impl ExpressionData {
         match self.kind {
             ExpressionKind::UniformValue(_)
             | ExpressionKind::StorageValue(_)
-            | ExpressionKind::WorkgroupValue(_) => true,
+            | ExpressionKind::WorkgroupValue(_)
+            | ExpressionKind::ConstantValue(_) => true,
             _ => false,
         }
     }
@@ -167,6 +169,7 @@ pub enum ExpressionKind {
     UniformValue(UniformBinding),
     StorageValue(StorageBinding),
     WorkgroupValue(WorkgroupBinding),
+    ConstantValue(Constant),
     FallbackValue(Type),
     ConstU32(u32),
     ConstI32(i32),
@@ -854,6 +857,17 @@ impl Scf {
         self.expressions.insert(ExpressionData {
             ty: registry[binding].ty,
             kind: ExpressionKind::WorkgroupValue(binding),
+        })
+    }
+
+    pub fn make_expr_constant_value(
+        &mut self,
+        registry: &ConstantRegistry,
+        constant: Constant,
+    ) -> Expression {
+        self.expressions.insert(ExpressionData {
+            ty: registry[constant].ty(),
+            kind: ExpressionKind::ConstantValue(constant),
         })
     }
 

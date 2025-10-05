@@ -1,6 +1,6 @@
 echo "Recompiling reslc to ensure it is up to date..."
 RUSTFLAGS=-Awarnings cargo build --bin=reslc --release
 echo "Warming up build scripts..."
-cargo check --package=$1
+RUSTFLAGS=-Awarnings cargo check --package=$1
 echo "Compiling RESL artifacts..."
-RUST_BACKTRACE=full RUSTC_WRAPPER=target/release/reslc cargo build --package=$1
+RUSTFLAGS=-Awarnings RUST_BACKTRACE=full RUSTC_WRAPPER=target/release/reslc cargo build --package=$1

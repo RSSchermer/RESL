@@ -18,6 +18,10 @@ pub fn provide(providers: &mut Providers) {
         let adjusted_arg_abi = |arg: &ArgAbi<'tcx, Ty<'tcx>>| {
             let mut arg = arg.clone();
 
+            if matches!(arg.mode, PassMode::Cast { .. }) {
+                arg.mode = PassMode::Direct(ArgAttributes::new());
+            }
+
             if arg.layout.ty.is_enum() && !matches!(arg.mode, PassMode::Indirect { .. }) {
                 arg.mode = PassMode::Indirect {
                     attrs: ArgAttributes::new(),

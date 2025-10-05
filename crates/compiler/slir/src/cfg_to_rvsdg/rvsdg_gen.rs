@@ -4,7 +4,7 @@ use index_vec::IndexVec;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::cfg::{
-    Assign, BasicBlock, Bind, Cfg, FunctionBody, InlineConst, LocalBinding, OpAlloca, OpBinary,
+    Assign, BasicBlock, Bind, Cfg, InlineConst, LocalBinding, OpAlloca, OpBinary,
     OpBoolToBranchPredicate, OpCall, OpCallBuiltin, OpCaseToBranchPredicate, OpExtractValue,
     OpGetDiscriminant, OpLoad, OpOffsetSlicePtr, OpPtrElementPtr, OpPtrVariantPtr,
     OpSetDiscriminant, OpStore, OpUnary, RootIdentifier, StatementData, Terminator, Uninitialized,
@@ -561,7 +561,6 @@ impl<'a> RegionBuilder<'a> {
         match value {
             Value::Local(v) => self.input_state_tracker[v],
             Value::InlineConst(c) => self.resolve_inline_const(c),
-            Value::Const => todo!(),
         }
     }
 
@@ -599,6 +598,7 @@ impl<'a> RegionBuilder<'a> {
             RootIdentifier::Uniform(b) => self.input_state_tracker[Item::UniformBinding(b)],
             RootIdentifier::Storage(b) => self.input_state_tracker[Item::StorageBinding(b)],
             RootIdentifier::Workgroup(b) => self.input_state_tracker[Item::WorkgroupBinding(b)],
+            RootIdentifier::Constant(c) => self.input_state_tracker[Item::Constant(c)],
         }
     }
 
@@ -672,6 +672,7 @@ fn add_item(
             Item::UniformBinding(binding) => rvsdg.register_uniform_binding(module, binding),
             Item::StorageBinding(binding) => rvsdg.register_storage_binding(module, binding),
             Item::WorkgroupBinding(binding) => rvsdg.register_workgroup_binding(module, binding),
+            Item::Constant(v) => rvsdg.register_constant(module, v),
             Item::Function(function) => {
                 let mut input_state_tracker = InputStateTracker::new();
 

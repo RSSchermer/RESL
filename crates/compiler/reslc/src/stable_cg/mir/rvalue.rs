@@ -758,7 +758,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                 }
             }
 
-            mir::Rvalue::Use(ref operand) => self.codegen_operand(bx, operand),
+            mir::Rvalue::Use(operand) => self.codegen_operand(bx, operand),
             mir::Rvalue::Repeat(..) => bug!("{rvalue:?} in codegen_rvalue_operand"),
             mir::Rvalue::Aggregate(_, fields) => {
                 let ty = rvalue.ty(self.mir.locals()).unwrap();

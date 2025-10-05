@@ -10,14 +10,15 @@ use stable_mir::abi::{
 use stable_mir::mir::alloc::GlobalAlloc;
 use stable_mir::mir::mono::{Instance, StaticDef};
 use stable_mir::target::{MachineInfo, MachineSize};
-use stable_mir::ty::{Align, Allocation, GenericArgKind, RigidTy, TyKind};
-use stable_mir::{abi, CrateDef, Symbol};
+use stable_mir::ty::{Align, Allocation, GenericArgKind, IndexedVal, RigidTy, Ty, TyKind};
+use stable_mir::{abi, CrateDef};
 
 use crate::context::ReslContext;
 use crate::hir_ext::{
     BlendSrc, FnExt, Interpolation, InterpolationSampling, InterpolationType, ResourceBinding,
     ShaderIOBinding, StaticExt,
 };
+use crate::slir_build::resl_primitive_ty::ReslPrimitiveTy;
 use crate::slir_build::ty::Type;
 use crate::slir_build::value::Value;
 use crate::stable_cg::traits::{
@@ -93,6 +94,23 @@ fn resource_binding_to_slir(resource_binding: &ResourceBinding) -> slir::Resourc
     }
 }
 
+fn primitive_ty_to_slir(primitive_ty: ReslPrimitiveTy) -> slir::ty::Type {
+    match primitive_ty {
+        ReslPrimitiveTy::Vec2F32 => slir::ty::TY_VEC2_F32,
+        ReslPrimitiveTy::Vec2U32 => slir::ty::TY_VEC2_U32,
+        ReslPrimitiveTy::Vec2I32 => slir::ty::TY_VEC2_I32,
+        ReslPrimitiveTy::Vec2Bool => slir::ty::TY_VEC2_BOOL,
+        ReslPrimitiveTy::Vec3F32 => slir::ty::TY_VEC3_F32,
+        ReslPrimitiveTy::Vec3U32 => slir::ty::TY_VEC3_U32,
+        ReslPrimitiveTy::Vec3I32 => slir::ty::TY_VEC3_I32,
+        ReslPrimitiveTy::Vec3Bool => slir::ty::TY_VEC3_BOOL,
+        ReslPrimitiveTy::Vec4F32 => slir::ty::TY_VEC4_F32,
+        ReslPrimitiveTy::Vec4U32 => slir::ty::TY_VEC4_U32,
+        ReslPrimitiveTy::Vec4I32 => slir::ty::TY_VEC4_I32,
+        ReslPrimitiveTy::Vec4Bool => slir::ty::TY_VEC4_BOOL,
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum SlirStatic {
     Uniform(slir::UniformBinding),
@@ -145,6 +163,10 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
     }
 
     fn ty_and_layout_register(&self, layout: TyAndLayout) -> slir::ty::Type {
+        if let Some(primitive_ty) = ReslPrimitiveTy::from_ty(layout.ty) {
+            return primitive_ty_to_slir(primitive_ty);
+        }
+
         if let Some(ty) = self.try_register_as_reslc_mem_resource_ty(layout) {
             return ty;
         }
@@ -735,6 +757,7 @@ impl<'a, 'tcx> ConstCodegenMethods for CodegenContext<'a, 'tcx> {
             Scalar::U32(v) => slir::cfg::InlineConst::U32(v),
             Scalar::I32(v) => slir::cfg::InlineConst::I32(v),
             Scalar::F32(v) => slir::cfg::InlineConst::from(v),
+            Scalar::Bool(v) => slir::cfg::InlineConst::Bool(v),
             Scalar::Pointer(ptr) => {
                 let ident = match GlobalAlloc::from(ptr.alloc_id) {
                     GlobalAlloc::Function(_) => bug!("function pointers are not supported by SLIR"),
@@ -752,7 +775,25 @@ impl<'a, 'tcx> ConstCodegenMethods for CodegenContext<'a, 'tcx> {
                             SlirStatic::Workgroup(b) => slir::cfg::RootIdentifier::Workgroup(b),
                         }
                     }
-                    GlobalAlloc::Memory(_) => todo!(),
+                    GlobalAlloc::Memory(alloc) => {
+                        let bytes = alloc
+                            .raw_bytes()
+                            .expect("could not read constant memory allocation");
+                        let const_id = ptr.alloc_id.to_index();
+                        let const_name = slir::Symbol::new(format!("c{}", const_id));
+                        let constant = slir::Constant {
+                            name: const_name,
+                            module: self.module_name,
+                        };
+                        let ty = self.ty_and_layout_resolve(ptr.pointee_layout);
+
+                        self.module
+                            .borrow_mut()
+                            .constants
+                            .register_byte_data(constant, ty, bytes);
+
+                        slir::cfg::RootIdentifier::Constant(constant)
+                    }
                 };
 
                 slir::cfg::InlineConst::Ptr(slir::cfg::ConstPtr::new(

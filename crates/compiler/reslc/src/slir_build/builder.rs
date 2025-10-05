@@ -260,6 +260,12 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
     }
 
     fn ret(&mut self, v: Self::Value) {
+        {
+            let v = v.expect_value().expect_local();
+            let cfg = self.cx.cfg.borrow();
+            let data = &cfg[v];
+        }
+
         self.cfg.borrow_mut().set_terminator(
             self.basic_block,
             slir::cfg::Terminator::return_value(v.expect_value()),
@@ -741,7 +747,37 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
     }
 
     fn fcmp(&mut self, op: RealPredicate, lhs: Self::Value, rhs: Self::Value) -> Self::Value {
-        todo!()
+        let operator = match op {
+            RealPredicate::RealOEQ => slir::BinaryOperator::Eq,
+            RealPredicate::RealOGT => slir::BinaryOperator::Gt,
+            RealPredicate::RealOGE => slir::BinaryOperator::GtEq,
+            RealPredicate::RealOLT => slir::BinaryOperator::Lt,
+            RealPredicate::RealOLE => slir::BinaryOperator::LtEq,
+            RealPredicate::RealONE => slir::BinaryOperator::NotEq,
+            RealPredicate::RealORD
+            | RealPredicate::RealUNO
+            | RealPredicate::RealUEQ
+            | RealPredicate::RealUGT
+            | RealPredicate::RealUGE
+            | RealPredicate::RealULT
+            | RealPredicate::RealULE
+            | RealPredicate::RealUNE
+            | RealPredicate::RealPredicateTrue
+            | RealPredicate::RealPredicateFalse => bug!("unsupported fcmp predicate `{:?}`", op),
+        };
+
+        let lhs = lhs.expect_value();
+        let rhs = rhs.expect_value();
+
+        let (_, result) = self.cfg.borrow_mut().add_stmt_op_binary(
+            self.basic_block,
+            BlockPosition::Append,
+            operator,
+            lhs,
+            rhs,
+        );
+
+        result.into()
     }
 
     fn select(

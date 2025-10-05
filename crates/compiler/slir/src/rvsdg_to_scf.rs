@@ -487,6 +487,13 @@ impl<'a, 'b> ScfBuilder<'a, 'b> {
 
                     argument_mapping.map_argument(arg as u32, expr);
                 }
+                Constant(n) => {
+                    let expr = self
+                        .scf
+                        .make_expr_constant_value(&self.module.constants, n.constant());
+
+                    argument_mapping.map_argument(arg as u32, expr);
+                }
                 _ => (),
             }
         }

@@ -7,6 +7,7 @@ members = [
     "crates/library/resl_macros",
     "crates/resl_cli",
     "crates/slir-explorer",
+    "tests/examples/builtin_vec",
     "tests/examples/hello_world",
     "tests/examples/simple_enum",
     "tests/examples/simple_lib",

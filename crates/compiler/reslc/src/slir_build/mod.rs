@@ -7,13 +7,14 @@ use rustc_smir::rustc_internal::stable;
 use crate::context::ReslContext;
 use crate::slir_build::builder::Builder;
 use crate::slir_build::context::CodegenContext;
-use crate::slir_build::reslc_intrinsic::maybe_reslc_intrinsic;
+use crate::slir_build::resl_intrinsic::maybe_reslc_intrinsic;
 use crate::slir_build::shims::maybe_shim;
 use crate::stable_cg::MonoItemExt;
 
 pub mod builder;
 pub mod context;
-mod reslc_intrinsic;
+mod resl_intrinsic;
+mod resl_primitive_ty;
 mod shims;
 pub mod ty;
 pub mod value;

@@ -14,6 +14,7 @@ use super::operand::OperandRef;
 use super::operand::OperandValue::{Immediate, Pair, Ref, ZeroSized};
 use super::place::{PlaceRef, PlaceValue};
 use super::{CachedLlbb, FunctionCx, LocalRef};
+use crate::slir_build::value::Value;
 use crate::stable_cg::common::IntPredicate;
 use crate::stable_cg::layout::TyAndLayout;
 use crate::stable_cg::traits::*;

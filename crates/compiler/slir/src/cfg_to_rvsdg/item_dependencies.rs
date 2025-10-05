@@ -2,13 +2,13 @@ use indexmap::IndexSet;
 use rustc_hash::FxHashMap;
 
 use crate::cfg::{
-    Assign, BasicBlockData, Bind, Cfg, FunctionBody, InlineConst, OpAlloca, OpBinary,
-    OpBoolToBranchPredicate, OpCall, OpCallBuiltin, OpCaseToBranchPredicate, OpExtractValue,
-    OpGetDiscriminant, OpLoad, OpOffsetSlicePtr, OpPtrElementPtr, OpPtrVariantPtr,
-    OpSetDiscriminant, OpStore, OpUnary, RootIdentifier, StatementData, Uninitialized, Value,
+    Assign, Bind, Cfg, InlineConst, OpAlloca, OpBinary, OpBoolToBranchPredicate, OpCall,
+    OpCallBuiltin, OpCaseToBranchPredicate, OpExtractValue, OpGetDiscriminant, OpLoad,
+    OpOffsetSlicePtr, OpPtrElementPtr, OpPtrVariantPtr, OpSetDiscriminant, OpStore, OpUnary,
+    RootIdentifier, StatementData, Uninitialized, Value,
 };
 use crate::ty::Type;
-use crate::{Function, Module, StorageBinding, UniformBinding, WorkgroupBinding};
+use crate::{Constant, Function, Module, StorageBinding, UniformBinding, WorkgroupBinding};
 
 pub struct Node(usize);
 
@@ -22,6 +22,7 @@ pub enum Item {
     UniformBinding(UniformBinding),
     StorageBinding(StorageBinding),
     WorkgroupBinding(WorkgroupBinding),
+    Constant(Constant),
 }
 
 impl Item {
@@ -31,6 +32,7 @@ impl Item {
             Item::UniformBinding(b) => module.uniform_bindings[b].ty,
             Item::StorageBinding(b) => module.storage_bindings[b].ty,
             Item::WorkgroupBinding(b) => module.workgroup_bindings[b].ty,
+            Item::Constant(c) => module.constants[c].ty(),
         }
     }
 }
@@ -46,8 +48,8 @@ impl WithItemDependencies for Value {
     where
         F: FnMut(Item),
     {
-        if let Value::InlineConst(InlineConst::Ptr(ptr)) = self {
-            match ptr.root_identifier() {
+        match self {
+            Value::InlineConst(InlineConst::Ptr(ptr)) => match ptr.root_identifier() {
                 RootIdentifier::Uniform(b) => {
                     f(Item::UniformBinding(b));
                 }
@@ -57,8 +59,10 @@ impl WithItemDependencies for Value {
                 RootIdentifier::Workgroup(b) => {
                     f(Item::WorkgroupBinding(b));
                 }
+                RootIdentifier::Constant(c) => f(Item::Constant(c)),
                 _ => {}
-            }
+            },
+            _ => {}
         }
     }
 }

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ty::ScalarKind::Bool;
 use crate::ty::TypeKind::Predicate;
-use crate::{Function, Module};
+use crate::{BinaryOperator, Function, Module};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct Type(TypeInner);
@@ -26,8 +26,8 @@ impl Type {
         Type(TypeInner::Registered(id))
     }
 
-    pub fn to_string(&self, module: &Module) -> String {
-        module.ty.kind(*self).to_string(module)
+    pub fn to_string(&self, ty_registry: &TypeRegistry) -> String {
+        ty_registry.kind(*self).to_string(ty_registry)
     }
 }
 
@@ -113,6 +113,18 @@ pub enum TypeKind {
 }
 
 impl TypeKind {
+    pub fn is_scalar(&self) -> bool {
+        matches!(self, TypeKind::Scalar(_))
+    }
+
+    pub fn expect_scalar(&self) -> &ScalarKind {
+        if let TypeKind::Scalar(scalar) = self {
+            scalar
+        } else {
+            panic!("not a scalar type");
+        }
+    }
+
     pub fn expect_fn(&self) -> &Function {
         if let TypeKind::Function(function) = self {
             function
@@ -166,7 +178,7 @@ impl TypeKind {
 }
 
 impl TypeKind {
-    fn to_string(&self, module: &Module) -> String {
+    fn to_string(&self, ty_registry: &TypeRegistry) -> String {
         match self {
             TypeKind::Scalar(scalar) => format!("{}", scalar),
             TypeKind::Atomic(scalar) => format!("atomic<{}>", scalar),
@@ -191,14 +203,14 @@ impl TypeKind {
                 (VectorSize::Four, VectorSize::Four) => format!("mat4x4<{}>", scalar),
             },
             TypeKind::Array { element_ty, count } => {
-                format!("array<{}, {}>", element_ty.to_string(module), count)
+                format!("array<{}, {}>", element_ty.to_string(ty_registry), count)
             }
             TypeKind::Slice { element_ty } => {
-                format!("array<{}>", element_ty.to_string(module))
+                format!("array<{}>", element_ty.to_string(ty_registry))
             }
             TypeKind::Struct(_) => "struct".to_string(),
             TypeKind::Enum(_) => "enum".to_string(),
-            TypeKind::Ptr(pointee_ty) => format!("ptr<{}>", pointee_ty.to_string(module)),
+            TypeKind::Ptr(pointee_ty) => format!("ptr<{}>", pointee_ty.to_string(ty_registry)),
             TypeKind::Function(f) => format!("Function_{}_{}", f.module, f.name),
             TypeKind::Predicate => format!("predicate"),
             TypeKind::Dummy => "dummy".to_string(),
@@ -224,6 +236,22 @@ pub enum ScalarKind {
     U32,
     F32,
     Bool,
+}
+
+impl ScalarKind {
+    pub fn is_numeric(&self) -> bool {
+        match self {
+            ScalarKind::I32 | ScalarKind::U32 | ScalarKind::F32 => true,
+            ScalarKind::Bool => false,
+        }
+    }
+
+    pub fn is_integer(&self) -> bool {
+        match self {
+            ScalarKind::I32 | ScalarKind::U32 => true,
+            ScalarKind::F32 | ScalarKind::Bool => false,
+        }
+    }
 }
 
 impl fmt::Display for ScalarKind {
@@ -677,5 +705,346 @@ impl Deref for KindRef<'_> {
 
     fn deref(&self) -> &Self::Target {
         self.as_ref()
+    }
+}
+
+fn check_arith_ty(lhs: Type, rhs: Type) -> Result<Type, ()> {
+    match (lhs, rhs) {
+        (TY_U32, TY_U32) => Ok(TY_U32),
+        (TY_I32, TY_I32) => Ok(TY_I32),
+        (TY_F32, TY_F32) => Ok(TY_F32),
+        (TY_VEC2_U32, TY_VEC2_U32) => Ok(TY_VEC2_U32),
+        (TY_VEC2_U32, TY_U32) => Ok(TY_VEC2_U32),
+        (TY_U32, TY_VEC2_U32) => Ok(TY_VEC2_U32),
+        (TY_VEC2_I32, TY_VEC2_I32) => Ok(TY_VEC2_I32),
+        (TY_VEC2_I32, TY_I32) => Ok(TY_VEC2_I32),
+        (TY_I32, TY_VEC2_I32) => Ok(TY_VEC2_I32),
+        (TY_VEC2_F32, TY_VEC2_F32) => Ok(TY_VEC2_F32),
+        (TY_VEC2_F32, TY_F32) => Ok(TY_VEC2_F32),
+        (TY_F32, TY_VEC2_F32) => Ok(TY_VEC2_F32),
+        (TY_VEC3_U32, TY_VEC3_U32) => Ok(TY_VEC3_U32),
+        (TY_VEC3_U32, TY_U32) => Ok(TY_VEC3_U32),
+        (TY_U32, TY_VEC3_U32) => Ok(TY_VEC3_U32),
+        (TY_VEC3_I32, TY_VEC3_I32) => Ok(TY_VEC3_I32),
+        (TY_VEC3_I32, TY_I32) => Ok(TY_VEC3_I32),
+        (TY_I32, TY_VEC3_I32) => Ok(TY_VEC3_I32),
+        (TY_VEC3_F32, TY_VEC3_F32) => Ok(TY_VEC3_F32),
+        (TY_VEC3_F32, TY_F32) => Ok(TY_VEC3_F32),
+        (TY_F32, TY_VEC3_F32) => Ok(TY_VEC3_F32),
+        (TY_VEC4_U32, TY_VEC4_U32) => Ok(TY_VEC4_U32),
+        (TY_VEC4_U32, TY_U32) => Ok(TY_VEC4_U32),
+        (TY_U32, TY_VEC4_U32) => Ok(TY_VEC4_U32),
+        (TY_VEC4_I32, TY_VEC4_I32) => Ok(TY_VEC4_I32),
+        (TY_VEC4_I32, TY_I32) => Ok(TY_VEC4_I32),
+        (TY_I32, TY_VEC4_I32) => Ok(TY_VEC4_I32),
+        (TY_VEC4_F32, TY_VEC4_F32) => Ok(TY_VEC4_F32),
+        (TY_VEC4_F32, TY_F32) => Ok(TY_VEC4_F32),
+        (TY_F32, TY_VEC4_F32) => Ok(TY_VEC4_F32),
+        _ => Err(()),
+    }
+}
+
+fn check_shift_ty(lhs: Type, rhs: Type) -> Result<Type, ()> {
+    match (lhs, rhs) {
+        (TY_U32, TY_U32) => Ok(TY_U32),
+        (TY_I32, TY_U32) => Ok(TY_I32),
+        (TY_VEC2_U32, TY_VEC2_U32) => Ok(TY_VEC2_U32),
+        (TY_VEC2_I32, TY_VEC2_U32) => Ok(TY_VEC2_I32),
+        (TY_VEC3_U32, TY_VEC3_U32) => Ok(TY_VEC3_U32),
+        (TY_VEC3_I32, TY_VEC3_U32) => Ok(TY_VEC3_I32),
+        (TY_VEC4_U32, TY_VEC4_U32) => Ok(TY_VEC4_U32),
+        (TY_VEC4_I32, TY_VEC4_U32) => Ok(TY_VEC4_I32),
+        _ => Err(()),
+    }
+}
+
+impl TypeRegistry {
+    /// Checks if the `lhs` and `rhs` operand are of valid types for the given `op`.
+    ///
+    /// Returns the result type for the operation if the operands are valid, or a string describing
+    /// the error otherwise.
+    pub fn check_binary_op(
+        &self,
+        op: BinaryOperator,
+        lhs: Type,
+        rhs: Type,
+    ) -> Result<Type, String> {
+        match op {
+            BinaryOperator::And | BinaryOperator::Or => self.check_logic_op(op, lhs, rhs),
+            BinaryOperator::Add | BinaryOperator::Sub => self.check_add_or_sub_op(op, lhs, rhs),
+            BinaryOperator::Mul => self.check_mul_op(lhs, rhs),
+            BinaryOperator::Div | BinaryOperator::Mod => self.check_div_or_mod_op(op, lhs, rhs),
+            BinaryOperator::Shl | BinaryOperator::Shr => self.check_shift_op(op, lhs, rhs),
+            BinaryOperator::Eq | BinaryOperator::NotEq => self.check_eq_op(op, lhs, rhs),
+            BinaryOperator::Gt
+            | BinaryOperator::GtEq
+            | BinaryOperator::Lt
+            | BinaryOperator::LtEq => self.check_ord_op(op, lhs, rhs),
+        }
+    }
+
+    fn check_logic_op(&self, op: BinaryOperator, lhs: Type, rhs: Type) -> Result<Type, String> {
+        if lhs == TY_BOOL && rhs == TY_BOOL {
+            Ok(TY_BOOL)
+        } else {
+            Err(format!(
+                "the `{}` operator expects boolean operands (lhs: `{}`, rhs: `{}`)",
+                op,
+                lhs.to_string(self),
+                rhs.to_string(self)
+            ))
+        }
+    }
+
+    fn check_add_or_sub_op(
+        &self,
+        op: BinaryOperator,
+        lhs: Type,
+        rhs: Type,
+    ) -> Result<Type, String> {
+        match &*self.kind(lhs) {
+            TypeKind::Scalar(kind) if kind.is_numeric() => {
+                match &*self.kind(rhs) {
+                    TypeKind::Scalar(kind) if kind == kind => Ok(lhs),
+                    TypeKind::Vector { scalar, .. } if scalar == kind => Ok(rhs),
+                    TypeKind::Matrix { scalar, .. } if scalar == kind => Ok(rhs),
+                    _ => Err(format!(
+                    "if the left-hand-side operand to the `{}` operator is a `{}` value, then the \
+                    right-hand-side value must be a numeric scalar, vector or matrix of the same \
+                    (element) type (got `{}`)",
+                    op, lhs.to_string(self), rhs.to_string(self))),
+                }
+            }
+            TypeKind::Vector { scalar, size } if scalar.is_numeric() => match &*self.kind(rhs) {
+                TypeKind::Scalar(kind) if scalar == kind => Ok(lhs),
+                TypeKind::Vector {
+                    scalar: other_scalar,
+                    size: other_size,
+                } if scalar == other_scalar && size == other_size => Ok(lhs),
+                _ => Err(format!(
+                    "if the left-hand-side operand to the `{}` operator is a `{}` vector, then the \
+                    right-hand-side value must be a vector of the same type, or a numeric scalar \
+                    that matches the element type of the vector (got `{}`)",
+                    op, lhs.to_string(self), rhs.to_string(self))),
+            },
+            TypeKind::Matrix {
+                rows,
+                columns,
+                scalar,
+            } if scalar.is_numeric() => match &*self.kind(rhs) {
+                TypeKind::Scalar(kind) if scalar == kind => Ok(lhs),
+                TypeKind::Matrix {
+                    rows: other_rows,
+                    columns: other_columns,
+                    scalar: other_scalar,
+                } if rows == other_rows && columns == other_columns && scalar == other_scalar => {
+                    Ok(lhs)
+                }
+                _ => Err(format!(
+                    "if the left-hand-side operand to the `{}` operator is a `{}` matrix, then the \
+                    right-hand-side value must be a matrix of the same size and type, or a numeric \
+                    scalar that matches the element type of the matrix (got `{}`)",
+                    op, lhs.to_string(self), rhs.to_string(self))),
+            },
+            _ => {
+                Err(format!(
+                "the `{}` operator expects a numeric scalar, a numeric vector or a matrix as its \
+                left-hand-side operand (got `{}`)",
+                op, lhs.to_string(self)))
+            }
+        }
+    }
+
+    fn check_mul_op(&self, lhs: Type, rhs: Type) -> Result<Type, String> {
+        match &*self.kind(lhs) {
+            TypeKind::Scalar(kind) if kind.is_numeric() => match &*self.kind(rhs) {
+                TypeKind::Scalar(kind) if kind == kind => Ok(lhs),
+                TypeKind::Vector { scalar, .. } if scalar == kind => Ok(rhs),
+                TypeKind::Matrix { scalar, .. } if scalar == kind => Ok(rhs),
+                _ => Err(format!(
+                    "if the left-hand-side operand to the `*` operator is a `{}` value, then the \
+                    right-hand-side value must be a numeric scalar, vector or matrix of the same \
+                    (element) type (got `{}`)",
+                    lhs.to_string(self),
+                    rhs.to_string(self)
+                )),
+            },
+            TypeKind::Vector { scalar, size } if scalar.is_numeric() => match &*self.kind(rhs) {
+                TypeKind::Scalar(kind) if scalar == kind => Ok(lhs),
+                TypeKind::Vector {
+                    scalar: other_scalar,
+                    size: other_size,
+                } if scalar == other_scalar && size == other_size => Ok(lhs),
+                TypeKind::Matrix {
+                    rows,
+                    columns,
+                    scalar: matrix_scalar,
+                } if scalar == matrix_scalar && size == rows => {
+                    Ok(self.register(TypeKind::Vector {
+                        scalar: *scalar,
+                        size: *columns,
+                    }))
+                }
+                _ => Err(format!(
+                    "if the left-hand-side operand to the `*` operator is a `{}` vector, then the \
+                    right-hand-side value must be a vector of the same type, or a numeric scalar \
+                    that matches the element type of the vector, or matrix with a matching element \
+                    type and a row-size equal to the vector's size (got `{}`)",
+                    lhs.to_string(self),
+                    rhs.to_string(self)
+                )),
+            },
+            TypeKind::Matrix {
+                rows,
+                columns,
+                scalar,
+            } if scalar.is_numeric() => match &*self.kind(rhs) {
+                TypeKind::Scalar(kind) if scalar == kind => Ok(lhs),
+                TypeKind::Matrix {
+                    rows: other_rows,
+                    columns: other_columns,
+                    scalar: other_scalar,
+                } if columns == other_rows && scalar == other_scalar => {
+                    Ok(self.register(TypeKind::Matrix {
+                        rows: *rows,
+                        columns: *other_columns,
+                        scalar: *scalar,
+                    }))
+                }
+                _ => Err(format!(
+                    "if the left-hand-side operand to the `*` operator is a `{}` matrix, then the \
+                    right-hand-side value must be a matrix of a matching element type and a \
+                    row-size that matches the matrix's column-size, or a numeric  scalar that \
+                    matches the element type of the matrix (got `{}`)",
+                    lhs.to_string(self),
+                    rhs.to_string(self)
+                )),
+            },
+            _ => Err(format!(
+                "the `*` operator expects a numeric scalar, a numeric vector or a matrix as its \
+                left-hand-side operand (got `{}`)",
+                lhs.to_string(self)
+            )),
+        }
+    }
+
+    fn check_div_or_mod_op(
+        &self,
+        op: BinaryOperator,
+        lhs: Type,
+        rhs: Type,
+    ) -> Result<Type, String> {
+        match &*self.kind(lhs) {
+            TypeKind::Scalar(kind) if kind.is_numeric() => match &*self.kind(rhs) {
+                TypeKind::Scalar(kind) if kind == kind => Ok(lhs),
+                TypeKind::Vector { scalar, .. } if scalar == kind => Ok(rhs),
+                TypeKind::Matrix { scalar, .. } if scalar == kind => Ok(rhs),
+                _ => Err(format!(
+                    "if the left-hand-side operand to the `{}` operator is a `{}` value, then the \
+                    right-hand-side value must be a scalar or a vector of the same (element) type \
+                    (got `{}`)",
+                    op,
+                    lhs.to_string(self),
+                    rhs.to_string(self)
+                )),
+            },
+            TypeKind::Vector { scalar, size } if scalar.is_numeric() => match &*self.kind(rhs) {
+                TypeKind::Scalar(kind) if scalar == kind => Ok(lhs),
+                TypeKind::Vector {
+                    scalar: other_scalar,
+                    size: other_size,
+                } if scalar == other_scalar && size == other_size => Ok(lhs),
+                _ => Err(format!(
+                    "if the left-hand-side operand to the `{}` operator is a `{}` vector, then the \
+                    right-hand-side value must be a vector of the same type, or a numeric scalar \
+                    that matches the element type of the vector (got `{}`)",
+                    op,
+                    lhs.to_string(self),
+                    rhs.to_string(self)
+                )),
+            },
+            _ => Err(format!(
+                "the `{}` operator expects a numeric scalar or a numeric vector as its \
+                left-hand-side operand (got `{}`)",
+                op,
+                lhs.to_string(self)
+            )),
+        }
+    }
+
+    fn check_shift_op(&self, op: BinaryOperator, lhs: Type, rhs: Type) -> Result<Type, String> {
+        match &*self.kind(lhs) {
+            TypeKind::Scalar(kind) if kind.is_integer() => {
+                if rhs == TY_U32 {
+                    Ok(lhs)
+                } else {
+                    Err(format!(
+                    "if the left-hand-side operand to the `{}` operator is a `{}` value, then the \
+                    right-hand-side value must be a `{}` (got `{}`)",
+                    op,
+                    lhs.to_string(self),
+                    TY_U32.to_string(self),
+                        rhs.to_string(self)
+                ))
+                }
+            }
+            TypeKind::Vector { scalar, size } if scalar.is_integer() => {
+                let expected_rhs = TypeKind::Vector {
+                    size: *size,
+                    scalar: ScalarKind::U32,
+                };
+
+                if &*self.kind(rhs) == &expected_rhs {
+                    Ok(lhs)
+                } else {
+                    Err(format!(
+                        "if the left-hand-side operand to the `{}` operator is a `{}` vector, then \
+                        the right-hand-side value must be a vector of equal size and element type \
+                        `{}` (got `{}`)",
+                        op,
+                        lhs.to_string(self),
+                        TY_U32.to_string(self),
+                        rhs.to_string(self)
+                    ))
+                }
+            }
+            _ => Err(format!(
+                "the `{}` operator expects a integer scalar or an integer vector as its \
+                left-hand-side operand (got `{}`)",
+                op,
+                lhs.to_string(self)
+            )),
+        }
+    }
+
+    fn check_eq_op(&self, op: BinaryOperator, lhs: Type, rhs: Type) -> Result<Type, String> {
+        if self.kind(lhs).is_scalar() && lhs == rhs {
+            Ok(TY_BOOL)
+        } else {
+            Err(format!(
+                "the `{}` operator expects its operand to be scalar values of the same type (got \
+                `{}` and `{}`)",
+                op,
+                lhs.to_string(self),
+                rhs.to_string(self)
+            ))
+        }
+    }
+
+    fn check_ord_op(&self, op: BinaryOperator, lhs: Type, rhs: Type) -> Result<Type, String> {
+        if let TypeKind::Scalar(kind) = &*self.kind(lhs)
+            && kind.is_numeric()
+            && lhs == rhs
+        {
+            Ok(TY_BOOL)
+        } else {
+            Err(format!(
+                "the `{}` operator expects its operand to be numeric scalar values of the same \
+                type (got `{}` and `{}`)",
+                op,
+                lhs.to_string(self),
+                rhs.to_string(self)
+            ))
+        }
     }
 }

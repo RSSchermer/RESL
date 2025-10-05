@@ -23,7 +23,6 @@ pub fn Value(
             <InlineConst module function value=value highlight=highlight/>
         }
         .into_any(),
-        Value::Const => unimplemented!(),
     }
 }
 
@@ -100,5 +99,6 @@ fn RootIdentifier(
         slir::cfg::RootIdentifier::Workgroup(v) => {
             view! {{format!("W{}", v.data().as_ffi())}}.into_any()
         }
+        slir::cfg::RootIdentifier::Constant(c) => view! {{c.name.to_string()}}.into_any(),
     }
 }

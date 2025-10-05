@@ -33,6 +33,10 @@ pub fn Expression(
             <WorkgroupBinding binding=*binding />
         }
         .into_any(),
+        ExpressionKind::ConstantValue(constant) => view! {
+            <Constant constant=*constant />
+        }
+        .into_any(),
         ExpressionKind::FallbackValue(_) => "fallback".into_any(),
         ExpressionKind::ConstU32(v) => format!("{}u32", v).into_any(),
         ExpressionKind::ConstI32(v) => format!("{}i32", v).into_any(),
@@ -127,5 +131,12 @@ pub fn StorageBinding(binding: slir::StorageBinding) -> impl IntoView {
 pub fn WorkgroupBinding(binding: slir::WorkgroupBinding) -> impl IntoView {
     view! {
         {format!("W{}", binding.data().as_ffi())}
+    }
+}
+
+#[component]
+pub fn Constant(constant: slir::Constant) -> impl IntoView {
+    view! {
+        {constant.name.to_string()}
     }
 }

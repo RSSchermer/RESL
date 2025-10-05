@@ -1,6 +1,7 @@
 use std::marker;
-use crate::prelude::Resource;
+
 use super::{gpu, resource};
+use crate::prelude::Resource;
 
 #[gpu]
 #[cfg_attr(reslc, reslc::mem_resource_ty)]

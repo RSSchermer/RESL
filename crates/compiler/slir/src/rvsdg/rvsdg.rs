@@ -2,20 +2,19 @@ use std::ops::Index;
 use std::slice;
 
 use indexmap::IndexSet;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
 use thiserror::Error;
 
 use crate::builtin_function::BuiltinFunction;
-use crate::cfg::OpCaseToBranchPredicate;
 use crate::ty::{
     Type, TypeKind, TypeRegistry, TY_BOOL, TY_F32, TY_I32, TY_PREDICATE, TY_PTR_U32, TY_U32,
 };
 use crate::util::thin_set::ThinSet;
 use crate::{
-    thin_set, BinaryOperator, Function, Module, StorageBinding, UnaryOperator, UniformBinding,
-    WorkgroupBinding,
+    thin_set, BinaryOperator, Constant, Function, Module, StorageBinding, UnaryOperator,
+    UniformBinding, WorkgroupBinding,
 };
 
 pub trait Connectivity {
@@ -743,6 +742,7 @@ pub enum NodeKind {
     UniformBinding(UniformBindingNode),
     StorageBinding(StorageBindingNode),
     WorkgroupBinding(WorkgroupBindingNode),
+    Constant(ConstantNode),
     Function(FunctionNode),
 }
 
@@ -765,6 +765,7 @@ impl Connectivity for NodeData {
             NodeKind::UniformBinding(n) => n.value_inputs(),
             NodeKind::StorageBinding(n) => n.value_inputs(),
             NodeKind::WorkgroupBinding(n) => n.value_inputs(),
+            NodeKind::Constant(n) => n.value_inputs(),
             NodeKind::Function(n) => n.value_inputs(),
         }
     }
@@ -777,6 +778,7 @@ impl Connectivity for NodeData {
             NodeKind::UniformBinding(n) => n.value_inputs_mut(),
             NodeKind::StorageBinding(n) => n.value_inputs_mut(),
             NodeKind::WorkgroupBinding(n) => n.value_inputs_mut(),
+            NodeKind::Constant(n) => n.value_inputs_mut(),
             NodeKind::Function(n) => n.value_inputs_mut(),
         }
     }
@@ -789,6 +791,7 @@ impl Connectivity for NodeData {
             NodeKind::UniformBinding(n) => n.value_outputs(),
             NodeKind::StorageBinding(n) => n.value_outputs(),
             NodeKind::WorkgroupBinding(n) => n.value_outputs(),
+            NodeKind::Constant(n) => n.value_outputs(),
             NodeKind::Function(n) => n.value_outputs(),
         }
     }
@@ -801,6 +804,7 @@ impl Connectivity for NodeData {
             NodeKind::UniformBinding(n) => n.value_outputs_mut(),
             NodeKind::StorageBinding(n) => n.value_outputs_mut(),
             NodeKind::WorkgroupBinding(n) => n.value_outputs_mut(),
+            NodeKind::Constant(n) => n.value_outputs_mut(),
             NodeKind::Function(n) => n.value_outputs_mut(),
         }
     }
@@ -813,6 +817,7 @@ impl Connectivity for NodeData {
             NodeKind::UniformBinding(n) => n.state(),
             NodeKind::StorageBinding(n) => n.state(),
             NodeKind::WorkgroupBinding(n) => n.state(),
+            NodeKind::Constant(n) => n.state(),
             NodeKind::Function(n) => n.state(),
         }
     }
@@ -825,6 +830,7 @@ impl Connectivity for NodeData {
             NodeKind::UniformBinding(n) => n.state_mut(),
             NodeKind::StorageBinding(n) => n.state_mut(),
             NodeKind::WorkgroupBinding(n) => n.state_mut(),
+            NodeKind::Constant(n) => n.state_mut(),
             NodeKind::Function(n) => n.state_mut(),
         }
     }
@@ -931,6 +937,48 @@ impl WorkgroupBindingNode {
 }
 
 impl Connectivity for WorkgroupBindingNode {
+    fn value_inputs(&self) -> &[ValueInput] {
+        &[]
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        &mut []
+    }
+
+    fn value_outputs(&self) -> &[ValueOutput] {
+        slice::from_ref(&self.output)
+    }
+
+    fn value_outputs_mut(&mut self) -> &mut [ValueOutput] {
+        slice::from_mut(&mut self.output)
+    }
+
+    fn state(&self) -> Option<&State> {
+        None
+    }
+
+    fn state_mut(&mut self) -> Option<&mut State> {
+        None
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct ConstantNode {
+    constant: Constant,
+    output: ValueOutput,
+}
+
+impl ConstantNode {
+    pub fn constant(&self) -> Constant {
+        self.constant
+    }
+
+    pub fn output(&self) -> &ValueOutput {
+        &self.output
+    }
+}
+
+impl Connectivity for ConstantNode {
     fn value_inputs(&self) -> &[ValueInput] {
         &[]
     }
@@ -2399,6 +2447,22 @@ impl Rvsdg {
         node
     }
 
+    pub fn register_constant(&mut self, module: &Module, constant: Constant) -> Node {
+        let ty = module.constants[constant].ty();
+
+        let node = self.nodes.insert(NodeData {
+            kind: NodeKind::Constant(ConstantNode {
+                constant,
+                output: ValueOutput::new(ty),
+            }),
+            region: Some(self.global_region),
+        });
+
+        self.regions[self.global_region].nodes.insert(node);
+
+        node
+    }
+
     pub fn register_function(
         &mut self,
         module: &Module,
@@ -3324,8 +3388,8 @@ impl Rvsdg {
                 value_input_ty,
                 "argument `{}` expects a value of type `{}`, but a value input of type `{}` was provided",
                 i,
-                sig_arg_ty.to_string(module),
-                value_input_ty.to_string(module)
+                sig_arg_ty.to_string(self.ty()),
+                value_input_ty.to_string(self.ty())
             );
         }
 
@@ -3385,24 +3449,12 @@ impl Rvsdg {
         self.validate_node_value_input(region, &lhs_input);
         self.validate_node_value_input(region, &rhs_input);
 
-        assert_eq!(lhs_input.ty, rhs_input.ty);
-
-        let output_ty = match operator {
-            BinaryOperator::And
-            | BinaryOperator::Or
-            | BinaryOperator::Add
-            | BinaryOperator::Sub
-            | BinaryOperator::Mul
-            | BinaryOperator::Div
-            | BinaryOperator::Mod
-            | BinaryOperator::Shl
-            | BinaryOperator::Shr => lhs_input.ty,
-            BinaryOperator::Eq
-            | BinaryOperator::NotEq
-            | BinaryOperator::Gt
-            | BinaryOperator::GtEq
-            | BinaryOperator::Lt
-            | BinaryOperator::LtEq => TY_BOOL,
+        let output_ty = match self
+            .ty()
+            .check_binary_op(operator, lhs_input.ty, rhs_input.ty)
+        {
+            Ok(ty) => ty,
+            Err(err) => panic!("invalid operation: {}", err),
         };
 
         let node = self.nodes.insert(NodeData {

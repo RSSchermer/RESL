@@ -175,8 +175,8 @@ impl<'a, V: CodegenObject> OperandRef<V> {
         };
 
         let ty = val.ty();
-        let layout = ty.layout().unwrap();
-        let shape = layout.shape();
+        let layout = TyAndLayout::expect_from_ty(ty);
+        let shape = layout.layout.shape();
         let alloc_align = alloc.align;
 
         assert!(alloc_align >= shape.abi_align);
@@ -192,40 +192,29 @@ impl<'a, V: CodegenObject> OperandRef<V> {
                     "abi::Scalar size does not match layout size"
                 );
 
-                let val = Scalar::read_from_alloc(alloc, 0, abi);
+                let val = Scalar::read_from_alloc(alloc, 0, abi, layout);
                 let val = bx.scalar_to_backend(val);
 
                 return OperandRef {
                     val: OperandValue::Immediate(val),
-                    layout: TyAndLayout {
-                        ty,
-                        layout: layout.into(),
-                    },
+                    layout,
                 };
             }
             ValueAbi::ScalarPair(a, b) => {
                 let b_offset = a.size(&machine_info).bytes();
 
-                let a_val = Scalar::read_from_alloc(alloc, 0, a);
-                let b_val = Scalar::read_from_alloc(alloc, b_offset, b);
+                let a_val = Scalar::read_from_alloc(alloc, 0, a, layout.field(0));
+                let b_val = Scalar::read_from_alloc(alloc, b_offset, b, layout.field(1));
 
                 let a_val = bx.scalar_to_backend(a_val);
                 let b_val = bx.scalar_to_backend(b_val);
 
                 return OperandRef {
                     val: OperandValue::Pair(a_val, b_val),
-                    layout: TyAndLayout {
-                        ty,
-                        layout: layout.into(),
-                    },
+                    layout,
                 };
             }
-            _ if shape.is_1zst() => {
-                return OperandRef::zero_sized(TyAndLayout {
-                    ty,
-                    layout: layout.into(),
-                })
-            }
+            _ if shape.is_1zst() => return OperandRef::zero_sized(layout),
             _ => {}
         }
 
@@ -235,13 +224,7 @@ impl<'a, V: CodegenObject> OperandRef<V> {
         let init = bx.const_data_from_alloc(alloc);
         let addr = bx.static_addr_of(init, alloc_align, None);
 
-        bx.load_operand(PlaceRef::new_sized(
-            addr,
-            TyAndLayout {
-                ty,
-                layout: layout.into(),
-            },
-        ))
+        bx.load_operand(PlaceRef::new_sized(addr, layout))
     }
 
     /// Asserts that this operand refers to a scalar and returns

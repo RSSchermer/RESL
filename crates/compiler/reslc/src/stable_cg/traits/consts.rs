@@ -4,6 +4,7 @@ use stable_mir::ty::Allocation;
 
 use super::BackendTypes;
 use crate::stable_cg::scalar::Scalar;
+use crate::stable_cg::TyAndLayout;
 
 pub trait ConstCodegenMethods: BackendTypes {
     // Constant constructors

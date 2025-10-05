@@ -1,5 +1,5 @@
 use std::fmt;
-use std::ops::{Deref, Index};
+use std::ops::Index;
 
 use indexmap::IndexSet;
 use ordered_float::OrderedFloat;
@@ -12,7 +12,7 @@ use thin_vec::{thin_vec, ThinVec};
 use crate::builtin_function::BuiltinFunction;
 use crate::ty::{Type, TypeKind, TypeRegistry, TY_BOOL, TY_F32, TY_I32, TY_PREDICATE, TY_U32};
 use crate::{
-    BinaryOperator, FnSigRegistry, Function, Module, StorageBinding, UnaryOperator, UniformBinding,
+    BinaryOperator, Constant, Function, Module, StorageBinding, UnaryOperator, UniformBinding,
     WorkgroupBinding,
 };
 
@@ -51,6 +51,7 @@ impl ConstPtr {
             RootIdentifier::Uniform(b) => module.uniform_bindings[b].ty,
             RootIdentifier::Storage(b) => module.storage_bindings[b].ty,
             RootIdentifier::Workgroup(b) => module.workgroup_bindings[b].ty,
+            RootIdentifier::Constant(c) => module.constants[c].ty(),
         };
 
         let ty = module.ty.register(TypeKind::Ptr(pointee_ty));
@@ -86,6 +87,7 @@ pub enum RootIdentifier {
     Uniform(UniformBinding),
     Storage(StorageBinding),
     Workgroup(WorkgroupBinding),
+    Constant(Constant),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
@@ -131,7 +133,6 @@ impl fmt::Display for InlineConst {
 pub enum Value {
     Local(LocalBinding),
     InlineConst(InlineConst),
-    Const,
 }
 
 impl Value {
@@ -1007,7 +1008,6 @@ impl Cfg {
         match value {
             Value::Local(v) => self.local_bindings[*v].ty,
             Value::InlineConst(v) => v.ty(),
-            Value::Const => todo!(),
         }
     }
 
@@ -1118,10 +1118,15 @@ impl Cfg {
 
                 match (ret_ty, value) {
                     (Some(ret_ty), Some(value)) => {
+                        let value_ty = self.value_ty(&value);
+
                         assert_eq!(
-                            self.value_ty(&value),
+                            value_ty,
                             ret_ty,
-                            "return value must have the same type as the function's return type"
+                            "the returned value's type (`{}`) must be the same as the function's \
+                            return type (`{}`)",
+                            value_ty.to_string(self.ty()),
+                            ret_ty.to_string(self.ty()),
                         );
                     }
                     (Some(_), None) => {
@@ -1428,11 +1433,17 @@ impl Cfg {
         let pointer_ty = self.value_ty(&pointer);
 
         let TypeKind::Ptr(pointee_ty) = *self.ty.kind(pointer_ty) else {
-            panic!("expected pointer argument to have a pointer type");
+            panic!(
+                "expected pointer argument to have a pointer type (got `{}`)",
+                pointer_ty.to_string(self.ty())
+            );
         };
 
         let TypeKind::Enum(enum_ty) = &*self.ty.kind(pointee_ty) else {
-            panic!("expected pointer argument to point to an enum");
+            panic!(
+                "expected pointer argument to point to an enum (got `{}`)",
+                pointer_ty.to_string(self.ty())
+            );
         };
 
         let Some(variant_ty) = enum_ty.variants.get(variant_index as usize).copied() else {
@@ -1613,11 +1624,14 @@ impl Cfg {
         self.validate_value(owner, &lhs, "LHS-value");
         self.validate_value(owner, &rhs, "RHS-value");
 
-        let Some(output_ty) =
-            operator.output_ty(&self.ty, self.value_ty(&lhs), self.value_ty(&rhs))
-        else {
-            panic!("LHS-value and RHS-value must have a compatible type");
-        };
+        let output_ty =
+            match self
+                .ty()
+                .check_binary_op(operator, self.value_ty(&lhs), self.value_ty(&rhs))
+            {
+                Ok(ty) => ty,
+                Err(err) => panic!("invalid operation: {}", err),
+            };
 
         let result = self.add_local_binding(owner, output_ty);
 

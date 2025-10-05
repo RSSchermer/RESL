@@ -167,7 +167,8 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
             }
             Simple(ValueProxy(_)) => self.replicate_value_proxy_node(node),
             Simple(Reaggregation(_)) => self.replicate_reaggregation_node(node),
-            Function(_) | UniformBinding(_) | StorageBinding(_) | WorkgroupBinding(_) => {
+            Function(_) | UniformBinding(_) | StorageBinding(_) | WorkgroupBinding(_)
+            | Constant(_) => {
                 panic!("node kind should not appear inside a region")
             }
         }

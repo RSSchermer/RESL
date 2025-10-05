@@ -9,15 +9,23 @@ use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
 
+use crate::scf::Expression;
 use crate::ty::{Type, TypeRegistry, TY_BOOL};
 
 slotmap::new_key_type! {
     pub struct UniformBinding;
     pub struct StorageBinding;
     pub struct WorkgroupBinding;
+    struct ConstInternal;
 }
 
 pub type Symbol = Intern<String>;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
+pub struct Constant {
+    pub name: Symbol,
+    pub module: Symbol,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct Function {
@@ -47,6 +55,10 @@ pub struct FnSigRegistry {
 
 impl FnSigRegistry {
     pub fn register(&mut self, function: Function, sig: FnSig) {
+        if self.contains(function) {
+            panic!("function already registered");
+        }
+
         self.store.insert(function, sig);
     }
 
@@ -186,6 +198,76 @@ impl Index<WorkgroupBinding> for WorkgroupBindingRegistry {
     }
 }
 
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct ConstantData {
+    ty: Type,
+    kind: ConstantKind,
+}
+
+impl ConstantData {
+    pub fn ty(&self) -> Type {
+        self.ty
+    }
+
+    pub fn kind(&self) -> &ConstantKind {
+        &self.kind
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub enum ConstantKind {
+    ByteData(Vec<u8>),
+    Expression,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize, Debug)]
+pub struct ConstantRegistry {
+    store: FxHashMap<Constant, ConstantData>,
+}
+
+impl ConstantRegistry {
+    pub fn register_byte_data(&mut self, constant: Constant, ty: Type, data: Vec<u8>) {
+        if let Some(data) = self.store.get(&constant) {
+            assert_eq!(
+                data.ty, ty,
+                "cannot reregister a constant with a different type"
+            );
+        }
+
+        self.store.insert(
+            constant,
+            ConstantData {
+                ty,
+                kind: ConstantKind::ByteData(data),
+            },
+        );
+    }
+
+    pub fn contains(&self, constant: Constant) -> bool {
+        self.store.contains_key(&constant)
+    }
+
+    pub fn get(&self, constant: Constant) -> Option<&ConstantData> {
+        self.store.get(&constant)
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = Constant> + use<'_> {
+        self.store.keys().copied()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&Constant, &ConstantData)> + use<'_> {
+        self.store.iter()
+    }
+}
+
+impl Index<Constant> for ConstantRegistry {
+    type Output = ConstantData;
+
+    fn index(&self, index: Constant) -> &Self::Output {
+        self.store.get(&index).expect("constant not registered")
+    }
+}
+
 #[derive(Clone, Default, Serialize, Deserialize, Debug)]
 pub struct EntryPointRegistry {
     data: FxHashMap<Function, EntryPointKind>,
@@ -217,6 +299,7 @@ pub struct Module {
     pub uniform_bindings: UniformBindingRegistry,
     pub storage_bindings: StorageBindingRegistry,
     pub workgroup_bindings: WorkgroupBindingRegistry,
+    pub constants: ConstantRegistry,
     pub entry_points: EntryPointRegistry,
 }
 
@@ -229,6 +312,7 @@ impl Module {
             uniform_bindings: Default::default(),
             storage_bindings: Default::default(),
             workgroup_bindings: Default::default(),
+            constants: Default::default(),
             entry_points: Default::default(),
         }
     }

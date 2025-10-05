@@ -211,12 +211,22 @@ impl<'a, V: CodegenObject> PlaceRef<V> {
         bx: &mut Bx,
         variant_index: VariantIdx,
     ) -> Self {
-        let mut downcast = *self;
+        match self.layout.layout.shape().variants {
+            VariantsShape::Empty => *self,
+            VariantsShape::Single { index } => {
+                assert_eq!(index, variant_index);
 
-        downcast.val.llval = bx.ptr_variant_ptr(self.val.llval, variant_index);
-        downcast.layout = downcast.layout.for_variant(variant_index);
+                *self
+            }
+            VariantsShape::Multiple { .. } => {
+                let mut downcast = *self;
 
-        downcast
+                downcast.val.llval = bx.ptr_variant_ptr(self.val.llval, variant_index);
+                downcast.layout = downcast.layout.for_variant(variant_index);
+
+                downcast
+            }
+        }
     }
 
     // pub fn project_type<Bx: BuilderMethods<'a, 'tcx, Value = V>>(
