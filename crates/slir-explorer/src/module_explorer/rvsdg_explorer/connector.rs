@@ -13,42 +13,10 @@ use crate::module_explorer::ModuleData;
 
 fn ty_str(module: &Module, ty: Type) -> String {
     match &*module.ty.kind(ty) {
-        TypeKind::Scalar(scalar) => match scalar {
-            ScalarKind::I32 => "i32".to_owned(),
-            ScalarKind::U32 => "u32".to_owned(),
-            ScalarKind::F32 => "f32".to_owned(),
-            ScalarKind::Bool => "bool".to_owned(),
-        },
-        TypeKind::Atomic(scalar) => match scalar {
-            ScalarKind::I32 => "Atomic<i32>".to_owned(),
-            ScalarKind::U32 => "Atomic<u32>".to_owned(),
-            ScalarKind::F32 => "Atomic<f32>".to_owned(),
-            ScalarKind::Bool => "Atomic<bool>".to_owned(),
-        },
-        TypeKind::Vector { scalar, size } => match scalar {
-            ScalarKind::I32 => format!("vec{}<i32>", size.to_u32()),
-            ScalarKind::U32 => format!("vec{}<u32>", size.to_u32()),
-            ScalarKind::F32 => format!("vec{}<f32>", size.to_u32()),
-            ScalarKind::Bool => format!("vec{}<bool>", size.to_u32()),
-        },
-        TypeKind::Matrix {
-            rows,
-            columns,
-            scalar,
-        } => match scalar {
-            ScalarKind::I32 => {
-                format!("mat{}x{}<i32>", columns.to_u32(), rows.to_u32())
-            }
-            ScalarKind::U32 => {
-                format!("mat{}x{}<u32>", columns.to_u32(), rows.to_u32())
-            }
-            ScalarKind::F32 => {
-                format!("mat{}x{}<f32>", columns.to_u32(), rows.to_u32())
-            }
-            ScalarKind::Bool => {
-                format!("mat{}x{}<bool>", columns.to_u32(), rows.to_u32())
-            }
-        },
+        TypeKind::Scalar(s) => s.to_string(),
+        TypeKind::Atomic(s) => format!("atomic<{}>", s),
+        TypeKind::Vector(v) => v.to_string(),
+        TypeKind::Matrix(m) => m.to_string(),
         TypeKind::Array { element_ty, count } => {
             format!("array<{}, {}>", ty_str(module, *element_ty), count)
         }

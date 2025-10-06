@@ -1,3 +1,4 @@
+use std::fmt::Formatter;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::{Arc, PoisonError, RwLock};
@@ -68,6 +69,45 @@ enum TypeInner {
     Registered(usize),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
+pub struct Vector {
+    pub scalar: ScalarKind,
+    pub size: VectorSize,
+}
+
+impl fmt::Display for Vector {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.size {
+            VectorSize::Two => write!(f, "vec2<{}>", self.scalar),
+            VectorSize::Three => write!(f, "vec3<{}>", self.scalar),
+            VectorSize::Four => write!(f, "vec4<{}>", self.scalar),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
+pub struct Matrix {
+    pub rows: VectorSize,
+    pub columns: VectorSize,
+    pub scalar: ScalarKind,
+}
+
+impl fmt::Display for Matrix {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match (self.columns, self.rows) {
+            (VectorSize::Two, VectorSize::Two) => write!(f, "mat2x2<{}>", self.scalar),
+            (VectorSize::Two, VectorSize::Three) => write!(f, "mat2x3<{}>", self.scalar),
+            (VectorSize::Two, VectorSize::Four) => write!(f, "mat2x4<{}>", self.scalar),
+            (VectorSize::Three, VectorSize::Two) => write!(f, "mat3x2<{}>", self.scalar),
+            (VectorSize::Three, VectorSize::Three) => write!(f, "mat3x3<{}>", self.scalar),
+            (VectorSize::Three, VectorSize::Four) => write!(f, "mat3x4<{}>", self.scalar),
+            (VectorSize::Four, VectorSize::Two) => write!(f, "mat4x2<{}>", self.scalar),
+            (VectorSize::Four, VectorSize::Three) => write!(f, "mat4x3<{}>", self.scalar),
+            (VectorSize::Four, VectorSize::Four) => write!(f, "mat4x4<{}>", self.scalar),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct Struct {
     pub fields: Vec<StructField>,
@@ -88,22 +128,10 @@ pub struct StructField {
 pub enum TypeKind {
     Scalar(ScalarKind),
     Atomic(ScalarKind),
-    Vector {
-        scalar: ScalarKind,
-        size: VectorSize,
-    },
-    Matrix {
-        rows: VectorSize,
-        columns: VectorSize,
-        scalar: ScalarKind,
-    },
-    Array {
-        element_ty: Type,
-        count: u64,
-    },
-    Slice {
-        element_ty: Type,
-    },
+    Vector(Vector),
+    Matrix(Matrix),
+    Array { element_ty: Type, count: u64 },
+    Slice { element_ty: Type },
     Struct(Struct),
     Enum(Enum),
     Ptr(Type),
@@ -180,28 +208,10 @@ impl TypeKind {
 impl TypeKind {
     fn to_string(&self, ty_registry: &TypeRegistry) -> String {
         match self {
-            TypeKind::Scalar(scalar) => format!("{}", scalar),
+            TypeKind::Scalar(scalar) => scalar.to_string(),
             TypeKind::Atomic(scalar) => format!("atomic<{}>", scalar),
-            TypeKind::Vector { size, scalar } => match size {
-                VectorSize::Two => format!("vec2<{}>", scalar),
-                VectorSize::Three => format!("vec3<{}>", scalar),
-                VectorSize::Four => format!("vec4<{}>", scalar),
-            },
-            TypeKind::Matrix {
-                rows,
-                columns,
-                scalar,
-            } => match (columns, rows) {
-                (VectorSize::Two, VectorSize::Two) => format!("mat2x2<{}>", scalar),
-                (VectorSize::Two, VectorSize::Three) => format!("mat2x3<{}>", scalar),
-                (VectorSize::Two, VectorSize::Four) => format!("mat2x4<{}>", scalar),
-                (VectorSize::Three, VectorSize::Two) => format!("mat3x2<{}>", scalar),
-                (VectorSize::Three, VectorSize::Three) => format!("mat3x3<{}>", scalar),
-                (VectorSize::Three, VectorSize::Four) => format!("mat3x4<{}>", scalar),
-                (VectorSize::Four, VectorSize::Two) => format!("mat4x2<{}>", scalar),
-                (VectorSize::Four, VectorSize::Three) => format!("mat4x3<{}>", scalar),
-                (VectorSize::Four, VectorSize::Four) => format!("mat4x4<{}>", scalar),
-            },
+            TypeKind::Vector(v) => v.to_string(),
+            TypeKind::Matrix(m) => m.to_string(),
             TypeKind::Array { element_ty, count } => {
                 format!("array<{}, {}>", element_ty.to_string(ty_registry), count)
             }
@@ -215,6 +225,18 @@ impl TypeKind {
             TypeKind::Predicate => format!("predicate"),
             TypeKind::Dummy => "dummy".to_string(),
         }
+    }
+}
+
+impl From<Vector> for TypeKind {
+    fn from(value: Vector) -> Self {
+        TypeKind::Vector(value)
+    }
+}
+
+impl From<Matrix> for TypeKind {
+    fn from(value: Matrix) -> Self {
+        TypeKind::Matrix(value)
     }
 }
 
@@ -286,99 +308,99 @@ pub const TY_KIND_U32: TypeKind = TypeKind::Scalar(ScalarKind::U32);
 pub const TY_KIND_I32: TypeKind = TypeKind::Scalar(ScalarKind::I32);
 pub const TY_KIND_F32: TypeKind = TypeKind::Scalar(ScalarKind::F32);
 pub const TY_KIND_BOOL: TypeKind = TypeKind::Scalar(ScalarKind::Bool);
-pub const TY_KIND_VEC2_U32: TypeKind = TypeKind::Vector {
+pub const TY_KIND_VEC2_U32: TypeKind = TypeKind::Vector(Vector {
     scalar: ScalarKind::U32,
     size: VectorSize::Two,
-};
-pub const TY_KIND_VEC2_I32: TypeKind = TypeKind::Vector {
+});
+pub const TY_KIND_VEC2_I32: TypeKind = TypeKind::Vector(Vector {
     scalar: ScalarKind::I32,
     size: VectorSize::Two,
-};
-pub const TY_KIND_VEC2_F32: TypeKind = TypeKind::Vector {
+});
+pub const TY_KIND_VEC2_F32: TypeKind = TypeKind::Vector(Vector {
     scalar: ScalarKind::F32,
     size: VectorSize::Two,
-};
-pub const TY_KIND_VEC2_BOOL: TypeKind = TypeKind::Vector {
+});
+pub const TY_KIND_VEC2_BOOL: TypeKind = TypeKind::Vector(Vector {
     scalar: ScalarKind::Bool,
     size: VectorSize::Two,
-};
-pub const TY_KIND_VEC3_U32: TypeKind = TypeKind::Vector {
+});
+pub const TY_KIND_VEC3_U32: TypeKind = TypeKind::Vector(Vector {
     scalar: ScalarKind::U32,
     size: VectorSize::Three,
-};
-pub const TY_KIND_VEC3_I32: TypeKind = TypeKind::Vector {
+});
+pub const TY_KIND_VEC3_I32: TypeKind = TypeKind::Vector(Vector {
     scalar: ScalarKind::I32,
     size: VectorSize::Three,
-};
-pub const TY_KIND_VEC3_F32: TypeKind = TypeKind::Vector {
+});
+pub const TY_KIND_VEC3_F32: TypeKind = TypeKind::Vector(Vector {
     scalar: ScalarKind::F32,
     size: VectorSize::Three,
-};
-pub const TY_KIND_VEC3_BOOL: TypeKind = TypeKind::Vector {
+});
+pub const TY_KIND_VEC3_BOOL: TypeKind = TypeKind::Vector(Vector {
     scalar: ScalarKind::Bool,
     size: VectorSize::Three,
-};
-pub const TY_KIND_VEC4_U32: TypeKind = TypeKind::Vector {
+});
+pub const TY_KIND_VEC4_U32: TypeKind = TypeKind::Vector(Vector {
     scalar: ScalarKind::U32,
     size: VectorSize::Four,
-};
-pub const TY_KIND_VEC4_I32: TypeKind = TypeKind::Vector {
+});
+pub const TY_KIND_VEC4_I32: TypeKind = TypeKind::Vector(Vector {
     scalar: ScalarKind::I32,
     size: VectorSize::Four,
-};
-pub const TY_KIND_VEC4_F32: TypeKind = TypeKind::Vector {
+});
+pub const TY_KIND_VEC4_F32: TypeKind = TypeKind::Vector(Vector {
     scalar: ScalarKind::F32,
     size: VectorSize::Four,
-};
-pub const TY_KIND_VEC4_BOOL: TypeKind = TypeKind::Vector {
+});
+pub const TY_KIND_VEC4_BOOL: TypeKind = TypeKind::Vector(Vector {
     scalar: ScalarKind::Bool,
     size: VectorSize::Four,
-};
-pub const TY_KIND_MAT2X2: TypeKind = TypeKind::Matrix {
+});
+pub const TY_KIND_MAT2X2: TypeKind = TypeKind::Matrix(Matrix {
     rows: VectorSize::Two,
     columns: VectorSize::Two,
     scalar: ScalarKind::F32,
-};
-pub const TY_KIND_MAT2X3: TypeKind = TypeKind::Matrix {
+});
+pub const TY_KIND_MAT2X3: TypeKind = TypeKind::Matrix(Matrix {
     rows: VectorSize::Three,
     columns: VectorSize::Two,
     scalar: ScalarKind::F32,
-};
-pub const TY_KIND_MAT2X4: TypeKind = TypeKind::Matrix {
+});
+pub const TY_KIND_MAT2X4: TypeKind = TypeKind::Matrix(Matrix {
     rows: VectorSize::Four,
     columns: VectorSize::Two,
     scalar: ScalarKind::F32,
-};
-pub const TY_KIND_MAT3X2: TypeKind = TypeKind::Matrix {
+});
+pub const TY_KIND_MAT3X2: TypeKind = TypeKind::Matrix(Matrix {
     rows: VectorSize::Two,
     columns: VectorSize::Three,
     scalar: ScalarKind::F32,
-};
-pub const TY_KIND_MAT3X3: TypeKind = TypeKind::Matrix {
+});
+pub const TY_KIND_MAT3X3: TypeKind = TypeKind::Matrix(Matrix {
     rows: VectorSize::Three,
     columns: VectorSize::Three,
     scalar: ScalarKind::F32,
-};
-pub const TY_KIND_MAT3X4: TypeKind = TypeKind::Matrix {
+});
+pub const TY_KIND_MAT3X4: TypeKind = TypeKind::Matrix(Matrix {
     rows: VectorSize::Four,
     columns: VectorSize::Three,
     scalar: ScalarKind::F32,
-};
-pub const TY_KIND_MAT4X2: TypeKind = TypeKind::Matrix {
+});
+pub const TY_KIND_MAT4X2: TypeKind = TypeKind::Matrix(Matrix {
     rows: VectorSize::Two,
     columns: VectorSize::Four,
     scalar: ScalarKind::F32,
-};
-pub const TY_KIND_MAT4X3: TypeKind = TypeKind::Matrix {
+});
+pub const TY_KIND_MAT4X3: TypeKind = TypeKind::Matrix(Matrix {
     rows: VectorSize::Three,
     columns: VectorSize::Four,
     scalar: ScalarKind::F32,
-};
-pub const TY_KIND_MAT4X4: TypeKind = TypeKind::Matrix {
+});
+pub const TY_KIND_MAT4X4: TypeKind = TypeKind::Matrix(Matrix {
     rows: VectorSize::Four,
     columns: VectorSize::Four,
     scalar: ScalarKind::F32,
-};
+});
 pub const TY_KIND_ATOMIC_U32: TypeKind = TypeKind::Atomic(ScalarKind::U32);
 pub const TY_KIND_ATOMIC_I32: TypeKind = TypeKind::Atomic(ScalarKind::I32);
 pub const TY_KIND_ATOMIC_F32: TypeKind = TypeKind::Atomic(ScalarKind::F32);
@@ -437,99 +459,99 @@ impl TypeRegistry {
             TypeKind::Atomic(ScalarKind::I32) => return TY_ATOMIC_I32,
             TypeKind::Atomic(ScalarKind::F32) => return TY_ATOMIC_F32,
             TypeKind::Atomic(ScalarKind::Bool) => return TY_ATOMIC_BOOL,
-            TypeKind::Vector {
+            TypeKind::Vector(Vector {
                 scalar: ScalarKind::U32,
                 size: VectorSize::Two,
-            } => return TY_VEC2_U32,
-            TypeKind::Vector {
+            }) => return TY_VEC2_U32,
+            TypeKind::Vector(Vector {
                 scalar: ScalarKind::I32,
                 size: VectorSize::Two,
-            } => return TY_VEC2_I32,
-            TypeKind::Vector {
+            }) => return TY_VEC2_I32,
+            TypeKind::Vector(Vector {
                 scalar: ScalarKind::F32,
                 size: VectorSize::Two,
-            } => return TY_VEC2_F32,
-            TypeKind::Vector {
+            }) => return TY_VEC2_F32,
+            TypeKind::Vector(Vector {
                 scalar: ScalarKind::Bool,
                 size: VectorSize::Two,
-            } => return TY_VEC2_BOOL,
-            TypeKind::Vector {
+            }) => return TY_VEC2_BOOL,
+            TypeKind::Vector(Vector {
                 scalar: ScalarKind::U32,
                 size: VectorSize::Three,
-            } => return TY_VEC3_U32,
-            TypeKind::Vector {
+            }) => return TY_VEC3_U32,
+            TypeKind::Vector(Vector {
                 scalar: ScalarKind::I32,
                 size: VectorSize::Three,
-            } => return TY_VEC3_I32,
-            TypeKind::Vector {
+            }) => return TY_VEC3_I32,
+            TypeKind::Vector(Vector {
                 scalar: ScalarKind::F32,
                 size: VectorSize::Three,
-            } => return TY_VEC3_F32,
-            TypeKind::Vector {
+            }) => return TY_VEC3_F32,
+            TypeKind::Vector(Vector {
                 scalar: ScalarKind::Bool,
                 size: VectorSize::Three,
-            } => return TY_VEC3_BOOL,
-            TypeKind::Vector {
+            }) => return TY_VEC3_BOOL,
+            TypeKind::Vector(Vector {
                 scalar: ScalarKind::U32,
                 size: VectorSize::Four,
-            } => return TY_VEC4_U32,
-            TypeKind::Vector {
+            }) => return TY_VEC4_U32,
+            TypeKind::Vector(Vector {
                 scalar: ScalarKind::I32,
                 size: VectorSize::Four,
-            } => return TY_VEC4_I32,
-            TypeKind::Vector {
+            }) => return TY_VEC4_I32,
+            TypeKind::Vector(Vector {
                 scalar: ScalarKind::F32,
                 size: VectorSize::Four,
-            } => return TY_VEC4_F32,
-            TypeKind::Vector {
+            }) => return TY_VEC4_F32,
+            TypeKind::Vector(Vector {
                 scalar: ScalarKind::Bool,
                 size: VectorSize::Four,
-            } => return TY_VEC4_BOOL,
-            TypeKind::Matrix {
+            }) => return TY_VEC4_BOOL,
+            TypeKind::Matrix(Matrix {
                 rows: VectorSize::Two,
                 columns: VectorSize::Two,
                 scalar: ScalarKind::F32,
-            } => return TY_MAT2X2,
-            TypeKind::Matrix {
+            }) => return TY_MAT2X2,
+            TypeKind::Matrix(Matrix {
                 rows: VectorSize::Three,
                 columns: VectorSize::Two,
                 scalar: ScalarKind::F32,
-            } => return TY_MAT2X3,
-            TypeKind::Matrix {
+            }) => return TY_MAT2X3,
+            TypeKind::Matrix(Matrix {
                 rows: VectorSize::Four,
                 columns: VectorSize::Two,
                 scalar: ScalarKind::F32,
-            } => return TY_MAT2X4,
-            TypeKind::Matrix {
+            }) => return TY_MAT2X4,
+            TypeKind::Matrix(Matrix {
                 rows: VectorSize::Two,
                 columns: VectorSize::Three,
                 scalar: ScalarKind::F32,
-            } => return TY_MAT3X2,
-            TypeKind::Matrix {
+            }) => return TY_MAT3X2,
+            TypeKind::Matrix(Matrix {
                 rows: VectorSize::Three,
                 columns: VectorSize::Three,
                 scalar: ScalarKind::F32,
-            } => return TY_MAT3X3,
-            TypeKind::Matrix {
+            }) => return TY_MAT3X3,
+            TypeKind::Matrix(Matrix {
                 rows: VectorSize::Four,
                 columns: VectorSize::Three,
                 scalar: ScalarKind::F32,
-            } => return TY_MAT3X4,
-            TypeKind::Matrix {
+            }) => return TY_MAT3X4,
+            TypeKind::Matrix(Matrix {
                 rows: VectorSize::Two,
                 columns: VectorSize::Four,
                 scalar: ScalarKind::F32,
-            } => return TY_MAT4X2,
-            TypeKind::Matrix {
+            }) => return TY_MAT4X2,
+            TypeKind::Matrix(Matrix {
                 rows: VectorSize::Three,
                 columns: VectorSize::Four,
                 scalar: ScalarKind::F32,
-            } => return TY_MAT4X3,
-            TypeKind::Matrix {
+            }) => return TY_MAT4X3,
+            TypeKind::Matrix(Matrix {
                 rows: VectorSize::Four,
                 columns: VectorSize::Four,
                 scalar: ScalarKind::F32,
-            } => return TY_MAT4X4,
+            }) => return TY_MAT4X4,
             TypeKind::Predicate => return TY_PREDICATE,
             TypeKind::Ptr(TY_U32) => return TY_PTR_U32,
             #[cfg(test)]
@@ -806,8 +828,8 @@ impl TypeRegistry {
             TypeKind::Scalar(kind) if kind.is_numeric() => {
                 match &*self.kind(rhs) {
                     TypeKind::Scalar(kind) if kind == kind => Ok(lhs),
-                    TypeKind::Vector { scalar, .. } if scalar == kind => Ok(rhs),
-                    TypeKind::Matrix { scalar, .. } if scalar == kind => Ok(rhs),
+                    TypeKind::Vector(v) if &v.scalar == kind => Ok(rhs),
+                    TypeKind::Matrix(m) if &m.scalar == kind => Ok(rhs),
                     _ => Err(format!(
                     "if the left-hand-side operand to the `{}` operator is a `{}` value, then the \
                     right-hand-side value must be a numeric scalar, vector or matrix of the same \
@@ -815,29 +837,24 @@ impl TypeRegistry {
                     op, lhs.to_string(self), rhs.to_string(self))),
                 }
             }
-            TypeKind::Vector { scalar, size } if scalar.is_numeric() => match &*self.kind(rhs) {
-                TypeKind::Scalar(kind) if scalar == kind => Ok(lhs),
-                TypeKind::Vector {
-                    scalar: other_scalar,
-                    size: other_size,
-                } if scalar == other_scalar && size == other_size => Ok(lhs),
+            TypeKind::Vector(v) if v.scalar.is_numeric() => match &*self.kind(rhs) {
+                TypeKind::Scalar(kind) if &v.scalar == kind => Ok(lhs),
+                TypeKind::Vector(other) if v.scalar == other.scalar && v.size == other.size => {
+                    Ok(lhs)
+                }
                 _ => Err(format!(
                     "if the left-hand-side operand to the `{}` operator is a `{}` vector, then the \
                     right-hand-side value must be a vector of the same type, or a numeric scalar \
                     that matches the element type of the vector (got `{}`)",
                     op, lhs.to_string(self), rhs.to_string(self))),
             },
-            TypeKind::Matrix {
-                rows,
-                columns,
-                scalar,
-            } if scalar.is_numeric() => match &*self.kind(rhs) {
-                TypeKind::Scalar(kind) if scalar == kind => Ok(lhs),
-                TypeKind::Matrix {
-                    rows: other_rows,
-                    columns: other_columns,
-                    scalar: other_scalar,
-                } if rows == other_rows && columns == other_columns && scalar == other_scalar => {
+            TypeKind::Matrix(m) if m.scalar.is_numeric() => match &*self.kind(rhs) {
+                TypeKind::Scalar(kind) if &m.scalar == kind => Ok(lhs),
+                TypeKind::Matrix(other)
+                    if m.rows == other.rows
+                        && m.columns == other.columns
+                        && m.scalar == other.scalar =>
+                {
                     Ok(lhs)
                 }
                 _ => Err(format!(
@@ -859,8 +876,8 @@ impl TypeRegistry {
         match &*self.kind(lhs) {
             TypeKind::Scalar(kind) if kind.is_numeric() => match &*self.kind(rhs) {
                 TypeKind::Scalar(kind) if kind == kind => Ok(lhs),
-                TypeKind::Vector { scalar, .. } if scalar == kind => Ok(rhs),
-                TypeKind::Matrix { scalar, .. } if scalar == kind => Ok(rhs),
+                TypeKind::Vector(v) if &v.scalar == kind => Ok(rhs),
+                TypeKind::Matrix(m) if &m.scalar == kind => Ok(rhs),
                 _ => Err(format!(
                     "if the left-hand-side operand to the `*` operator is a `{}` value, then the \
                     right-hand-side value must be a numeric scalar, vector or matrix of the same \
@@ -869,22 +886,19 @@ impl TypeRegistry {
                     rhs.to_string(self)
                 )),
             },
-            TypeKind::Vector { scalar, size } if scalar.is_numeric() => match &*self.kind(rhs) {
-                TypeKind::Scalar(kind) if scalar == kind => Ok(lhs),
-                TypeKind::Vector {
-                    scalar: other_scalar,
-                    size: other_size,
-                } if scalar == other_scalar && size == other_size => Ok(lhs),
-                TypeKind::Matrix {
-                    rows,
-                    columns,
-                    scalar: matrix_scalar,
-                } if scalar == matrix_scalar && size == rows => {
-                    Ok(self.register(TypeKind::Vector {
-                        scalar: *scalar,
-                        size: *columns,
-                    }))
+            TypeKind::Vector(v) if v.scalar.is_numeric() => match &*self.kind(rhs) {
+                TypeKind::Scalar(kind) if &v.scalar == kind => Ok(lhs),
+                TypeKind::Vector(other) if v.scalar == other.scalar && v.size == other.size => {
+                    Ok(lhs)
                 }
+                TypeKind::Matrix(m) if v.scalar == m.scalar && v.size == m.rows => Ok(self
+                    .register(
+                        Vector {
+                            scalar: v.scalar,
+                            size: m.columns,
+                        }
+                        .into(),
+                    )),
                 _ => Err(format!(
                     "if the left-hand-side operand to the `*` operator is a `{}` vector, then the \
                     right-hand-side value must be a vector of the same type, or a numeric scalar \
@@ -894,22 +908,25 @@ impl TypeRegistry {
                     rhs.to_string(self)
                 )),
             },
-            TypeKind::Matrix {
-                rows,
-                columns,
-                scalar,
-            } if scalar.is_numeric() => match &*self.kind(rhs) {
-                TypeKind::Scalar(kind) if scalar == kind => Ok(lhs),
-                TypeKind::Matrix {
-                    rows: other_rows,
-                    columns: other_columns,
-                    scalar: other_scalar,
-                } if columns == other_rows && scalar == other_scalar => {
-                    Ok(self.register(TypeKind::Matrix {
-                        rows: *rows,
-                        columns: *other_columns,
-                        scalar: *scalar,
-                    }))
+            TypeKind::Matrix(m) if m.scalar.is_numeric() => match &*self.kind(rhs) {
+                TypeKind::Scalar(kind) if &m.scalar == kind => Ok(lhs),
+                TypeKind::Vector(v) if m.scalar == v.scalar && m.columns == v.size => Ok(self
+                    .register(
+                        Vector {
+                            scalar: m.scalar,
+                            size: m.rows,
+                        }
+                        .into(),
+                    )),
+                TypeKind::Matrix(other) if m.columns == other.rows && m.scalar == other.scalar => {
+                    Ok(self.register(
+                        Matrix {
+                            rows: m.rows,
+                            columns: other.columns,
+                            scalar: m.scalar,
+                        }
+                        .into(),
+                    ))
                 }
                 _ => Err(format!(
                     "if the left-hand-side operand to the `*` operator is a `{}` matrix, then the \
@@ -937,8 +954,8 @@ impl TypeRegistry {
         match &*self.kind(lhs) {
             TypeKind::Scalar(kind) if kind.is_numeric() => match &*self.kind(rhs) {
                 TypeKind::Scalar(kind) if kind == kind => Ok(lhs),
-                TypeKind::Vector { scalar, .. } if scalar == kind => Ok(rhs),
-                TypeKind::Matrix { scalar, .. } if scalar == kind => Ok(rhs),
+                TypeKind::Vector(v) if &v.scalar == kind => Ok(rhs),
+                TypeKind::Matrix(m) if &m.scalar == kind => Ok(rhs),
                 _ => Err(format!(
                     "if the left-hand-side operand to the `{}` operator is a `{}` value, then the \
                     right-hand-side value must be a scalar or a vector of the same (element) type \
@@ -948,12 +965,11 @@ impl TypeRegistry {
                     rhs.to_string(self)
                 )),
             },
-            TypeKind::Vector { scalar, size } if scalar.is_numeric() => match &*self.kind(rhs) {
-                TypeKind::Scalar(kind) if scalar == kind => Ok(lhs),
-                TypeKind::Vector {
-                    scalar: other_scalar,
-                    size: other_size,
-                } if scalar == other_scalar && size == other_size => Ok(lhs),
+            TypeKind::Vector(v) if v.scalar.is_numeric() => match &*self.kind(rhs) {
+                TypeKind::Scalar(kind) if &v.scalar == kind => Ok(lhs),
+                TypeKind::Vector(other) if v.scalar == other.scalar && v.size == other.size => {
+                    Ok(lhs)
+                }
                 _ => Err(format!(
                     "if the left-hand-side operand to the `{}` operator is a `{}` vector, then the \
                     right-hand-side value must be a vector of the same type, or a numeric scalar \
@@ -988,11 +1004,11 @@ impl TypeRegistry {
                 ))
                 }
             }
-            TypeKind::Vector { scalar, size } if scalar.is_integer() => {
-                let expected_rhs = TypeKind::Vector {
-                    size: *size,
+            TypeKind::Vector(v) if v.scalar.is_integer() => {
+                let expected_rhs = TypeKind::Vector(Vector {
+                    size: v.size,
                     scalar: ScalarKind::U32,
-                };
+                });
 
                 if &*self.kind(rhs) == &expected_rhs {
                     Ok(lhs)
