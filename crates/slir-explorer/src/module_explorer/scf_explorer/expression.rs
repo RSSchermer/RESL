@@ -56,6 +56,26 @@ pub fn Expression(
             <Expression module expression=op.rhs() highlight />
         }
         .into_any(),
+        ExpressionKind::OpVector(op) => view! {
+            {op.vector_ty().to_string()}"("{
+                op.elements().iter().map(|e| view! {
+                    <Expression module expression=*e highlight />
+                }.into_any())
+                .intersperse_with(|| view! {", "}.into_any())
+                .collect_view()
+            }")"
+        }
+        .into_any(),
+        ExpressionKind::OpMatrix(op) => view! {
+            {op.matrix_ty().to_string()}"("{
+                op.columns().iter().map(|c| view! {
+                    <Expression module expression=*c highlight />
+                }.into_any())
+                .intersperse_with(|| view! {", "}.into_any())
+                .collect_view()
+            }")"
+        }
+        .into_any(),
         ExpressionKind::OpPtrElementPtr(op) => view! {
             "&"<Expression module expression=op.pointer() highlight />
 

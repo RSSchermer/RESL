@@ -9,7 +9,7 @@ use slotmap::SlotMap;
 use crate::builtin_function::BuiltinFunction;
 use crate::ty::{Type, TypeKind, TypeRegistry, TY_BOOL, TY_F32, TY_I32, TY_U32};
 use crate::{
-    BinaryOperator, Constant, ConstantRegistry, Function, Module, StorageBinding,
+    ty, BinaryOperator, Constant, ConstantRegistry, Function, Module, StorageBinding,
     StorageBindingRegistry, UnaryOperator, UniformBinding, UniformBindingRegistry,
     WorkgroupBinding, WorkgroupBindingRegistry,
 };
@@ -100,6 +100,38 @@ impl OpBinary {
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct OpVector {
+    vector_ty: ty::Vector,
+    elements: Vec<Expression>,
+}
+
+impl OpVector {
+    pub fn vector_ty(&self) -> &ty::Vector {
+        &self.vector_ty
+    }
+
+    pub fn elements(&self) -> &[Expression] {
+        &self.elements
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct OpMatrix {
+    matrix_ty: ty::Matrix,
+    columns: Vec<Expression>,
+}
+
+impl OpMatrix {
+    pub fn matrix_ty(&self) -> &ty::Matrix {
+        &self.matrix_ty
+    }
+
+    pub fn columns(&self) -> &[Expression] {
+        &self.columns
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct OpPtrElementPtr {
     pointer: Expression,
     indices: Vec<Expression>,
@@ -178,6 +210,8 @@ pub enum ExpressionKind {
     ConstPtr(Expression),
     OpUnary(OpUnary),
     OpBinary(OpBinary),
+    OpVector(OpVector),
+    OpMatrix(OpMatrix),
     OpPtrElementPtr(OpPtrElementPtr),
     OpExtractElement(OpExtractElement),
     OpLoad(Expression),
@@ -280,6 +314,22 @@ impl ExpressionKind {
             op
         } else {
             panic!("expected a binary operation expression");
+        }
+    }
+
+    pub fn expect_op_vector(&self) -> &OpVector {
+        if let ExpressionKind::OpVector(op) = self {
+            op
+        } else {
+            panic!("expected a vector operation expression");
+        }
+    }
+
+    pub fn expect_op_matrix(&self) -> &OpMatrix {
+        if let ExpressionKind::OpMatrix(op) = self {
+            op
+        } else {
+            panic!("expected a matrix operation expression");
         }
     }
 
@@ -951,6 +1001,131 @@ impl Scf {
         self.expressions.insert(ExpressionData {
             ty,
             kind: ExpressionKind::OpBinary(OpBinary { operator, lhs, rhs }),
+        })
+    }
+
+    pub fn make_expr_op_vector(
+        &mut self,
+        vector_ty: ty::Vector,
+        elements: impl IntoIterator<Item = Expression>,
+    ) -> Expression {
+        let size = vector_ty.size.to_usize();
+
+        let mut collected_elements = Vec::with_capacity(size);
+        let mut iter = elements.into_iter();
+
+        for i in 0..size {
+            let Some(expr) = iter.next() else {
+                panic!(
+                    "expected at least {} elements for a vector of type `{}` (found only {})",
+                    size, vector_ty, i
+                );
+            };
+
+            let ty = self[expr].ty();
+
+            let TypeKind::Scalar(s) = *self.ty().kind(ty) else {
+                panic!(
+                    "expected all vector element inputs to be `{}` values (element `{}` was of \
+                    type `{}`)",
+                    vector_ty.scalar,
+                    i,
+                    ty.to_string(self.ty())
+                );
+            };
+
+            if s != vector_ty.scalar {
+                panic!(
+                    "expected all vector element inputs to be `{}` values (element `{}` was of \
+                    type `{}`)",
+                    vector_ty.scalar,
+                    i,
+                    ty.to_string(self.ty())
+                );
+            }
+
+            collected_elements.push(expr);
+        }
+
+        if let Some(_) = iter.next() {
+            panic!(
+                "expected only {} elements for a vector of type `{}`, but more were provided",
+                size, vector_ty
+            );
+        }
+
+        let ty = self.ty().register(TypeKind::Vector(vector_ty));
+
+        self.expressions.insert(ExpressionData {
+            ty,
+            kind: ExpressionKind::OpVector(OpVector {
+                vector_ty,
+                elements: collected_elements,
+            }),
+        })
+    }
+
+    pub fn make_expr_op_matrix(
+        &mut self,
+        matrix_ty: ty::Matrix,
+        columns: impl IntoIterator<Item = Expression>,
+    ) -> Expression {
+        let size = matrix_ty.columns.to_usize();
+
+        let expected_vector_ty = ty::Vector {
+            scalar: matrix_ty.scalar,
+            size: matrix_ty.rows,
+        };
+
+        let mut collected_columns = Vec::with_capacity(size);
+        let mut iter = columns.into_iter();
+
+        for i in 0..size {
+            let Some(expr) = iter.next() else {
+                panic!(
+                    "expected at least {} columns for a matrix of type `{}` (found only {})",
+                    size, matrix_ty, i
+                );
+            };
+
+            let ty = self[expr].ty();
+
+            let TypeKind::Vector(v) = *self.ty().kind(ty) else {
+                panic!(
+                    "expected all column inputs to be `{}` values (element `{}` was of type `{}`)",
+                    expected_vector_ty,
+                    i,
+                    ty.to_string(self.ty())
+                );
+            };
+
+            if v != expected_vector_ty {
+                panic!(
+                    "expected all column inputs to be `{}` values (element `{}` was of type `{}`)",
+                    expected_vector_ty,
+                    i,
+                    ty.to_string(self.ty())
+                );
+            }
+
+            collected_columns.push(expr);
+        }
+
+        if let Some(_) = iter.next() {
+            panic!(
+                "expected only {} columns for a matrix of type `{}`, but more were provided",
+                size, matrix_ty
+            );
+        }
+
+        let ty = self.ty().register(TypeKind::Matrix(matrix_ty));
+
+        self.expressions.insert(ExpressionData {
+            ty,
+            kind: ExpressionKind::OpMatrix(OpMatrix {
+                matrix_ty,
+                columns: collected_columns,
+            }),
         })
     }
 

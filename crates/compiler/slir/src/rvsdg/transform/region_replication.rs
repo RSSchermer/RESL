@@ -11,7 +11,8 @@ use crate::rvsdg::SimpleNode::{
     OpU32ToSwitchPredicate, OpUnary, Reaggregation, ValueProxy,
 };
 use crate::rvsdg::{
-    Connectivity, Node, Region, Rvsdg, StateOrigin, ValueInput, ValueOrigin, ValueOutput,
+    Connectivity, Node, OpMatrix, OpVector, Region, Rvsdg, StateOrigin, ValueInput, ValueOrigin,
+    ValueOutput,
 };
 use crate::Module;
 
@@ -153,6 +154,8 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
             Simple(OpCallBuiltin(_)) => self.replicate_op_call_builtin_node(node),
             Simple(OpUnary(_)) => self.replicate_op_unary_node(node),
             Simple(OpBinary(_)) => self.replicate_op_binary_node(node),
+            Simple(OpVector(_)) => self.replicate_op_vector_node(node),
+            Simple(OpMatrix(_)) => self.replicate_op_matrix_node(node),
             Simple(OpCaseToSwitchPredicate(_)) => {
                 self.replicate_op_case_to_switch_predicate_node(node)
             }
@@ -470,6 +473,30 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
 
         self.rvsdg
             .add_op_binary(self.dst_region, operator, lhs_input, rhs_input)
+    }
+
+    fn replicate_op_vector_node(&mut self, node: Node) -> Node {
+        let data = self.rvsdg[node].expect_op_vector();
+        let vector_ty = *data.vector_ty();
+        let inputs = data
+            .value_inputs()
+            .iter()
+            .map(|input| self.mapped_value_input(input))
+            .collect::<Vec<_>>();
+
+        self.rvsdg.add_op_vector(self.dst_region, vector_ty, inputs)
+    }
+
+    fn replicate_op_matrix_node(&mut self, node: Node) -> Node {
+        let data = self.rvsdg[node].expect_op_matrix();
+        let matrix_ty = *data.matrix_ty();
+        let inputs = data
+            .value_inputs()
+            .iter()
+            .map(|input| self.mapped_value_input(input))
+            .collect::<Vec<_>>();
+
+        self.rvsdg.add_op_matrix(self.dst_region, matrix_ty, inputs)
     }
 
     fn replicate_op_case_to_switch_predicate_node(&mut self, node: Node) -> Node {

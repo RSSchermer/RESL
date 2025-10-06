@@ -183,6 +183,8 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
             OpExtractElement(_) => self.visit_op_extract_element(node),
             OpUnary(_) => self.visit_op_unary(node),
             OpBinary(_) => self.visit_op_binary(node),
+            OpVector(_) => self.visit_op_vector(node),
+            OpMatrix(_) => self.visit_op_matrix(node),
             OpCaseToSwitchPredicate(_) => self.visit_op_case_to_switch_predicate(node),
             OpBoolToSwitchPredicate(_) => self.visit_op_bool_to_switch_predicate(node),
             OpU32ToSwitchPredicate(_) => self.visit_op_u32_to_switch_predicate(node),
@@ -308,6 +310,30 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
         let expr = self
             .scf
             .make_expr_op_binary(data.operator(), lhs_expr, rhs_expr);
+
+        self.bind_and_map_expr(node, 0, expr);
+    }
+
+    fn visit_op_vector(&mut self, node: rvsdg::Node) {
+        let data = self.rvsdg[node].expect_op_vector();
+        let vector_ty = *data.vector_ty();
+        let elements = data
+            .inputs()
+            .iter()
+            .map(|i| self.value_mapping.mapping(i.origin));
+        let expr = self.scf.make_expr_op_vector(vector_ty, elements);
+
+        self.bind_and_map_expr(node, 0, expr);
+    }
+
+    fn visit_op_matrix(&mut self, node: rvsdg::Node) {
+        let data = self.rvsdg[node].expect_op_matrix();
+        let matrix_ty = *data.matrix_ty();
+        let columns = data
+            .inputs()
+            .iter()
+            .map(|i| self.value_mapping.mapping(i.origin));
+        let expr = self.scf.make_expr_op_matrix(matrix_ty, columns);
 
         self.bind_and_map_expr(node, 0, expr);
     }

@@ -13,7 +13,7 @@ use crate::ty::{
 };
 use crate::util::thin_set::ThinSet;
 use crate::{
-    thin_set, BinaryOperator, Constant, Function, Module, StorageBinding, UnaryOperator,
+    thin_set, ty, BinaryOperator, Constant, Function, Module, StorageBinding, UnaryOperator,
     UniformBinding, WorkgroupBinding,
 };
 
@@ -630,6 +630,30 @@ impl NodeData {
             op
         } else {
             panic!("expected node to be a `binary` operation")
+        }
+    }
+
+    pub fn is_op_vector(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::OpVector(_)))
+    }
+
+    pub fn expect_op_vector(&self) -> &OpVector {
+        if let NodeKind::Simple(SimpleNode::OpVector(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be a `vector` operation")
+        }
+    }
+
+    pub fn is_op_matrix(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::OpMatrix(_)))
+    }
+
+    pub fn expect_op_matrix(&self) -> &OpMatrix {
+        if let NodeKind::Simple(SimpleNode::OpMatrix(op)) = &self.kind {
+            op
+        } else {
+            panic!("expected node to be a `matrix` operation")
         }
     }
 
@@ -1780,6 +1804,100 @@ impl Connectivity for OpBinary {
     }
 }
 
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OpVector {
+    vector_ty: ty::Vector,
+    inputs: Vec<ValueInput>,
+    output: ValueOutput,
+}
+
+impl OpVector {
+    pub fn vector_ty(&self) -> &ty::Vector {
+        &self.vector_ty
+    }
+
+    pub fn inputs(&self) -> &[ValueInput] {
+        &self.inputs
+    }
+
+    pub fn output(&self) -> &ValueOutput {
+        &self.output
+    }
+}
+
+impl Connectivity for OpVector {
+    fn value_inputs(&self) -> &[ValueInput] {
+        &self.inputs
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        &mut self.inputs
+    }
+
+    fn value_outputs(&self) -> &[ValueOutput] {
+        slice::from_ref(&self.output)
+    }
+
+    fn value_outputs_mut(&mut self) -> &mut [ValueOutput] {
+        slice::from_mut(&mut self.output)
+    }
+
+    fn state(&self) -> Option<&State> {
+        None
+    }
+
+    fn state_mut(&mut self) -> Option<&mut State> {
+        None
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OpMatrix {
+    matrix_ty: ty::Matrix,
+    inputs: Vec<ValueInput>,
+    output: ValueOutput,
+}
+
+impl OpMatrix {
+    pub fn matrix_ty(&self) -> &ty::Matrix {
+        &self.matrix_ty
+    }
+
+    pub fn inputs(&self) -> &[ValueInput] {
+        &self.inputs
+    }
+
+    pub fn output(&self) -> &ValueOutput {
+        &self.output
+    }
+}
+
+impl Connectivity for OpMatrix {
+    fn value_inputs(&self) -> &[ValueInput] {
+        &self.inputs
+    }
+
+    fn value_inputs_mut(&mut self) -> &mut [ValueInput] {
+        &mut self.inputs
+    }
+
+    fn value_outputs(&self) -> &[ValueOutput] {
+        slice::from_ref(&self.output)
+    }
+
+    fn value_outputs_mut(&mut self) -> &mut [ValueOutput] {
+        slice::from_mut(&mut self.output)
+    }
+
+    fn state(&self) -> Option<&State> {
+        None
+    }
+
+    fn state_mut(&mut self) -> Option<&mut State> {
+        None
+    }
+}
+
 macro_rules! gen_const_nodes {
     ($($name:ident: $ty:ident,)*) => {
         $(
@@ -2300,6 +2418,8 @@ gen_simple_node! {
     OpCallBuiltin,
     OpUnary,
     OpBinary,
+    OpVector,
+    OpMatrix,
     OpCaseToSwitchPredicate,
     OpBoolToSwitchPredicate,
     OpU32ToSwitchPredicate,
@@ -3462,6 +3582,149 @@ impl Rvsdg {
                 OpBinary {
                     operator,
                     inputs: [lhs_input, rhs_input],
+                    output: ValueOutput::new(output_ty),
+                }
+                .into(),
+            ),
+            region: Some(region),
+        });
+
+        self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
+
+        node
+    }
+
+    pub fn add_op_vector(
+        &mut self,
+        region: Region,
+        vector_ty: ty::Vector,
+        inputs: impl IntoIterator<Item = ValueInput>,
+    ) -> Node {
+        let size = vector_ty.size.to_usize();
+        let mut elements = Vec::with_capacity(size);
+        let mut iter = inputs.into_iter();
+
+        for i in 0..size {
+            let Some(input) = iter.next() else {
+                panic!(
+                    "expected at least {} elements for a vector of type `{}` (found only {})",
+                    size, vector_ty, i
+                );
+            };
+
+            self.validate_node_value_input(region, &input);
+
+            let TypeKind::Scalar(s) = *self.ty().kind(input.ty) else {
+                panic!(
+                    "expected all vector element inputs to be `{}` values (element `{}` was of \
+                    type `{}`)",
+                    vector_ty.scalar,
+                    i,
+                    input.ty.to_string(self.ty())
+                );
+            };
+
+            if s != vector_ty.scalar {
+                panic!(
+                    "expected all vector element inputs to be `{}` values (element `{}` was of \
+                    type `{}`)",
+                    vector_ty.scalar,
+                    i,
+                    input.ty.to_string(self.ty())
+                );
+            }
+
+            elements.push(input);
+        }
+
+        if let Some(_) = iter.next() {
+            panic!(
+                "expected only {} elements for a vector of type `{}`, but more were provided",
+                size, vector_ty
+            );
+        }
+
+        let output_ty = self.ty().register(TypeKind::Vector(vector_ty));
+
+        let node = self.nodes.insert(NodeData {
+            kind: NodeKind::Simple(
+                OpVector {
+                    vector_ty,
+                    inputs: elements,
+                    output: ValueOutput::new(output_ty),
+                }
+                .into(),
+            ),
+            region: Some(region),
+        });
+
+        self.regions[region].nodes.insert(node);
+        self.connect_node_value_inputs(node);
+
+        node
+    }
+
+    pub fn add_op_matrix(
+        &mut self,
+        region: Region,
+        matrix_ty: ty::Matrix,
+        inputs: impl IntoIterator<Item = ValueInput>,
+    ) -> Node {
+        let columns = matrix_ty.columns.to_usize();
+        let expected_vector_ty = ty::Vector {
+            scalar: matrix_ty.scalar,
+            size: matrix_ty.rows,
+        };
+
+        let mut collected_inputs = Vec::with_capacity(columns);
+        let mut iter = inputs.into_iter();
+
+        for i in 0..columns {
+            let Some(input) = iter.next() else {
+                panic!(
+                    "expected at least {} columns for a matrix of type `{}` (found only {})",
+                    columns, matrix_ty, i
+                );
+            };
+
+            self.validate_node_value_input(region, &input);
+
+            let TypeKind::Vector(v) = *self.ty().kind(input.ty) else {
+                panic!(
+                    "expected all column inputs to be `{}` values (element `{}` was of type `{}`)",
+                    expected_vector_ty,
+                    i,
+                    input.ty.to_string(self.ty())
+                );
+            };
+
+            if v != expected_vector_ty {
+                panic!(
+                    "expected all column inputs to be `{}` values (element `{}` was of type `{}`)",
+                    expected_vector_ty,
+                    i,
+                    input.ty.to_string(self.ty())
+                );
+            }
+
+            collected_inputs.push(input);
+        }
+
+        if let Some(_) = iter.next() {
+            panic!(
+                "expected only {} columns for a matrix of type `{}`, but more were provided",
+                columns, matrix_ty
+            );
+        }
+
+        let output_ty = self.ty().register(TypeKind::Matrix(matrix_ty));
+
+        let node = self.nodes.insert(NodeData {
+            kind: NodeKind::Simple(
+                OpMatrix {
+                    matrix_ty,
+                    inputs: collected_inputs,
                     output: ValueOutput::new(output_ty),
                 }
                 .into(),

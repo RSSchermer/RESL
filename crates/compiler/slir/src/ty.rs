@@ -302,6 +302,14 @@ impl VectorSize {
             VectorSize::Four => 4,
         }
     }
+
+    pub fn to_usize(&self) -> usize {
+        match self {
+            VectorSize::Two => 2,
+            VectorSize::Three => 3,
+            VectorSize::Four => 4,
+        }
+    }
 }
 
 pub const TY_KIND_U32: TypeKind = TypeKind::Scalar(ScalarKind::U32);
