@@ -75,6 +75,92 @@ pub struct Vector {
     pub size: VectorSize,
 }
 
+impl Vector {
+    pub fn vec2_f32() -> Vector {
+        Vector {
+            scalar: ScalarKind::F32,
+            size: VectorSize::Two,
+        }
+    }
+
+    pub fn vec2_u32() -> Vector {
+        Vector {
+            scalar: ScalarKind::U32,
+            size: VectorSize::Two,
+        }
+    }
+
+    pub fn vec2_i32() -> Vector {
+        Vector {
+            scalar: ScalarKind::I32,
+            size: VectorSize::Two,
+        }
+    }
+
+    pub fn vec2_bool() -> Vector {
+        Vector {
+            scalar: ScalarKind::Bool,
+            size: VectorSize::Two,
+        }
+    }
+
+    pub fn vec3_f32() -> Vector {
+        Vector {
+            scalar: ScalarKind::F32,
+            size: VectorSize::Three,
+        }
+    }
+
+    pub fn vec3_u32() -> Vector {
+        Vector {
+            scalar: ScalarKind::U32,
+            size: VectorSize::Three,
+        }
+    }
+
+    pub fn vec3_i32() -> Vector {
+        Vector {
+            scalar: ScalarKind::I32,
+            size: VectorSize::Three,
+        }
+    }
+
+    pub fn vec3_bool() -> Vector {
+        Vector {
+            scalar: ScalarKind::Bool,
+            size: VectorSize::Three,
+        }
+    }
+
+    pub fn vec4_f32() -> Vector {
+        Vector {
+            scalar: ScalarKind::F32,
+            size: VectorSize::Four,
+        }
+    }
+
+    pub fn vec4_u32() -> Vector {
+        Vector {
+            scalar: ScalarKind::U32,
+            size: VectorSize::Four,
+        }
+    }
+
+    pub fn vec4_i32() -> Vector {
+        Vector {
+            scalar: ScalarKind::I32,
+            size: VectorSize::Four,
+        }
+    }
+
+    pub fn vec4_bool() -> Vector {
+        Vector {
+            scalar: ScalarKind::Bool,
+            size: VectorSize::Four,
+        }
+    }
+}
+
 impl fmt::Display for Vector {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.size {
@@ -150,6 +236,30 @@ impl TypeKind {
             scalar
         } else {
             panic!("not a scalar type");
+        }
+    }
+
+    pub fn is_vector(&self) -> bool {
+        matches!(self, TypeKind::Vector(_))
+    }
+
+    pub fn expect_vector(&self) -> &Vector {
+        if let TypeKind::Vector(v) = self {
+            v
+        } else {
+            panic!("not a vector type");
+        }
+    }
+
+    pub fn is_matrix(&self) -> bool {
+        matches!(self, TypeKind::Matrix(_))
+    }
+
+    pub fn expect_matrix(&self) -> &Matrix {
+        if let TypeKind::Matrix(m) = self {
+            m
+        } else {
+            panic!("not a matrix type");
         }
     }
 

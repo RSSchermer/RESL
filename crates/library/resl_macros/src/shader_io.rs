@@ -45,13 +45,13 @@ fn adjust_field(field: &mut Field) {
 ///
 /// For example:
 ///
-/// ```
+/// ```pseudocode
 /// location(0)
 /// ```
 ///
 /// Becomes:
 ///
-/// ```
+/// ```pseudocode
 /// cfg_attr(reslc, reslc::location(0))
 /// ```
 fn adjust_meta(meta: &mut Meta) {

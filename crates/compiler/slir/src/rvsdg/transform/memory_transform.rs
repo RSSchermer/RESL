@@ -29,12 +29,24 @@ impl MemoryTransformer {
         let mut iterations = 0;
         const MAX_ITERATIONS: usize = 32;
 
-        while iterations < MAX_ITERATIONS && region_replacement_cx.replace(rvsdg) {
-            region_eliminate_proxy_nodes(rvsdg, body_region);
-            self.promoter_legalizer
-                .promote_and_legalize(rvsdg, body_region);
+        loop {
+            if iterations >= MAX_ITERATIONS {
+                break;
+            }
 
-            iterations += 1;
+            let did_replace = region_replacement_cx.replace(rvsdg);
+
+            // We run the promoter-legalizer at least once (on the first iteration) and then as
+            // often as we keep replacing aggregate alloca nodes.
+            if iterations == 0 || did_replace {
+                region_eliminate_proxy_nodes(rvsdg, body_region);
+                self.promoter_legalizer
+                    .promote_and_legalize(rvsdg, body_region);
+
+                iterations += 1;
+            } else {
+                break;
+            }
         }
     }
 }

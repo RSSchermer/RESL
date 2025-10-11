@@ -239,7 +239,7 @@ pub fn Store(
     view! {
         "*"<Expression module expression=stmt.pointer() highlight />
         " = "
-        <Expression module expression=stmt.value() highlight />";"<br/>
+        <Expression module expression=stmt.value() highlight />";"
     }
 }
 

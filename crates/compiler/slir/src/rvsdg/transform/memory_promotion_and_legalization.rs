@@ -5,13 +5,91 @@ use slotmap::KeyData;
 use crate::cfg::OpAlloca;
 use crate::rvsdg::transform::variable_pointer_emulation::EmulationContext;
 use crate::rvsdg::visit::reverse_value_flow::ReverseValueFlowVisitor;
+use crate::rvsdg::visit::value_flow::ValueFlowVisitor;
 use crate::rvsdg::NodeKind::{Loop, Switch};
 use crate::rvsdg::{
     visit, Connectivity, Node, NodeKind, Region, Rvsdg, SimpleNode, StateOrigin, StateUser,
     ValueInput, ValueOrigin, ValueUser,
 };
-use crate::ty::TypeRegistry;
+use crate::ty::{TypeKind, TypeRegistry};
 use crate::Module;
+
+#[derive(Debug)]
+struct AggregateAnalyzer {
+    cache: FxHashMap<Node, bool>,
+    visited: FxHashSet<(Region, ValueUser)>,
+    is_aggregate: bool,
+}
+
+impl AggregateAnalyzer {
+    fn new() -> Self {
+        AggregateAnalyzer {
+            cache: Default::default(),
+            visited: Default::default(),
+            is_aggregate: false,
+        }
+    }
+
+    fn is_aggregate(&mut self, rvsdg: &Rvsdg, alloca_node: Node) -> bool {
+        let alloca_ty = rvsdg[alloca_node].expect_op_alloca().ty();
+
+        match &*rvsdg.ty().kind(alloca_ty) {
+            TypeKind::Struct(_) | TypeKind::Array { .. } | TypeKind::Enum(_) => true,
+            TypeKind::Scalar(_) | TypeKind::Ptr(_) | TypeKind::Predicate => false,
+            TypeKind::Vector(_) | TypeKind::Matrix(_) => {
+                // We treat vectors and matrices as promotable scalars if they are only stored to or
+                // loaded from "in whole", that is, not via element pointers to individual elements.
+                // Otherwise, we treat them as aggregates. We'll run a value-flow analysis to check
+                // if the alloca pointer is only every used as the pointer input to a load or store,
+                // or passed through switch or loop nodes. Since we may end up analyzing the same
+                // alloca node multiple times, and this is a relatively expensive operation, we
+                // cache the result. Note that the memory-promotion pass is iterative and each
+                // subsequent will invalidate the cache, so the cache must be cleared at the start
+                // of each iteration.
+
+                if let Some(cached) = self.cache.get(&alloca_node).copied() {
+                    return cached;
+                }
+
+                self.visited.clear();
+                self.is_aggregate = false;
+
+                self.visit_value_output(rvsdg, alloca_node, 0);
+                self.cache.insert(alloca_node, self.is_aggregate);
+
+                self.is_aggregate
+            }
+            TypeKind::Atomic(_)
+            | TypeKind::Slice { .. }
+            | TypeKind::Function(_)
+            | TypeKind::Dummy => unreachable!("type cannot be stored in an alloca"),
+        }
+    }
+
+    fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+}
+
+impl ValueFlowVisitor for AggregateAnalyzer {
+    fn should_visit(&mut self, region: Region, user: ValueUser) -> bool {
+        self.visited.insert((region, user))
+    }
+
+    fn visit_value_input(&mut self, rvsdg: &Rvsdg, node: Node, input: u32) {
+        use NodeKind::*;
+        use SimpleNode::*;
+
+        match rvsdg[node].kind() {
+            Switch(_) | Loop(_) | Simple(OpLoad(_)) | Simple(OpStore(_)) if input == 0 => {
+                visit::value_flow::visit_value_input(self, rvsdg, node, input);
+            }
+            _ => {
+                self.is_aggregate = true;
+            }
+        }
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PointerAction {
@@ -59,11 +137,14 @@ impl PointerAnalyzer {
 
     fn clear_cache(&mut self) {
         self.cache.clear();
+        self.visitor.aggregate_analyzer.clear_cache();
     }
 }
 
+#[derive(Debug)]
 pub struct PointerOriginVisitor {
     visited: FxHashSet<(Region, ValueOrigin)>,
+    aggregate_analyzer: AggregateAnalyzer,
     promotion_candidate: Option<Node>,
     can_promote: bool,
     needs_emulation: bool,
@@ -74,6 +155,7 @@ impl PointerOriginVisitor {
     fn new() -> Self {
         PointerOriginVisitor {
             visited: Default::default(),
+            aggregate_analyzer: AggregateAnalyzer::new(),
             promotion_candidate: None,
             can_promote: true,
             needs_emulation: false,
@@ -123,9 +205,9 @@ impl ReverseValueFlowVisitor for PointerOriginVisitor {
 
                 visit::reverse_value_flow::visit_value_output(self, rvsdg, node, output);
             }
-            Simple(OpAlloca(op)) => {
+            Simple(OpAlloca(_)) => {
                 self.promotion_candidate = Some(node);
-                self.can_promote &= !rvsdg.ty().kind(op.ty()).is_aggregate();
+                self.can_promote &= !self.aggregate_analyzer.is_aggregate(rvsdg, node);
             }
             Simple(OpPtrElementPtr(_)) => {
                 self.can_promote = false;
@@ -633,8 +715,8 @@ mod tests {
 
     use super::*;
     use crate::rvsdg::ValueOutput;
-    use crate::ty::{TypeKind, TY_DUMMY, TY_PREDICATE, TY_U32};
-    use crate::{thin_set, BinaryOperator, FnArg, FnSig, Function, Module, Symbol};
+    use crate::ty::{TypeKind, TY_DUMMY, TY_F32, TY_PREDICATE, TY_U32, TY_VEC2_F32};
+    use crate::{thin_set, ty, BinaryOperator, FnArg, FnSig, Function, Module, Symbol};
 
     #[test]
     fn test_promote_store_then_load_then_store_then_load() {
@@ -850,6 +932,205 @@ mod tests {
         assert!(
             !rvsdg.is_live_node(load_node),
             "the load node should be removed after promotion"
+        );
+    }
+
+    #[test]
+    fn test_promote_store_vector_then_load_vector() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_F32,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_F32,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: Some(TY_VEC2_F32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let ptr_ty = module.ty.register(TypeKind::Ptr(TY_VEC2_F32));
+
+        let alloca_node = rvsdg.add_op_alloca(region, TY_VEC2_F32);
+        let vector_node = rvsdg.add_op_vector(
+            region,
+            ty::Vector::vec2_f32(),
+            [
+                ValueInput::argument(TY_F32, 0),
+                ValueInput::argument(TY_F32, 1),
+            ],
+        );
+        let store_node = rvsdg.add_op_store(
+            region,
+            ValueInput::output(ptr_ty, alloca_node, 0),
+            ValueInput::output(TY_VEC2_F32, vector_node, 0),
+            StateOrigin::Argument,
+        );
+        let load_node = rvsdg.add_op_load(
+            region,
+            ValueInput::output(ptr_ty, alloca_node, 0),
+            TY_U32,
+            StateOrigin::Node(store_node),
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: load_node,
+                output: 0,
+            },
+        );
+
+        let mut promoter_legalizer = MemoryPromoterLegalizer::new();
+
+        promoter_legalizer.promote_and_legalize(&mut rvsdg, region);
+
+        assert_eq!(
+            rvsdg[region].value_results()[0].origin,
+            ValueOrigin::Output {
+                producer: vector_node,
+                output: 0
+            },
+            "the region result should connect directly to the vector node"
+        );
+        assert!(
+            rvsdg[alloca_node]
+                .expect_op_alloca()
+                .value_output()
+                .users
+                .is_empty(),
+            "the alloca node's output should no longer have any users after promotion"
+        );
+        assert!(
+            !rvsdg.is_live_node(store_node),
+            "the store node should be removed after promotion"
+        );
+        assert!(
+            !rvsdg.is_live_node(load_node),
+            "the load node should be removed after promotion"
+        );
+    }
+
+    #[test]
+    fn test_do_not_promote_store_vector_then_load_vector_with_partial_vector_store() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![
+                    FnArg {
+                        ty: TY_F32,
+                        shader_io_binding: None,
+                    },
+                    FnArg {
+                        ty: TY_F32,
+                        shader_io_binding: None,
+                    },
+                ],
+                ret_ty: Some(TY_VEC2_F32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let ptr_ty = module.ty.register(TypeKind::Ptr(TY_VEC2_F32));
+        let element_ptr_ty = module.ty.register(TypeKind::Ptr(TY_F32));
+
+        let alloca_node = rvsdg.add_op_alloca(region, TY_VEC2_F32);
+        let vector_node = rvsdg.add_op_vector(
+            region,
+            ty::Vector::vec2_f32(),
+            [
+                ValueInput::argument(TY_F32, 0),
+                ValueInput::argument(TY_F32, 1),
+            ],
+        );
+        let store_node = rvsdg.add_op_store(
+            region,
+            ValueInput::output(ptr_ty, alloca_node, 0),
+            ValueInput::output(TY_VEC2_F32, vector_node, 0),
+            StateOrigin::Argument,
+        );
+        let load_node = rvsdg.add_op_load(
+            region,
+            ValueInput::output(ptr_ty, alloca_node, 0),
+            TY_U32,
+            StateOrigin::Node(store_node),
+        );
+        let element_index_node = rvsdg.add_const_u32(region, 0);
+        let element_ptr_node = rvsdg.add_op_ptr_element_ptr(
+            region,
+            TY_F32,
+            ValueInput::output(ptr_ty, alloca_node, 0),
+            [ValueInput::output(TY_U32, element_index_node, 0)],
+        );
+        let element_value_node = rvsdg.add_const_f32(region, 1.0);
+        let element_store_node = rvsdg.add_op_store(
+            region,
+            ValueInput::output(element_ptr_ty, element_ptr_node, 0),
+            ValueInput::output(TY_F32, element_value_node, 0),
+            StateOrigin::Node(load_node),
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: load_node,
+                output: 0,
+            },
+        );
+
+        let mut promoter_legalizer = MemoryPromoterLegalizer::new();
+
+        promoter_legalizer.promote_and_legalize(&mut rvsdg, region);
+
+        assert!(
+            rvsdg.is_live_node(store_node),
+            "the store node should still be alive"
+        );
+        assert!(
+            rvsdg.is_live_node(load_node),
+            "the load node should still be alive"
+        );
+        assert!(
+            rvsdg.is_live_node(element_store_node),
+            "the element-store node should still be alive"
+        );
+        assert_eq!(
+            rvsdg[region].value_results()[0].origin,
+            ValueOrigin::Output {
+                producer: load_node,
+                output: 0
+            },
+            "the region result should still connect to the load node"
         );
     }
 

@@ -43,10 +43,14 @@ pub fn visit_value_origin<V: ReverseValueFlowVisitor>(
     region: Region,
     origin: ValueOrigin,
 ) {
-    match origin {
-        ValueOrigin::Argument(argument) => visitor.visit_region_argument(rvsdg, region, argument),
-        ValueOrigin::Output { producer, output } => {
-            visitor.visit_value_output(rvsdg, producer, output)
+    if visitor.should_visit(region, origin) {
+        match origin {
+            ValueOrigin::Argument(argument) => {
+                visitor.visit_region_argument(rvsdg, region, argument)
+            }
+            ValueOrigin::Output { producer, output } => {
+                visitor.visit_value_output(rvsdg, producer, output)
+            }
         }
     }
 }
