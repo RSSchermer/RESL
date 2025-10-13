@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 arrayvec = { workspace = true }
+delegate = { workspace = true }
 indexmap = { workspace = true, features = ["serde"] }
 index_vec = { workspace = true, features = ["serde"] }
 internment = { workspace = true, features = ["arena", "serde"] }

@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use rustc_hash::FxHashMap;
 
 use crate::rvsdg::analyse::region_stratification::RegionStratifier;
-use crate::rvsdg::{Connectivity, Rvsdg, ValueOrigin};
+use crate::rvsdg::{Connectivity, NodeKind, Rvsdg, SimpleNode, ValueOrigin};
 use crate::scf::{BlockPosition, Expression, LoopControl, Scf};
 use crate::{rvsdg, scf, Function, Module};
 
@@ -79,8 +79,77 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
     }
 
     fn visit_switch_node(&mut self, node: rvsdg::Node) {
+        use NodeKind::*;
+        use SimpleNode::*;
+
         let data = self.rvsdg[node].expect_switch();
-        let on = self.value_mapping.mapping(data.predicate().origin);
+        let predicate_origin = data.predicate().origin;
+        let predicate_expr = self.value_mapping.mapping(predicate_origin);
+
+        match predicate_origin {
+            ValueOrigin::Argument(_) => {
+                self.generate_switch(node, predicate_expr, None);
+            }
+            ValueOrigin::Output { producer, .. } => match self.rvsdg[producer].kind() {
+                Simple(OpCaseToSwitchPredicate(op)) => {
+                    self.generate_switch(node, predicate_expr, Some(op.cases()));
+                }
+                Simple(OpBoolToSwitchPredicate(_)) => {
+                    self.generate_if(node, predicate_expr);
+                }
+                Simple(OpU32ToSwitchPredicate(_)) => {
+                    self.generate_switch(node, predicate_expr, None);
+                }
+                _ => panic!(
+                    "a switch node's predicate input must directly connect to a \
+                        predicate-generating operation before conversion to SCF"
+                ),
+            },
+        };
+    }
+
+    fn generate_if(&mut self, switch_node: rvsdg::Node, condition: scf::Expression) {
+        let data = self.rvsdg[switch_node].expect_switch();
+
+        assert_eq!(data.branches().len(), 2);
+
+        let then_branch = data.branches()[0];
+        let else_branch = data.branches()[1];
+
+        let (if_stmt, then_block) =
+            self.scf
+                .add_stmt_if(self.dst_block, BlockPosition::Append, condition);
+        let else_block = self.scf.add_else_block(if_stmt);
+
+        // Add out variables to the if statement and record them in the value mapping.
+        for (i, output) in data.value_outputs().iter().enumerate() {
+            let binding = self.scf.add_if_out_var(if_stmt, output.ty);
+            let expr = self.scf.make_expr_local_value(binding);
+
+            self.value_mapping.map_output(switch_node, i as u32, expr);
+        }
+
+        // Create an argument mapping. Since both the `then` and `else` branches receive the same
+        // arguments, we construct it once, then pass a clone to each branch region visitor.
+        let mut argument_mapping = ValueMapping::new();
+        for (arg, input) in data.value_inputs()[1..].iter().enumerate() {
+            let expr = self.value_mapping.mapping(input.origin);
+
+            argument_mapping.map_argument(arg as u32, expr);
+        }
+
+        self.generate_branch(then_branch, then_block, argument_mapping.clone());
+        self.generate_branch(else_branch, else_block, argument_mapping);
+    }
+
+    fn generate_switch(
+        &mut self,
+        switch_node: rvsdg::Node,
+        on: scf::Expression,
+        cases: Option<&[u32]>,
+    ) {
+        let data = self.rvsdg[switch_node].expect_switch();
+
         let switch_stmt = self
             .scf
             .add_stmt_switch(self.dst_block, BlockPosition::Append, on);
@@ -91,7 +160,7 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
             let binding = self.scf.add_switch_out_var(switch_stmt, output.ty);
             let expr = self.scf.make_expr_local_value(binding);
 
-            self.value_mapping.map_output(node, i as u32, expr);
+            self.value_mapping.map_output(switch_node, i as u32, expr);
         }
 
         // Create an argument mapping. Since each branch receives the same arguments, we construct
@@ -110,17 +179,28 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
             let branch_block = if is_last {
                 default_block
             } else {
-                self.scf.add_switch_case(switch_stmt, i as u32)
+                let case = cases.map(|cases| cases[i]).unwrap_or(i as u32);
+
+                self.scf.add_switch_case(switch_stmt, case)
             };
 
-            let sub_region_mapping =
-                self.visit_sub_region(branch, branch_block, argument_mapping.clone());
+            self.generate_branch(branch, branch_block, argument_mapping.clone());
+        }
+    }
 
-            for (res, input) in self.rvsdg[branch].value_results().iter().enumerate() {
-                let expr = sub_region_mapping.mapping(input.origin);
+    fn generate_branch(
+        &mut self,
+        branch_region: rvsdg::Region,
+        branch_block: scf::Block,
+        argument_mapping: ValueMapping,
+    ) {
+        let sub_region_mapping =
+            self.visit_sub_region(branch_region, branch_block, argument_mapping);
 
-                self.scf.set_control_flow_var(branch_block, res, expr);
-            }
+        for (res, input) in self.rvsdg[branch_region].value_results().iter().enumerate() {
+            let expr = sub_region_mapping.mapping(input.origin);
+
+            self.scf.set_control_flow_var(branch_block, res, expr);
         }
     }
 
@@ -339,28 +419,38 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
     }
 
     fn visit_op_bool_to_switch_predicate(&mut self, node: rvsdg::Node) {
-        let data = self.rvsdg[node].expect_op_bool_to_switch_predicate();
-        let value_expr = self.value_mapping.mapping(data.input().origin);
-        let expr = self.scf.make_expr_op_bool_to_switch_predicate(value_expr);
+        // We don't express bool-to-switch-predicate expression in the SCF, instead we translate
+        // the switch nodes that use this predicate into "if" statements in the SCF; see
+        // `visit_switch_node`. We therefore simply forward the output mapping to the input mapping.
 
-        self.bind_and_map_expr(node, 0, expr);
+        let data = self.rvsdg[node].expect_op_bool_to_switch_predicate();
+        let expr = self.value_mapping.mapping(data.input().origin);
+
+        self.value_mapping.map_output(node, 0, expr);
     }
 
     fn visit_op_u32_to_switch_predicate(&mut self, node: rvsdg::Node) {
-        let data = self.rvsdg[node].expect_op_u32_to_switch_predicate();
-        let value_expr = self.value_mapping.mapping(data.input().origin);
+        // We don't express u32-to-switch-predicate expression in the SCF, instead we translate any
+        // switch node that uses this predicate into a switch statement in the SCF that uses the
+        // appropriate cases; see `visit_switch_node`. We therefore simply forward the output
+        // mapping to the input mapping.
 
-        self.value_mapping.map_output(node, 0, value_expr);
+        let data = self.rvsdg[node].expect_op_u32_to_switch_predicate();
+        let expr = self.value_mapping.mapping(data.input().origin);
+
+        self.value_mapping.map_output(node, 0, expr);
     }
 
     fn visit_op_case_to_switch_predicate(&mut self, node: rvsdg::Node) {
-        let data = self.rvsdg[node].expect_op_case_to_switch_predicate();
-        let case_expr = self.value_mapping.mapping(data.input().origin);
-        let expr = self
-            .scf
-            .make_expr_op_case_to_switch_predicate(case_expr, data.cases().iter().copied());
+        // We don't express case-to-switch-predicate expression in the SCF, instead we translate any
+        // switch node that uses this predicate into a switch statement in the SCF that uses the
+        // appropriate cases; see `visit_switch_node`. We therefore simply forward the output
+        // mapping to the input mapping.
 
-        self.bind_and_map_expr(node, 0, expr);
+        let data = self.rvsdg[node].expect_op_case_to_switch_predicate();
+        let expr = self.value_mapping.mapping(data.input().origin);
+
+        self.value_mapping.map_output(node, 0, expr);
     }
 
     fn visit_op_call_builtin(&mut self, node: rvsdg::Node) {

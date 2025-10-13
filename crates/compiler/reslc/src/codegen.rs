@@ -5,7 +5,7 @@ use ar::Archive;
 use rustc_smir::rustc_internal::run;
 use rustc_span::def_id::LOCAL_CRATE;
 use rustc_span::Symbol;
-use slir::rvsdg;
+use slir::{rvsdg, scf};
 
 use crate::artifact::{SlirArtifactBuilder, SlirArtifactBuilderConfig};
 use crate::compiler::LIB_MODULE_FILENAME;
@@ -101,7 +101,9 @@ pub fn codegen_shader_modules(cx: &Cx) -> (slir::Module, slir::cfg::Cfg) {
 
             artifact_builder.maybe_add_rvsdg_transformed(&rvsdg);
 
-            let scf = slir::rvsdg_to_scf::rvsdg_entry_points_to_scf(&module, &rvsdg);
+            let mut scf = slir::rvsdg_to_scf::rvsdg_entry_points_to_scf(&module, &rvsdg);
+
+            scf::transform::transform(&mut module, &mut scf);
 
             artifact_builder.add_scf(&scf);
 

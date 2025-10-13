@@ -20,15 +20,15 @@ pub fn Statement(
 
     match stmt_data.kind() {
         StatementKind::If(_) => view! {
-            <br/><If module statement highlight /><br/><br/>
+            <If module statement highlight /><br/>
         }
         .into_any(),
         StatementKind::Switch(_) => view! {
-            <br/><Switch module statement highlight /><br/><br/>
+            <Switch module statement highlight /><br/>
         }
         .into_any(),
         StatementKind::Loop(_) => view! {
-            <br/><Loop module statement highlight /><br/><br/>
+            <Loop module statement highlight /><br/>
         }
         .into_any(),
         StatementKind::Return(_) => view! {

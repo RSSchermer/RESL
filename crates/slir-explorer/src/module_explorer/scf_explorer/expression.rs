@@ -106,20 +106,6 @@ pub fn Expression(
             "*"<Expression module expression=*pointer highlight />
         }
         .into_any(),
-        ExpressionKind::OpBoolToSwitchPredicate(value) => view! {
-            "bool-to-pred("<Expression module expression=*value highlight />")"
-        }
-        .into_any(),
-        ExpressionKind::OpCaseToSwitchPredicate(op) => view! {
-            "case-to-pred("<Expression module expression=op.case() highlight />":["{
-                op.cases()
-                    .iter()
-                    .map(|v| v.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",");
-            }"])"
-        }
-        .into_any(),
         ExpressionKind::OpCallBuiltin(op) => view! {
             {op.callee().ident().as_str()}"("{
                 op.arguments().iter().map(|arg| view! {
