@@ -81,7 +81,14 @@ impl ValueFlowVisitor for AggregateAnalyzer {
         use SimpleNode::*;
 
         match rvsdg[node].kind() {
-            Switch(_) | Loop(_) | Simple(OpLoad(_)) | Simple(OpStore(_)) if input == 0 => {
+            Simple(OpLoad(_)) => {
+                // Don't continue visiting the load node's output: we're only interested in the uses
+                // of the alloca pointer, not in how its value is used.
+            },
+            Simple(OpStore(_)) if input == 0 => {
+                // Store nodes don't output values.
+            }
+            Switch(_) | Loop(_) => {
                 visit::value_flow::visit_value_input(self, rvsdg, node, input);
             }
             _ => {
