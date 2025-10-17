@@ -84,7 +84,7 @@ impl ValueFlowVisitor for AggregateAnalyzer {
             Simple(OpLoad(_)) => {
                 // Don't continue visiting the load node's output: we're only interested in the uses
                 // of the alloca pointer, not in how its value is used.
-            },
+            }
             Simple(OpStore(_)) if input == 0 => {
                 // Store nodes don't output values.
             }
@@ -240,13 +240,13 @@ enum PointerValue {
     Fallback,
 }
 
-struct TouchedAllocaStack {
+struct TouchedOuterAllocaStack {
     stack: Vec<IndexSet<Node>>,
 }
 
-impl TouchedAllocaStack {
+impl TouchedOuterAllocaStack {
     fn new() -> Self {
-        TouchedAllocaStack { stack: vec![] }
+        TouchedOuterAllocaStack { stack: vec![] }
     }
 
     fn touch(&mut self, op_alloca: Node) {
@@ -326,7 +326,7 @@ pub struct MemoryPromoterLegalizer {
     state_origin: (Region, StateOrigin),
     value_availability: FxHashMap<(Node, Region), ValueOrigin>,
     owner_stack: Vec<Node>,
-    touched_alloca_stack: TouchedAllocaStack,
+    touched_outer_alloca_stack: TouchedOuterAllocaStack,
 }
 
 impl MemoryPromoterLegalizer {
@@ -337,7 +337,7 @@ impl MemoryPromoterLegalizer {
             state_origin: (Region::from(KeyData::from_ffi(0)), StateOrigin::Argument),
             value_availability: Default::default(),
             owner_stack: vec![],
-            touched_alloca_stack: TouchedAllocaStack::new(),
+            touched_outer_alloca_stack: TouchedOuterAllocaStack::new(),
         }
     }
 
@@ -350,7 +350,7 @@ impl MemoryPromoterLegalizer {
         self.pointer_analyzer.clear_cache();
         self.value_availability.clear();
         self.owner_stack.clear();
-        self.touched_alloca_stack.clear();
+        self.touched_outer_alloca_stack.clear();
 
         while self.visit_state_user(rvsdg) {}
     }
@@ -396,7 +396,7 @@ impl MemoryPromoterLegalizer {
         let switch_data = rvsdg[switch_node].expect_switch();
         let branch_count = switch_data.branches().len();
 
-        self.touched_alloca_stack.push();
+        self.touched_outer_alloca_stack.push();
 
         for i in 0..branch_count {
             let branch = rvsdg[switch_node].expect_switch().branches()[i];
@@ -407,12 +407,13 @@ impl MemoryPromoterLegalizer {
         }
 
         let touched_allocas = self
-            .touched_alloca_stack
+            .touched_outer_alloca_stack
             .pop()
             .expect("we should be able to pop the set we pushed earlier");
 
-        // Create an output for every alloca that was touched (stored to) inside the switch node to
-        // make the pointer value available in the outer region.
+        // Create an output for every input alloca (an alloca that originates outside the switch
+        // node) that was touched (stored to) inside the switch node to make the pointer value
+        // available in the outer region.
         for op_alloca in touched_allocas.iter().copied() {
             let output_ty = rvsdg[op_alloca].expect_op_alloca().ty();
             let output = rvsdg.add_switch_output(switch_node, output_ty);
@@ -450,19 +451,20 @@ impl MemoryPromoterLegalizer {
         let region = rvsdg[loop_node].region();
         let loop_region = rvsdg[loop_node].expect_loop().loop_region();
 
-        self.touched_alloca_stack.push();
+        self.touched_outer_alloca_stack.push();
 
         self.state_origin = (loop_region, StateOrigin::Argument);
 
         while self.visit_state_user(rvsdg) {}
 
         let touched_allocas = self
-            .touched_alloca_stack
+            .touched_outer_alloca_stack
             .pop()
             .expect("we should be able to pop the set we pushed earlier");
 
-        // Create an output for every alloca that was touched (stored to) inside the switch node to
-        // make the pointer value available in the outer region.
+        // Create an output for every input alloca (an alloca that originates from outside the loop
+        // node) that was touched (stored to) inside the switch node to make the pointer value
+        // available in the outer region.
         for op_alloca in touched_allocas.iter().copied() {
             let origin = self.resolve_alloca_value(rvsdg, op_alloca, loop_region);
 
@@ -527,12 +529,22 @@ impl MemoryPromoterLegalizer {
             PointerAction::Promotion(op_alloca) => {
                 self.value_availability
                     .insert((op_alloca, region), value_origin);
-                self.touched_alloca_stack.touch(op_alloca);
+
+                // If the alloca originated from an outer region, then "touch" the alloca so that
+                // we can make the value available to the outer region later (see `visit_switch` and
+                // `visit_loop`). Note that to test if the alloca originated from an outer region,
+                // we only have to compare its region with the store node's region, since an alloca
+                // could never come from a sub-region of the store node's region (an alloca cannot
+                // outlive its region, so that would be UB); if the alloca's region is not equal to
+                // the store node's region, then it must have originated from an outer region.
+                if rvsdg[op_alloca].region() != region {
+                    self.touched_outer_alloca_stack.touch(op_alloca);
+                }
 
                 rvsdg.remove_node(op_store);
 
-                // Note that removing the node will connect the state chain to connect the OpStore's
-                // state origin to the OpStore's state user, so we don't need to update
+                // Note that removing the node will adjust the state chain by connecting the
+                // OpStore's state origin to the OpStore's state user, so we don't need to update
                 // `self.state_origin`.
             }
             PointerAction::VariablePointerEmulation => {
@@ -567,7 +579,7 @@ impl MemoryPromoterLegalizer {
 
                 rvsdg.remove_node(op_load);
 
-                // Note that removing the node will connect the state chain to connect the
+                // Note that removing the node will adjust the state chain by connecting the
                 // OpLoad's state origin to the OpLoad's state user, so we don't need to
                 // update `self.state_origin`.
             }
@@ -625,7 +637,10 @@ impl MemoryPromoterLegalizer {
                 // region) without encountering the region that contains the originating OpAlloca:
                 // we're trying to make a value available that is not "in scope", which implies
                 // something must have gone wrong.
-                panic!("did not encounter the OpAlloca node on the region stack")
+                panic!(
+                    "did not encounter the OpAlloca node (`{:?}`) on the region stack",
+                    op_alloca
+                );
             }
         };
 
