@@ -44,18 +44,38 @@ pub fn Node(module: StoredValue<ModuleData>, node: NodeLayout) -> impl IntoView 
             }).collect_view()
         }}
 
-        <rect class=rect_class x=rect().origin[0] y=rect().origin[1] width=rect().size[0] height=rect().size[1] />
+        <g class="node-container">
+            <rect class=rect_class x=rect().origin[0] y=rect().origin[1] width=rect().size[0] height=rect().size[1] />
 
-        <g class="node-content-container">
-            {move || {
-                match node.read_value().content() {
-                    NodeContent::PlainText(text) => {
-                        let [x, y] = text.translation();
-                        let tooltip = text.tooltip().map(|t| t.to_string());
+            <g class="node-content-container">
+                {move || {
+                    let text = format!("{:?}", node.read_value().node());
+                    let text_width = text.len() as f32 * TOOLTIP_FONT_HEIGHT * TOOLTIP_FONT_RATIO;
+                    let width = text_width + TOOLTIP_PADDING * 2.0;
+                    let height = TOOLTIP_FONT_HEIGHT + TOOLTIP_PADDING * 2.0;
+                    let text_base = TOOLTIP_PADDING + TOOLTIP_FONT_HEIGHT;
+                    let x = rect().origin[0];
+                    let y = rect().origin[1] - height;
+                    let transform = format!("translate({}, {})", x, y);
 
-                        view! {
-                            <g transform=format!("translate({}, {})", x, y)>
-                                <text y=TEXT_ADJUST>{text.text().to_owned()}</text>
+                    view! {
+                        <g class="node-tooltip" transform=format!("translate({}, {})", x, y)>
+                            <rect x=0 y=0 width=width height=height />
+                            <text x=TOOLTIP_PADDING y=text_base>{text}</text>
+                        </g>
+                    }
+                }}
+
+                {move || {
+                    match node.read_value().content() {
+                        NodeContent::PlainText(text) => {
+                            let [x, y] = text.translation();
+                            let tooltip = text.tooltip().map(|t| t.to_string());
+
+                            view! {
+                                <g transform=format!("translate({}, {})", x, y)>
+                                    <text y=TEXT_ADJUST>{text.text().to_owned()}</text>
+                                </g>
 
                                 {move || {
                                     if let Some(tooltip) = tooltip.clone() {
@@ -74,47 +94,47 @@ pub fn Node(module: StoredValue<ModuleData>, node: NodeLayout) -> impl IntoView 
                                         view! {}.into_any()
                                     }
                                 }}
-                            </g>
-                        }.into_any()
+                            }.into_any()
+                        }
+                        NodeContent::FnApply(text, f) => {
+                            let [x, y] = text.translation();
+
+                            view! {
+                                <g>
+                                    <a href=format_function_url(module.read_value().module.name, *f)>
+                                        <text x=x y=y+TEXT_ADJUST>
+                                            {text.text().to_owned()}
+                                        </text>
+                                    </a>
+                                </g>
+                            }.into_any()
+                        }
+                        NodeContent::Loop(text, region) => {
+                            let [x, y] = text.translation();
+
+                            view! {
+                                <text x=x y=y+TEXT_ADJUST>{text.text().to_owned()}</text>
+
+                                <Region module region=region.clone() />
+                            }.into_any()
+                        }
+                        NodeContent::Switch(text, regions) => {
+                            let [x, y] = text.translation();
+                            let regions = regions.clone();
+
+                            view! {
+                                <text x=x y=y+TEXT_ADJUST>{text.text().to_owned()}</text>
+
+                                {move || {
+                                    regions.clone().into_iter().map(|region| {
+                                        view! { <Region module region /> }
+                                    }).collect_view()
+                                }}
+                            }.into_any()
+                        }
                     }
-                    NodeContent::FnApply(text, f) => {
-                        let [x, y] = text.translation();
-
-                        view! {
-                            <g>
-                                <a href=format_function_url(module.read_value().module.name, *f)>
-                                    <text x=x y=y+TEXT_ADJUST>
-                                        {text.text().to_owned()}
-                                    </text>
-                                </a>
-                            </g>
-                        }.into_any()
-                    }
-                    NodeContent::Loop(text, region) => {
-                        let [x, y] = text.translation();
-
-                        view! {
-                            <text x=x y=y+TEXT_ADJUST>{text.text().to_owned()}</text>
-
-                            <Region module region=region.clone() />
-                        }.into_any()
-                    }
-                    NodeContent::Switch(text, regions) => {
-                        let [x, y] = text.translation();
-                        let regions = regions.clone();
-
-                        view! {
-                            <text x=x y=y+TEXT_ADJUST>{text.text().to_owned()}</text>
-
-                            {move || {
-                                regions.clone().into_iter().map(|region| {
-                                    view! { <Region module region /> }
-                                }).collect_view()
-                            }}
-                        }.into_any()
-                    }
-                }
-            }}
+                }}
+            </g>
         </g>
     }
 }

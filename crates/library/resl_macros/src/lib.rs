@@ -8,6 +8,7 @@ use proc_macro::TokenStream;
 mod compute;
 mod fragment;
 mod gpu;
+mod impl_mat_mul;
 mod resource;
 mod shader_io;
 mod shader_module;
@@ -52,4 +53,25 @@ pub fn vertex(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn workgroup_shared(attr: TokenStream, item: TokenStream) -> TokenStream {
     workgroup_shared::expand_attribute(attr, item)
+}
+
+/// Helper macro for generating matrix multiplication implementations.
+///
+/// This is a utility macro used to generate `mat * mat`, `mat * vec` and `vec * mat`
+/// implementations of `core::ops::Mul` inside the `resl` crate, as macro-rules based macros don't
+/// allow is to cleanly do this. It is not useful outside of that and not intended for public use.
+///
+/// It expects a token-stream formatted as follows:
+///
+/// ```psuedocode
+/// // For matrix-matrix multiplication
+/// mat<2, 3> * mat<4, 2>
+///
+/// // For matrix-vector multiplication
+/// mat<2, 3> * vec<2>
+/// ```
+#[doc(hidden)]
+#[proc_macro]
+pub fn impl_mat_mul(token_stream: TokenStream) -> TokenStream {
+    impl_mat_mul::expand_macro(token_stream)
 }

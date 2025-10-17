@@ -108,6 +108,15 @@ fn primitive_ty_to_slir(primitive_ty: ReslPrimitiveTy) -> slir::ty::Type {
         ReslPrimitiveTy::Vec4U32 => slir::ty::TY_VEC4_U32,
         ReslPrimitiveTy::Vec4I32 => slir::ty::TY_VEC4_I32,
         ReslPrimitiveTy::Vec4Bool => slir::ty::TY_VEC4_BOOL,
+        ReslPrimitiveTy::Mat2x2F32 => slir::ty::TY_MAT2X2,
+        ReslPrimitiveTy::Mat2x3F32 => slir::ty::TY_MAT2X3,
+        ReslPrimitiveTy::Mat2x4F32 => slir::ty::TY_MAT2X4,
+        ReslPrimitiveTy::Mat3x2F32 => slir::ty::TY_MAT3X2,
+        ReslPrimitiveTy::Mat3x3F32 => slir::ty::TY_MAT3X3,
+        ReslPrimitiveTy::Mat3x4F32 => slir::ty::TY_MAT3X4,
+        ReslPrimitiveTy::Mat4x2F32 => slir::ty::TY_MAT4X2,
+        ReslPrimitiveTy::Mat4x3F32 => slir::ty::TY_MAT4X3,
+        ReslPrimitiveTy::Mat4x4F32 => slir::ty::TY_MAT4X4,
     }
 }
 

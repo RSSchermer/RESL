@@ -91,7 +91,7 @@ pub fn RvsdgExplorer(
                                 display: none;
                             }
 
-                            .node-content-container:hover .node-tooltip {
+                            .node-container:hover > .node-content-container > .node-tooltip {
                                 display: block;
                                 z-index: 100;
                             }

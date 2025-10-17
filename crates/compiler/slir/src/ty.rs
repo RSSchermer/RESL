@@ -1049,8 +1049,9 @@ impl TypeRegistry {
                 _ => Err(format!(
                     "if the left-hand-side operand to the `*` operator is a `{}` matrix, then the \
                     right-hand-side value must be a matrix of a matching element type and a \
-                    row-size that matches the matrix's column-size, or a numeric  scalar that \
-                    matches the element type of the matrix (got `{}`)",
+                    row-size that matches the matrix's column-size, a vector of a matching element \
+                    type and a size that matches the matrix's column-size, or a numeric  scalar \
+                    that matches the element type of the matrix (got `{}`)",
                     lhs.to_string(self),
                     rhs.to_string(self)
                 )),

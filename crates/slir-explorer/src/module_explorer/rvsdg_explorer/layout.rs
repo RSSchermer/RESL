@@ -933,6 +933,7 @@ impl Stratum {
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct NodeLayout {
+    node: Node,
     content: NodeContent,
     input_connectors: Vec<ConnectorElement>,
     output_connectors: Vec<ConnectorElement>,
@@ -1053,6 +1054,7 @@ impl NodeLayout {
         }
 
         let mut layout = NodeLayout {
+            node,
             content,
             input_connectors,
             output_connectors,
@@ -1086,6 +1088,10 @@ impl NodeLayout {
 
     pub fn rect(&self) -> Rect {
         self.rect
+    }
+
+    pub fn node(&self) -> Node {
+        self.node
     }
 
     pub fn content(&self) -> &NodeContent {

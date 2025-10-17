@@ -17,6 +17,15 @@ pub enum ReslPrimitiveTy {
     Vec4U32,
     Vec4I32,
     Vec4Bool,
+    Mat2x2F32,
+    Mat2x3F32,
+    Mat2x4F32,
+    Mat3x2F32,
+    Mat3x3F32,
+    Mat3x4F32,
+    Mat4x2F32,
+    Mat4x3F32,
+    Mat4x4F32,
 }
 
 impl ReslPrimitiveTy {
@@ -45,6 +54,15 @@ fn resolve_primitive_ty(attr: &Attribute) -> ReslPrimitiveTy {
         "#[reslc::primitive(vec4_u32)]" => ReslPrimitiveTy::Vec4U32,
         "#[reslc::primitive(vec4_i32)]" => ReslPrimitiveTy::Vec4I32,
         "#[reslc::primitive(vec4_bool)]" => ReslPrimitiveTy::Vec4Bool,
+        "#[reslc::primitive(mat2x2_f32)]" => ReslPrimitiveTy::Mat2x2F32,
+        "#[reslc::primitive(mat2x3_f32)]" => ReslPrimitiveTy::Mat2x3F32,
+        "#[reslc::primitive(mat2x4_f32)]" => ReslPrimitiveTy::Mat2x4F32,
+        "#[reslc::primitive(mat3x2_f32)]" => ReslPrimitiveTy::Mat3x2F32,
+        "#[reslc::primitive(mat3x3_f32)]" => ReslPrimitiveTy::Mat3x3F32,
+        "#[reslc::primitive(mat3x4_f32)]" => ReslPrimitiveTy::Mat3x4F32,
+        "#[reslc::primitive(mat4x2_f32)]" => ReslPrimitiveTy::Mat4x2F32,
+        "#[reslc::primitive(mat4x3_f32)]" => ReslPrimitiveTy::Mat4x3F32,
+        "#[reslc::primitive(mat4x4_f32)]" => ReslPrimitiveTy::Mat4x4F32,
         _ => bug!("unknown reslc primitive type: {}", attr.as_str()),
     }
 }
