@@ -1,6 +1,8 @@
 use crate::rvsdg::transform::memory_promotion_and_legalization::MemoryPromoterLegalizer;
 use crate::rvsdg::transform::proxy_node_elimination::region_eliminate_proxy_nodes;
 use crate::rvsdg::transform::scalar_replacement::AggregateReplacementContext;
+use crate::rvsdg::transform::store_coalescing;
+use crate::rvsdg::transform::store_coalescing::region_coalesce_store_ops;
 use crate::rvsdg::Rvsdg;
 use crate::{Function, Module};
 
@@ -28,18 +30,24 @@ impl MemoryTransformer {
 
         let mut iterations = 0;
         const MAX_ITERATIONS: usize = 32;
+        let mut did_transform = false;
 
         loop {
             if iterations >= MAX_ITERATIONS {
                 break;
             }
 
-            let did_replace = region_replacement_cx.replace(rvsdg);
-
             // We run the promoter-legalizer at least once (on the first iteration) and then as
             // often as we keep replacing aggregate alloca nodes.
-            if iterations == 0 || did_replace {
+            if iterations == 0 || did_transform {
+                did_transform = false;
+
+                did_transform |= region_replacement_cx.replace(rvsdg);
+
                 region_eliminate_proxy_nodes(rvsdg, body_region);
+
+                did_transform |= region_coalesce_store_ops(rvsdg, body_region);
+
                 self.promoter_legalizer
                     .promote_and_legalize(rvsdg, body_region);
 

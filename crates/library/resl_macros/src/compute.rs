@@ -29,8 +29,8 @@ pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     match item {
         Item::Fn(_) => quote! {
+            #[allow(unused, unexpected_cfgs)]
             #[cfg_attr(reslc, reslc::compute(#x, #y, #z))]
-            #[allow(unused)]
             #item
         }
         .into(),

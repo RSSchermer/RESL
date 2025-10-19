@@ -1,5 +1,4 @@
 #![feature(stmt_expr_attributes)]
-
 use resl::prelude::*;
 
 #[shader_module]

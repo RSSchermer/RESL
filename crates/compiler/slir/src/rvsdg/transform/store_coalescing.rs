@@ -143,6 +143,28 @@ impl AggregateInfo {
     }
 }
 
+fn remove_element_store(rvsdg: &mut Rvsdg, node: Node) {
+    let store = rvsdg[node].expect_op_store();
+    let ValueOrigin::Output {
+        producer: element_ptr_node,
+        output: 0,
+    } = store.ptr_input().origin
+    else {
+        panic!("the store node's pointer should originate from a ptr-element-ptr node");
+    };
+
+    rvsdg.remove_node(node);
+
+    if rvsdg[element_ptr_node]
+        .expect_op_ptr_element_ptr()
+        .output()
+        .users
+        .is_empty()
+    {
+        rvsdg.remove_node(element_ptr_node);
+    }
+}
+
 #[derive(Debug)]
 struct State {
     aggregate: Option<AggregateInfo>,
@@ -232,13 +254,13 @@ impl State {
 
             inputs.push(value_input);
 
-            rvsdg.remove_node(store_node);
+            remove_element_store(rvsdg, store_node);
         }
 
         debug_assert_eq!(&self.slots, &[None; 4], "should have reset all slots");
 
         for stale_store_node in self.stale_store_ops.drain(..) {
-            rvsdg.remove_node(stale_store_node);
+            remove_element_store(rvsdg, stale_store_node);
         }
 
         let (ty, coalesced) = match aggregate.kind {
@@ -268,6 +290,7 @@ impl State {
 struct Coalescer {
     mode: Mode,
     state: State,
+    did_coalesce: bool,
 }
 
 impl Coalescer {
@@ -275,7 +298,16 @@ impl Coalescer {
         Self {
             mode,
             state: State::new(),
+            did_coalesce: false,
         }
+    }
+
+    fn coalesce_in_region(&mut self, rvsdg: &mut Rvsdg, region: Region) -> bool {
+        self.did_coalesce = false;
+
+        self.visit_region(rvsdg, region);
+
+        self.did_coalesce
     }
 
     fn visit_region(&mut self, rvsdg: &mut Rvsdg, region: Region) {
@@ -293,6 +325,8 @@ impl Coalescer {
                 let coalesce = self.state.record_op_store(rvsdg, node, self.mode);
 
                 if coalesce {
+                    self.did_coalesce = true;
+
                     self.state.coalesce(rvsdg)
                 } else {
                     node
@@ -367,25 +401,18 @@ impl Coalescer {
     }
 }
 
-pub fn transform_fn(rvsdg: &mut Rvsdg, function: Function) {
-    let node = rvsdg
-        .get_function_node(function)
-        .expect("function not registered");
-    let region = rvsdg[node].expect_function().body_region();
+pub fn region_coalesce_store_ops(rvsdg: &mut Rvsdg, region: Region) -> bool {
+    let mut did_coalesce = false;
 
     let mut vector_coalescer = Coalescer::new(Mode::Vector);
 
-    vector_coalescer.visit_region(rvsdg, region);
+    did_coalesce |= vector_coalescer.coalesce_in_region(rvsdg, region);
 
     let mut matrix_coalescer = Coalescer::new(Mode::Matrix);
 
-    matrix_coalescer.visit_region(rvsdg, region);
-}
+    did_coalesce |= matrix_coalescer.coalesce_in_region(rvsdg, region);
 
-pub fn transform_entry_points(module: &Module, rvsdg: &mut Rvsdg) {
-    for (entry_point, _) in module.entry_points.iter() {
-        transform_fn(rvsdg, entry_point);
-    }
+    did_coalesce
 }
 
 #[cfg(test)]
@@ -485,7 +512,7 @@ mod tests {
             },
         );
 
-        transform_fn(&mut rvsdg, function);
+        region_coalesce_store_ops(&mut rvsdg, region);
 
         let StateUser::Node(coalesced_store_node) = *rvsdg[region].state_argument() else {
             panic!("the state argument should connect to a node");
@@ -615,7 +642,7 @@ mod tests {
             },
         );
 
-        transform_fn(&mut rvsdg, function);
+        region_coalesce_store_ops(&mut rvsdg, region);
 
         // The state chain should be unaltered.
         assert_eq!(
@@ -720,7 +747,7 @@ mod tests {
             },
         );
 
-        transform_fn(&mut rvsdg, function);
+        region_coalesce_store_ops(&mut rvsdg, region);
 
         // The state chain should be unaltered.
         assert_eq!(
@@ -839,7 +866,7 @@ mod tests {
             },
         );
 
-        transform_fn(&mut rvsdg, function);
+        region_coalesce_store_ops(&mut rvsdg, region);
 
         // The state chain should be unaltered.
         assert_eq!(
@@ -957,7 +984,7 @@ mod tests {
             },
         );
 
-        transform_fn(&mut rvsdg, function);
+        region_coalesce_store_ops(&mut rvsdg, region);
 
         // The state chain should be unaltered.
         assert_eq!(
@@ -1082,7 +1109,7 @@ mod tests {
             },
         );
 
-        transform_fn(&mut rvsdg, function);
+        region_coalesce_store_ops(&mut rvsdg, region);
 
         assert_eq!(
             rvsdg[region].state_argument(),
@@ -1258,7 +1285,7 @@ mod tests {
             },
         );
 
-        transform_fn(&mut rvsdg, function);
+        region_coalesce_store_ops(&mut rvsdg, region);
 
         assert_eq!(
             rvsdg[region].state_argument(),

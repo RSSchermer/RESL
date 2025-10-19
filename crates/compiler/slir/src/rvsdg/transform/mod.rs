@@ -22,11 +22,6 @@ use crate::Module;
 pub fn transform(module: &mut Module, rvsdg: &mut Rvsdg) {
     function_inlining::transform_entry_points(module, rvsdg);
     ptr_offset_elaboration::transform_entry_points(module, rvsdg);
-    store_coalescing::transform_entry_points(module, rvsdg);
-    // We need a dead-connectible-elimination pass after store-coalescing and before the
-    // memory-transform, as store-coalescing may leave dead op-ptr-element-ptr nodes that will
-    // prevent memory-to-value-flow promotion in the memory-transform pass.
-    dead_connectible_elimination::transform_entry_points(module, rvsdg);
     memory_transform::transform_entry_points(module, rvsdg);
     ptr_offset_replacement::transform_entry_points(module, rvsdg);
     pred_to_case_extraction::transform_entry_points(module, rvsdg);
