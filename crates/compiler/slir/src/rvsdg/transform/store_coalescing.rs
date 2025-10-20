@@ -48,13 +48,13 @@
 //!
 //! The example above uses a vector value, but this pass will also coalesce matrix values.
 //!
-//! The pass only coalesces stores that form an uninterrupted segment of the state chain, so that
-//! the transformation is guaranteed to produce an equivalent program. If the sequence is
-//! interrupted by any other stateful operation or by a region transition (entering or exiting a
-//! switch branch or loop region), then the sequence will not be coalesced. This is conservative: a
-//! more advanced version of this transform may, for example, allow interruption by a load from
-//! disjoint memory. However, this current simplistic implementation covers the vast majority of
-//! cases.
+//! This pass allows a sequence of element stores to be interrupted by load operations that can be
+//! proven load from a different root identifier. It does not currently allow the sequence to be
+//! interrupted by any other store operations. This is conservative: a more advanced version of this
+//! pass might be able to prove that interrupting loads/stores operate on disjoint memory in more
+//! cases. However, this covers the main case we're interested in: coalescing the initialization of
+//! vector and matrix alloca values, so that they may become candidates for memory-to-value-flow
+//! promotion.
 //!
 //! Note that we do this for vectors and matrices, but not for other "aggregate" types, as only
 //! vectors and matrices tend to be loaded from their alloca pointers "whole" to be used in
@@ -65,15 +65,18 @@
 //! pass can also be thought of as a "scalarization" pass for vector and matrix values.
 
 use arrayvec::ArrayVec;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::rvsdg::visit::region_nodes::RegionNodesVisitor;
+use crate::rvsdg::visit::reverse_value_flow::ReverseValueFlowVisitor;
 use crate::rvsdg::NodeKind::Simple;
 use crate::rvsdg::SimpleNode::OpPtrElementPtr;
 use crate::rvsdg::{
-    Connectivity, Node, NodeKind, Region, Rvsdg, SimpleNode, StateUser, ValueInput, ValueOrigin,
+    visit, Connectivity, Node, NodeKind, Region, Rvsdg, SimpleNode, StateUser, ValueInput,
+    ValueOrigin,
 };
 use crate::ty::TypeKind;
-use crate::{ty, Function, Module};
+use crate::{ty, Function, Module, StorageBinding, WorkgroupBinding};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
@@ -102,20 +105,68 @@ enum AggregateKind {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-struct AggregateInfo {
-    kind: AggregateKind,
-    pointer_input: ValueInput,
+enum RootIdentifier {
+    Unknown,
+    Alloca(Node),
+    StorageBinding(StorageBinding),
+    WorkgroupBinding(WorkgroupBinding),
+    Immutable,
 }
 
-impl AggregateInfo {
-    fn from_ptr_input(rvsdg: &Rvsdg, input: ValueInput) -> Option<Self> {
+impl RootIdentifier {
+    fn is_disjoint(&self, other: RootIdentifier) -> bool {
+        use RootIdentifier::*;
+        match (*self, other) {
+            // If we couldn't resolve either root identifier, then we cannot prove they are
+            // disjoint and conservatively return `false`.
+            (Unknown, _) | (_, Unknown) => false,
+            (Alloca(a), Alloca(b)) => a != b,
+            (StorageBinding(a), StorageBinding(b)) => a != b,
+            (WorkgroupBinding(a), WorkgroupBinding(b)) => a != b,
+            // If the root identifiers are not in the same address-space, then they are definitely
+            // disjoint.
+            _ => true,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PointerAnalyzer {
+    cache: FxHashMap<(Region, ValueOrigin), RootIdentifier>,
+    root_identifier: RootIdentifier,
+}
+
+impl PointerAnalyzer {
+    fn new() -> Self {
+        Self {
+            cache: FxHashMap::default(),
+            root_identifier: RootIdentifier::Unknown,
+        }
+    }
+
+    fn analyze(&mut self, rvsdg: &Rvsdg, region: Region, origin: ValueOrigin) -> RootIdentifier {
+        self.root_identifier = RootIdentifier::Unknown;
+
+        self.visit_value_origin(rvsdg, region, origin);
+
+        self.root_identifier
+    }
+
+    fn aggregate_info(
+        &mut self,
+        rvsdg: &Rvsdg,
+        region: Region,
+        input: ValueInput,
+    ) -> Option<AggregateInfo> {
         if let TypeKind::Ptr(pointee_ty) = *rvsdg.ty().kind(input.ty) {
             match &*rvsdg.ty().kind(pointee_ty) {
                 TypeKind::Vector(v) => Some(AggregateInfo {
+                    root_identifier: self.analyze(rvsdg, region, input.origin),
                     kind: AggregateKind::Vector(*v),
                     pointer_input: input,
                 }),
                 TypeKind::Matrix(m) => Some(AggregateInfo {
+                    root_identifier: self.analyze(rvsdg, region, input.origin),
                     kind: AggregateKind::Matrix(*m),
                     pointer_input: input,
                 }),
@@ -125,7 +176,89 @@ impl AggregateInfo {
             None
         }
     }
+}
 
+impl ReverseValueFlowVisitor for PointerAnalyzer {
+    fn should_visit(&mut self, _region: Region, _origin: ValueOrigin) -> bool {
+        true
+    }
+
+    fn visit_value_origin(&mut self, rvsdg: &Rvsdg, region: Region, origin: ValueOrigin) {
+        if let Some(root_identifier) = self.cache.get(&(region, origin)) {
+            self.root_identifier = *root_identifier;
+        } else {
+            visit::reverse_value_flow::visit_value_origin(self, rvsdg, region, origin);
+
+            self.cache.insert((region, origin), self.root_identifier);
+        }
+    }
+
+    fn visit_value_output(&mut self, rvsdg: &Rvsdg, node: Node, output: u32) {
+        use NodeKind::*;
+        use SimpleNode::*;
+
+        match rvsdg[node].kind() {
+            Simple(OpLoad(_)) | Simple(OpApply(_)) => {
+                // Can't trace a pointer through memory operations or function calls.
+                self.root_identifier = RootIdentifier::Unknown;
+            }
+            Switch(_) | Loop(_) => {
+                // We don't try to resolve a (potentially) variable pointer.
+                self.root_identifier = RootIdentifier::Unknown;
+            }
+            Simple(OpAlloca(_)) => {
+                self.root_identifier = RootIdentifier::Alloca(node);
+            }
+            Simple(OpPtrElementPtr(_))
+            | Simple(OpPtrVariantPtr(_))
+            | Simple(OpAddPtrOffset(_))
+            | Simple(ConstPtr(_)) => {
+                // Only visit the pointer input.
+                visit::reverse_value_flow::visit_value_input(self, rvsdg, node, 0);
+            }
+            _ => unreachable!("node kind cannot output a pointer"),
+        }
+    }
+
+    fn visit_region_argument(&mut self, rvsdg: &Rvsdg, region: Region, argument: u32) {
+        let owner = rvsdg[region].owner();
+
+        if let NodeKind::Function(fn_node) = rvsdg[owner].kind() {
+            if let Some(input) = fn_node.dependencies().get(argument as usize)
+                && let ValueOrigin::Output {
+                    producer,
+                    output: 0,
+                } = input.origin
+            {
+                match rvsdg[producer].kind() {
+                    NodeKind::StorageBinding(n) => {
+                        self.root_identifier = RootIdentifier::StorageBinding(n.binding())
+                    }
+                    NodeKind::WorkgroupBinding(n) => {
+                        self.root_identifier = RootIdentifier::WorkgroupBinding(n.binding())
+                    }
+                    NodeKind::UniformBinding(_) | NodeKind::Constant(_) => {
+                        self.root_identifier = RootIdentifier::Immutable
+                    }
+                    _ => unreachable!("node kind cannot be a pointer root identifier"),
+                }
+            } else {
+                self.root_identifier = RootIdentifier::Unknown;
+            }
+        } else {
+            visit::reverse_value_flow::visit_region_argument(self, rvsdg, region, argument);
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct AggregateInfo {
+    root_identifier: RootIdentifier,
+    kind: AggregateKind,
+    pointer_input: ValueInput,
+}
+
+impl AggregateInfo {
     fn matches_mode(&self, mode: Mode) -> bool {
         match (self.kind, mode) {
             (AggregateKind::Vector(_), Mode::Vector) | (AggregateKind::Matrix(_), Mode::Matrix) => {
@@ -178,28 +311,6 @@ impl State {
             aggregate: None,
             slots: [None; 4],
             stale_store_ops: Vec::new(),
-        }
-    }
-
-    fn record_op_store(&mut self, rvsdg: &Rvsdg, op_store_node: Node, mode: Mode) -> bool {
-        let op_store = rvsdg[op_store_node].expect_op_store();
-        let ptr_origin = op_store.ptr_input().origin;
-
-        if let ValueOrigin::Output {
-            producer,
-            output: 0,
-        } = ptr_origin
-            && let Simple(OpPtrElementPtr(op)) = rvsdg[producer].kind()
-            && let Some(aggregate) = AggregateInfo::from_ptr_input(rvsdg, *op.ptr_input())
-            && aggregate.matches_mode(mode)
-            && op.index_inputs().len() == 1
-            && let Some(element) = try_resolve_const_index(rvsdg, op.index_inputs()[0].origin)
-        {
-            self.push(aggregate, element as usize, op_store_node)
-        } else {
-            self.reset();
-
-            false
         }
     }
 
@@ -287,15 +398,17 @@ impl State {
     }
 }
 
-struct Coalescer {
+struct Coalescer<'a> {
+    pointer_analyzer: &'a mut PointerAnalyzer,
     mode: Mode,
     state: State,
     did_coalesce: bool,
 }
 
-impl Coalescer {
-    fn new(mode: Mode) -> Self {
+impl<'a> Coalescer<'a> {
+    fn new(pointer_analyzer: &'a mut PointerAnalyzer, mode: Mode) -> Self {
         Self {
+            pointer_analyzer,
             mode,
             state: State::new(),
             did_coalesce: false,
@@ -322,7 +435,7 @@ impl Coalescer {
 
         let node = match rvsdg[node].kind() {
             Simple(OpStore(_)) => {
-                let coalesce = self.state.record_op_store(rvsdg, node, self.mode);
+                let coalesce = self.record_op_store(rvsdg, node, self.mode);
 
                 if coalesce {
                     self.did_coalesce = true;
@@ -331,6 +444,22 @@ impl Coalescer {
                 } else {
                     node
                 }
+            }
+            Simple(OpLoad(op)) => {
+                // Reset when a load happens that may overlap with the store sequence. Only do the
+                // analysis when the state is currently tracking a store sequence.
+                if let Some(aggregate) = &self.state.aggregate {
+                    let region = rvsdg[node].region();
+                    let root_identifier =
+                        self.pointer_analyzer
+                            .analyze(rvsdg, region, op.ptr_input().origin);
+
+                    if !root_identifier.is_disjoint(aggregate.root_identifier) {
+                        self.state.reset();
+                    }
+                }
+
+                node
             }
             Simple(_) => {
                 // Reset when any other stateful node interrupts the store sequence.
@@ -399,16 +528,43 @@ impl Coalescer {
             StateUser::Node(node) => self.visit_node(rvsdg, node),
         }
     }
+
+    fn record_op_store(&mut self, rvsdg: &Rvsdg, op_store_node: Node, mode: Mode) -> bool {
+        let region = rvsdg[op_store_node].region();
+        let op_store = rvsdg[op_store_node].expect_op_store();
+        let ptr_origin = op_store.ptr_input().origin;
+
+        if let ValueOrigin::Output {
+            producer,
+            output: 0,
+        } = ptr_origin
+            && let Simple(OpPtrElementPtr(op)) = rvsdg[producer].kind()
+            && let Some(aggregate) =
+                self.pointer_analyzer
+                    .aggregate_info(rvsdg, region, *op.ptr_input())
+            && aggregate.matches_mode(mode)
+            && op.index_inputs().len() == 1
+            && let Some(element) = try_resolve_const_index(rvsdg, op.index_inputs()[0].origin)
+        {
+            self.state.push(aggregate, element as usize, op_store_node)
+        } else {
+            self.state.reset();
+
+            false
+        }
+    }
 }
 
 pub fn region_coalesce_store_ops(rvsdg: &mut Rvsdg, region: Region) -> bool {
     let mut did_coalesce = false;
 
-    let mut vector_coalescer = Coalescer::new(Mode::Vector);
+    let mut pointer_analyzer = PointerAnalyzer::new();
+
+    let mut vector_coalescer = Coalescer::new(&mut pointer_analyzer, Mode::Vector);
 
     did_coalesce |= vector_coalescer.coalesce_in_region(rvsdg, region);
 
-    let mut matrix_coalescer = Coalescer::new(Mode::Matrix);
+    let mut matrix_coalescer = Coalescer::new(&mut pointer_analyzer, Mode::Matrix);
 
     did_coalesce |= matrix_coalescer.coalesce_in_region(rvsdg, region);
 
@@ -668,7 +824,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sequence_interrupted_by_load() {
+    fn test_sequence_interrupted_by_load_from_same_alloca() {
         let mut module = Module::new(Symbol::from_ref(""));
         let function = Function {
             name: Symbol::from_ref(""),
@@ -774,6 +930,145 @@ mod tests {
             rvsdg[load_node].state().unwrap().user,
             StateUser::Result,
             "the state user of the load node should be still be the region's state result"
+        );
+    }
+
+    #[test]
+    fn test_sequence_interrupted_by_load_from_different_alloca() {
+        let mut module = Module::new(Symbol::from_ref(""));
+        let function = Function {
+            name: Symbol::from_ref(""),
+            module: Symbol::from_ref(""),
+        };
+
+        module.fn_sigs.register(
+            function,
+            FnSig {
+                name: Default::default(),
+                ty: TY_DUMMY,
+                args: vec![],
+                ret_ty: Some(TY_VEC2_F32),
+            },
+        );
+
+        let mut rvsdg = Rvsdg::new(module.ty.clone());
+
+        let (_, region) = rvsdg.register_function(&module, function, iter::empty());
+
+        let ptr_ty = module.ty.register(TypeKind::Ptr(TY_VEC2_F32));
+        let element_ptr_ty = module.ty.register(TypeKind::Ptr(TY_F32));
+
+        let alloca_node = rvsdg.add_op_alloca(region, TY_VEC2_F32);
+        let other_alloca_node = rvsdg.add_op_alloca(region, TY_VEC2_F32);
+
+        let index_0_node = rvsdg.add_const_u32(region, 0);
+        let ptr_0_node = rvsdg.add_op_ptr_element_ptr(
+            region,
+            element_ptr_ty,
+            ValueInput::output(ptr_ty, alloca_node, 0),
+            [ValueInput::output(TY_U32, index_0_node, 0)],
+        );
+        let value_0_node = rvsdg.add_const_f32(region, 1.0);
+        let store_0_node = rvsdg.add_op_store(
+            region,
+            ValueInput::output(element_ptr_ty, ptr_0_node, 0),
+            ValueInput::output(TY_F32, value_0_node, 0),
+            StateOrigin::Argument,
+        );
+
+        let interrupting_load_node = rvsdg.add_op_load(
+            region,
+            ValueInput::output(ptr_ty, other_alloca_node, 0),
+            TY_VEC2_F32,
+            StateOrigin::Node(store_0_node),
+        );
+
+        let index_1_node = rvsdg.add_const_u32(region, 1);
+        let ptr_1_node = rvsdg.add_op_ptr_element_ptr(
+            region,
+            element_ptr_ty,
+            ValueInput::output(ptr_ty, alloca_node, 0),
+            [ValueInput::output(TY_U32, index_1_node, 0)],
+        );
+        let value_1_node = rvsdg.add_const_f32(region, 3.0);
+        let store_1_node = rvsdg.add_op_store(
+            region,
+            ValueInput::output(element_ptr_ty, ptr_1_node, 0),
+            ValueInput::output(TY_F32, value_1_node, 0),
+            StateOrigin::Node(interrupting_load_node),
+        );
+
+        let load_node = rvsdg.add_op_load(
+            region,
+            ValueInput::output(ptr_ty, alloca_node, 0),
+            TY_VEC2_F32,
+            StateOrigin::Node(store_1_node),
+        );
+
+        rvsdg.reconnect_region_result(
+            region,
+            0,
+            ValueOrigin::Output {
+                producer: load_node,
+                output: 0,
+            },
+        );
+
+        region_coalesce_store_ops(&mut rvsdg, region);
+
+        let StateUser::Node(coalesced_store_node) = *rvsdg[region].state_argument() else {
+            panic!("the state argument should connect to a node");
+        };
+
+        let coalesced_store_data = rvsdg[coalesced_store_node].expect_op_store();
+
+        assert_eq!(
+            coalesced_store_data.ptr_input().origin,
+            ValueOrigin::Output {
+                producer: alloca_node,
+                output: 0,
+            },
+            "the coalesced store node should store directly to the alloca"
+        );
+
+        let ValueOrigin::Output {
+            producer: coalesced_value_node,
+            output: 0,
+        } = coalesced_store_data.value_input().origin
+        else {
+            panic!("the coalesced store node's value input should connect to a node")
+        };
+
+        let coalesced_value_data = rvsdg[coalesced_value_node].expect_op_vector();
+
+        assert_eq!(
+            coalesced_value_data.value_inputs(),
+            &[
+                ValueInput::output(TY_F32, value_0_node, 0),
+                ValueInput::output(TY_F32, value_1_node, 0),
+            ],
+            "the coalesced value node should aggregate all three values of the original stores"
+        );
+
+        assert_eq!(
+            rvsdg[interrupting_load_node].state().unwrap().origin,
+            StateOrigin::Node(coalesced_store_node),
+            "the interrupting-load node should be in the state chain after the coalesced-store node"
+        );
+
+        assert_eq!(
+            rvsdg[load_node].state().unwrap().origin,
+            StateOrigin::Node(interrupting_load_node),
+            "the load node should be in the state chain after the interrupting-load node"
+        );
+
+        assert!(
+            !rvsdg.is_live_node(store_0_node),
+            "the original store op for the first element value should be dead"
+        );
+        assert!(
+            !rvsdg.is_live_node(store_1_node),
+            "the original store op for the second element value should be dead"
         );
     }
 
