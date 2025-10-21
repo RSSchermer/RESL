@@ -5,7 +5,7 @@ use crate::rvsdg::NodeKind::{
 };
 use crate::rvsdg::SimpleNode::{
     ConstBool, ConstF32, ConstFallback, ConstI32, ConstPredicate, ConstPtr, ConstU32,
-    OpAddPtrOffset, OpAlloca, OpApply, OpBinary, OpBoolToSwitchPredicate, OpCaseToSwitchPredicate,
+    OpAddPtrOffset, OpAlloca, OpBinary, OpBoolToSwitchPredicate, OpCall, OpCaseToSwitchPredicate,
     OpExtractElement, OpGetDiscriminant, OpGetPtrOffset, OpLoad, OpPtrDiscriminantPtr,
     OpPtrElementPtr, OpPtrVariantPtr, OpSetDiscriminant, OpStore, OpSwitchPredicateToCase,
     OpU32ToSwitchPredicate, OpUnary, Reaggregation, ValueProxy,
@@ -22,7 +22,7 @@ struct RegionReplicator<'a, 'b> {
     src_region: Region,
     dst_region: Region,
 
-    /// A mapping from the inlined function's arguments to the new value origins at the apply site.
+    /// A mapping from the inlined function's arguments to the new value origins at the call site.
     ///
     /// Since arguments are identified by a contiguous range of indices, we can use a vec rather
     /// than a hash map to record this mapping.
@@ -89,9 +89,9 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
         // We want to replicate the function body in a bottom-up post-order; that is, we want to
         // start from the results, and then do a depth-first search up the inputs, until we reach
         // nodes that are either input-less, or for which all inputs are region arguments. If we
-        // create nodes in this order at the apply site, then we guarantee that for nodes that
+        // create nodes in this order at the call-site, then we guarantee that for nodes that
         // depend on other nodes, all such dependencies will have been created before the dependent
-        // node. We maintain a node mapping so that we can map function body origins to apply site
+        // node. We maintain a node mapping so that we can map function body origins to call-site
         // origins. Because outputs can have multiple users, this can result in us visiting the same
         // node multiple times. However, we can get dual use out of a node mapping by using it as a
         // "visited" set.
@@ -150,7 +150,7 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
             Simple(OpSetDiscriminant(_)) => self.replicate_op_set_discriminant_node(node),
             Simple(OpAddPtrOffset(_)) => self.replicate_op_add_ptr_offset_node(node),
             Simple(OpGetPtrOffset(_)) => self.replicate_op_get_ptr_offset_node(node),
-            Simple(OpApply(_)) => self.replicate_op_apply_node(node),
+            Simple(OpCall(_)) => self.replicate_op_call_node(node),
             Simple(OpCallBuiltin(_)) => self.replicate_op_call_builtin_node(node),
             Simple(OpUnary(_)) => self.replicate_op_unary_node(node),
             Simple(OpBinary(_)) => self.replicate_op_binary_node(node),
@@ -421,8 +421,8 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
         self.rvsdg.add_op_get_ptr_offset(self.dst_region, slice_ptr)
     }
 
-    fn replicate_op_apply_node(&mut self, node: Node) -> Node {
-        let data = self.rvsdg[node].expect_op_apply();
+    fn replicate_op_call_node(&mut self, node: Node) -> Node {
+        let data = self.rvsdg[node].expect_op_call();
         let fn_input = self.mapped_value_input(data.fn_input());
         let argument_inputs = data
             .argument_inputs()
@@ -431,7 +431,7 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
             .collect::<Vec<_>>();
         let state_origin = self.mapped_state_origin(&data.state().unwrap().origin);
 
-        self.rvsdg.add_op_apply(
+        self.rvsdg.add_op_call(
             self.module,
             self.dst_region,
             fn_input,

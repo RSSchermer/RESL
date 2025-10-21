@@ -198,7 +198,7 @@ impl ReverseValueFlowVisitor for PointerAnalyzer {
         use SimpleNode::*;
 
         match rvsdg[node].kind() {
-            Simple(OpLoad(_)) | Simple(OpApply(_)) => {
+            Simple(OpLoad(_)) | Simple(OpCall(_)) => {
                 // Can't trace a pointer through memory operations or function calls.
                 self.root_identifier = RootIdentifier::Unknown;
             }

@@ -585,15 +585,15 @@ impl NodeData {
         }
     }
 
-    pub fn is_op_apply(&self) -> bool {
-        matches!(self.kind, NodeKind::Simple(SimpleNode::OpApply(_)))
+    pub fn is_op_call(&self) -> bool {
+        matches!(self.kind, NodeKind::Simple(SimpleNode::OpCall(_)))
     }
 
-    pub fn expect_op_apply(&self) -> &OpApply {
-        if let NodeKind::Simple(SimpleNode::OpApply(op)) = &self.kind {
+    pub fn expect_op_call(&self) -> &OpCall {
+        if let NodeKind::Simple(SimpleNode::OpCall(op)) = &self.kind {
             op
         } else {
-            panic!("expected node to be an `apply` operation")
+            panic!("expected node to be an `call` operation")
         }
     }
 
@@ -1613,13 +1613,13 @@ impl Connectivity for OpGetPtrOffset {
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
-pub struct OpApply {
+pub struct OpCall {
     value_inputs: Vec<ValueInput>,
     value_output: Option<ValueOutput>,
     state: State,
 }
 
-impl OpApply {
+impl OpCall {
     pub fn fn_input(&self) -> &ValueInput {
         &self.value_inputs[0]
     }
@@ -1633,7 +1633,7 @@ impl OpApply {
     }
 }
 
-impl Connectivity for OpApply {
+impl Connectivity for OpCall {
     fn value_inputs(&self) -> &[ValueInput] {
         &self.value_inputs
     }
@@ -2414,7 +2414,7 @@ gen_simple_node! {
     OpSetDiscriminant,
     OpAddPtrOffset,
     OpGetPtrOffset,
-    OpApply,
+    OpCall,
     OpCallBuiltin,
     OpUnary,
     OpBinary,
@@ -3415,7 +3415,7 @@ impl Rvsdg {
         node
     }
 
-    pub fn add_op_apply(
+    pub fn add_op_call(
         &mut self,
         module: &Module,
         region: Region,
@@ -3459,7 +3459,7 @@ impl Rvsdg {
 
         let node = self.nodes.insert(NodeData {
             kind: NodeKind::Simple(
-                OpApply {
+                OpCall {
                     value_inputs,
                     value_output: ret_ty.map(|ty| ValueOutput::new(ty)),
                     state: State {
@@ -5689,7 +5689,7 @@ mod tests {
         let (dependent_node, dependent_region) =
             rvsdg.register_function(&module, dependent, [dep_0_node, dep_1_node, dep_2_node]);
 
-        rvsdg.add_op_apply(
+        rvsdg.add_op_call(
             &module,
             dependent_region,
             ValueInput::argument(dependency_1_ty, 1),

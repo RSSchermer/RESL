@@ -495,7 +495,7 @@ impl<'a> RegionBuilder<'a> {
             .copied()
             .map(|v| self.resolve_value(v))
             .collect::<Vec<_>>();
-        let node = self.rvsdg.add_op_apply(
+        let node = self.rvsdg.add_op_call(
             self.module,
             self.region,
             fn_input,

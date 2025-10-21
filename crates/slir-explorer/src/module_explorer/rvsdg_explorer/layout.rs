@@ -988,9 +988,7 @@ impl NodeLayout {
                 SimpleNode::OpAddPtrOffset(_) => NodeContent::PlainText("add-ptr-offset".into()),
                 SimpleNode::OpGetPtrOffset(_) => NodeContent::PlainText("get-ptr-offset".into()),
                 SimpleNode::OpExtractElement(_) => NodeContent::PlainText("extract".into()),
-                SimpleNode::OpApply(op) => {
-                    NodeContent::FnApply("apply".into(), op.resolve_fn(module))
-                }
+                SimpleNode::OpCall(op) => NodeContent::FnCall("call".into(), op.resolve_fn(module)),
                 SimpleNode::OpCallBuiltin(op) => {
                     NodeContent::PlainText(op.callee().ident().as_str().into())
                 }
@@ -1187,7 +1185,7 @@ impl NodeLayout {
                     + config.node_padding
                     + config.font_height;
             }
-            NodeContent::FnApply(text, _) => {
+            NodeContent::FnCall(text, _) => {
                 text.translation[0] = self.translation[0] + config.node_padding;
                 text.translation[1] = self.translation[1]
                     + config.connector_size
@@ -1278,7 +1276,7 @@ impl From<&'static str> for TextElement {
 #[derive(Clone, PartialEq, Debug)]
 pub enum NodeContent {
     PlainText(TextElement),
-    FnApply(TextElement, Function),
+    FnCall(TextElement, Function),
     Loop(TextElement, RegionLayout),
     Switch(TextElement, Vec<RegionLayout>),
 }
@@ -1288,7 +1286,7 @@ impl NodeContent {
         // Note that our text width calculations require a monospace font type
         match self {
             NodeContent::PlainText(text) => text.text.chars().count() as f32 * config.font_width,
-            NodeContent::FnApply(text, ..) => text.text.chars().count() as f32 * config.font_width,
+            NodeContent::FnCall(text, ..) => text.text.chars().count() as f32 * config.font_width,
             NodeContent::Loop(text, region_layout) => {
                 let text_width = text.text.chars().count() as f32 * config.font_width;
 
@@ -1312,7 +1310,7 @@ impl NodeContent {
     fn height(&self, config: &Config) -> f32 {
         match self {
             NodeContent::PlainText(_) => config.font_height,
-            NodeContent::FnApply(..) => config.font_height,
+            NodeContent::FnCall(..) => config.font_height,
             NodeContent::Loop(_, region_layout) => {
                 let text_height = config.font_height;
 

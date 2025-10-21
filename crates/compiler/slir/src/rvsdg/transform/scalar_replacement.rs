@@ -70,23 +70,26 @@ pub enum AnalysisResult {
 ///
 /// # Escape analysis
 ///
-/// An [OpAlloca] of aggregate (a struct or array) escapes if the output pointer, or a load of the
-/// output pointer, is passed whole as a call argument input to an [OpApply] node, or is returned as
-/// a result from the local function region.
+/// An [OpAlloca] of an aggregate (a struct or array) "escapes" if:
 ///
-/// For the [OpAlloca] to be found to escape, it must the whole pointer to the full aggregate, or
-/// the whole unsplit loaded value, that is passed to an [OpApply] node or returned as a result.
+/// - The alloca pointer, or the output of an [OpLoad] on the alloca pointer, is passed whole as a
+///   call argument input to an [OpCall] node.
+/// - The output of an [OpLoad] on the alloca pointer is returned as a result from the local
+///   function region.
+///
+/// For the [OpAlloca] to be found to escape, it must be the whole pointer to the full aggregate, or
+/// the whole unsplit loaded value, that is passed to an [OpCall] node or returned as a result.
 /// Passing or returning sub-elements of the aggregate, obtained via e.g. an [OpPtrElementPtr], does
 /// not constitute an escape, as in these cases scalar replacement will only require local
-/// modifications (the [OpPtrElementPtr] can be adjusted such that any [OpApply] user or result user
+/// modifications (the [OpPtrElementPtr] can be adjusted such that any [OpCall] user or result user
 /// can remain unchanged).
 ///
 /// # Stored-value analysis
 ///
 /// While we can replace cases where a pointer to an alloca of aggregate is used as the "pointer"
 /// input to on [OpStore], if it is used as the "value" input to an [OpStore] we cannot. However,
-/// such [OpStore] may be "promoted" away by a [memory_promotion_and_legalization] pass, so such
-/// an [OpAlloca] may be retried later.
+/// such [OpStore] nodes may be "promoted" away by a [memory_promotion_and_legalization] pass, so
+/// the [OpAlloca] may be retried later.
 struct AggregateAllocaAnalyzer {
     visited: FxHashSet<(Region, ValueUser)>,
     was_loaded: bool,
@@ -146,7 +149,7 @@ impl ValueFlowVisitor for AggregateAllocaAnalyzer {
         use SimpleNode::*;
 
         match rvsdg[node].kind() {
-            Simple(OpApply(_)) => {
+            Simple(OpCall(_)) => {
                 self.has_nonlocal_use = true;
             }
             Simple(OpLoad(_)) => {
@@ -221,7 +224,7 @@ impl<'a, 'b> StoredValueAnalyzer<'a, 'b> {
     }
 
     fn check_node_input(&mut self, region: Region, node: Node, input: u32) -> bool {
-        if self.rvsdg[node].is_op_apply() {
+        if self.rvsdg[node].is_op_call() {
             return true;
         }
 

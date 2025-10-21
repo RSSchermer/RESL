@@ -113,26 +113,26 @@ fn resolve_dependencies(rvsdg: &mut Rvsdg, function_node: Node, region: Region) 
     resolver.route(region)
 }
 
-pub fn inline_function(module: &mut Module, rvsdg: &mut Rvsdg, apply_node: Node) {
-    let node_data = &rvsdg[apply_node];
+pub fn inline_function(module: &mut Module, rvsdg: &mut Rvsdg, call_node: Node) {
+    let node_data = &rvsdg[call_node];
 
     let dst_region = node_data.region();
 
     let value_output_count = node_data.value_outputs().len();
-    let apply_data = node_data.expect_op_apply();
+    let call_data = node_data.expect_op_call();
 
-    let function = apply_data.resolve_fn(module);
+    let function = call_data.resolve_fn(module);
     let function_node = rvsdg
         .get_function_node(function)
-        .expect("cannot apply an unregistered function");
+        .expect("cannot call an unregistered function");
     let function_node_data = rvsdg[function_node].expect_function();
     let src_region = function_node_data.body_region();
     let dependency_count = function_node_data.dependencies().len();
-    let function_argument_count = apply_data.argument_inputs().len();
+    let function_argument_count = call_data.argument_inputs().len();
     let region_argument_count = dependency_count + function_argument_count;
 
     // The state origin to which the inlined region's state argument maps in the destination region.
-    let state_argument_mapping = apply_data.state().map(|state| state.origin);
+    let state_argument_mapping = call_data.state().map(|state| state.origin);
 
     // We also have to construct a mapping that maps each of the non-state arguments to origins in
     // the destination region. These will first map the inlined function's dependencies (if any),
@@ -149,8 +149,8 @@ pub fn inline_function(module: &mut Module, rvsdg: &mut Rvsdg, apply_node: Node)
 
     // Then add mappings for the call arguments.
     argument_mapping.extend(
-        rvsdg[apply_node]
-            .expect_op_apply()
+        rvsdg[call_node]
+            .expect_op_call()
             .argument_inputs()
             .iter()
             .map(|input| input.origin),
@@ -171,24 +171,24 @@ pub fn inline_function(module: &mut Module, rvsdg: &mut Rvsdg, apply_node: Node)
         rvsdg.reconnect_value_users(
             dst_region,
             ValueOrigin::Output {
-                producer: apply_node,
+                producer: call_node,
                 output: i as u32,
             },
             result_mapping[i],
         );
     }
 
-    // Now that we've disconnected the users of all of the apply node's value outputs, the apply
-    // node should be "dead", so we can remove it from the graph.
-    rvsdg.remove_node(apply_node);
+    // Now that we've disconnected the users of all of the call node's value outputs, the call node
+    // should be "dead", so we can remove it from the graph.
+    rvsdg.remove_node(call_node);
 }
 
-struct ApplyNodeCollector {
+struct CallNodeCollector {
     seen: FxHashSet<Node>,
     queue: VecDeque<Node>,
 }
 
-impl ApplyNodeCollector {
+impl CallNodeCollector {
     fn new() -> Self {
         Self {
             seen: Default::default(),
@@ -197,9 +197,9 @@ impl ApplyNodeCollector {
     }
 }
 
-impl BottomUpVisitor for ApplyNodeCollector {
+impl BottomUpVisitor for CallNodeCollector {
     fn visit_node(&mut self, rvsdg: &Rvsdg, node: Node) {
-        if rvsdg[node].is_op_apply() && self.seen.insert(node) {
+        if rvsdg[node].is_op_call() && self.seen.insert(node) {
             self.queue.push_back(node);
         }
 
@@ -207,9 +207,9 @@ impl BottomUpVisitor for ApplyNodeCollector {
     }
 }
 
-/// For all entry points in the given `module`, finds all "apply" nodes and inlines the
-/// corresponding function, iteratively inlining any new "apply" amongst the inlined nodes until
-/// the entry points no longer contain any apply operations for user-defined functions.
+/// For all entry points in the given `module`, finds all call nodes and inlines the called
+/// function, iteratively inlining any new call operations amongst the inlined nodes until the entry
+/// points no longer contain any call operations for user-defined functions.
 pub fn transform_entry_points(module: &mut Module, rvsdg: &mut Rvsdg) {
     let entry_points = module
         .entry_points
@@ -217,7 +217,7 @@ pub fn transform_entry_points(module: &mut Module, rvsdg: &mut Rvsdg) {
         .map(|(f, _)| f)
         .collect::<Vec<_>>();
 
-    let mut collector = ApplyNodeCollector::new();
+    let mut collector = CallNodeCollector::new();
 
     for entry_point in entry_points {
         if let Some(function_node) = rvsdg.get_function_node(entry_point) {
@@ -225,20 +225,20 @@ pub fn transform_entry_points(module: &mut Module, rvsdg: &mut Rvsdg) {
 
             collector.visit_region(rvsdg, body_region);
 
-            // Inline the nodes currently in the queue, then check for new apply nodes and add them
+            // Inline the nodes currently in the queue, then check for new call nodes and add them
             // to the queue; keep iterating until the queue is empty.
             while !collector.queue.is_empty() {
                 while let Some(node) = collector.queue.pop_front() {
                     inline_function(module, rvsdg, node);
                 }
 
-                // Inlining may have added more apply nodes to the function, so search the body
+                // Inlining may have added more call nodes to the function, so search the body
                 // again.
                 // TODO: revisiting every single node in the body region again is not exactly the
-                // most efficient way to find new apply nodes, though I'm also not sure how much
-                // this contributes to the overall compile time; doing the simple thing for now,
-                // but we may want to measure this at some point and perhaps find a way to restrict
-                // the search to only the newly inlined nodes.
+                // most efficient way to find new call nodes, though I'm also not sure how much this
+                // contributes to the overall compile time; doing the simple thing for now, but we
+                // may want to measure this at some point and perhaps find a way to restrict the
+                // search to only the newly inlined nodes.
                 collector.visit_region(rvsdg, body_region);
             }
 
@@ -337,7 +337,7 @@ mod tests {
         let (_, dst_region) = rvsdg.register_function(&module, inline_dst, [inline_target_node]);
 
         let inline_dst_node_0 = rvsdg.add_const_u32(dst_region, 5);
-        let inline_dst_node_1 = rvsdg.add_op_apply(
+        let inline_dst_node_1 = rvsdg.add_op_call(
             &module,
             dst_region,
             ValueInput::argument(inline_target_ty, 0),
@@ -443,13 +443,13 @@ mod tests {
             }
         );
 
-        // After inlining the only "apply" node in the region, the destination region should no
-        // longer contain any "apply" nodes.
+        // After inlining the only call node in the region, the destination region should no longer
+        // contain any call nodes.
         assert!(!rvsdg[dst_region]
             .nodes()
             .into_iter()
             .copied()
-            .any(|n| rvsdg[n].is_op_apply()));
+            .any(|n| rvsdg[n].is_op_call()));
     }
 
     #[test]
@@ -510,7 +510,7 @@ mod tests {
         let (_, dst_region) = rvsdg.register_function(&module, inline_dst, [inline_target_node]);
 
         let inline_dst_node_0 = rvsdg.add_op_alloca(dst_region, TY_U32);
-        let inline_dst_node_1 = rvsdg.add_op_apply(
+        let inline_dst_node_1 = rvsdg.add_op_call(
             &module,
             dst_region,
             ValueInput::argument(inline_target_ty, 0),
@@ -528,10 +528,10 @@ mod tests {
 
         rvsdg[inlined_node].expect_op_store();
 
-        // The destination region's state result should now be connected to the inlined node.
         assert_eq!(
             *rvsdg[dst_region].state_result(),
-            StateOrigin::Node(inlined_node)
+            StateOrigin::Node(inlined_node),
+            "the destination region's state result should now be connected to the inlined node"
         );
     }
 
@@ -621,14 +621,14 @@ mod tests {
         // Build add_2
         let (add_2_node, add_2_region) = rvsdg.register_function(&module, add_2, [add_1_node]);
 
-        let add_2_node_0 = rvsdg.add_op_apply(
+        let add_2_node_0 = rvsdg.add_op_call(
             &module,
             add_2_region,
             ValueInput::argument(add_1_ty, 0),
             [ValueInput::argument(TY_U32, 1)],
             StateOrigin::Argument,
         );
-        let add_2_node_1 = rvsdg.add_op_apply(
+        let add_2_node_1 = rvsdg.add_op_call(
             &module,
             add_2_region,
             ValueInput::argument(add_1_ty, 0),
@@ -650,7 +650,7 @@ mod tests {
             rvsdg.register_function(&module, entry_point, [add_2_node]);
 
         let entry_point_node_0 = rvsdg.add_const_u32(entry_point_region, 10);
-        let entry_point_node_1 = rvsdg.add_op_apply(
+        let entry_point_node_1 = rvsdg.add_op_call(
             &module,
             entry_point_region,
             ValueInput::argument(add_2_ty, 0),
@@ -669,20 +669,22 @@ mod tests {
 
         transform_entry_points(&mut module, &mut rvsdg);
 
-        // The entry_point function should no longer contain any apply nodes.
         assert_eq!(
             rvsdg[entry_point_region]
                 .nodes()
                 .into_iter()
-                .filter(|n| rvsdg[**n].is_op_apply())
+                .filter(|n| rvsdg[**n].is_op_call())
                 .count(),
-            0
+            0,
+            "entry_point function should no longer contain any call nodes"
         );
 
-        // The entry_point function should no longer have any dependencies.
-        assert!(rvsdg[entry_point_node]
-            .expect_function()
-            .dependencies()
-            .is_empty());
+        assert!(
+            rvsdg[entry_point_node]
+                .expect_function()
+                .dependencies()
+                .is_empty(),
+            "entry_point function should no longer have any dependencies"
+        );
     }
 }

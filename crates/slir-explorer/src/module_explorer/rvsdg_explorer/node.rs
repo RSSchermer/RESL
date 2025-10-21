@@ -26,7 +26,7 @@ pub fn Node(module: StoredValue<ModuleData>, node: NodeLayout) -> impl IntoView 
 
     let rect_class = match node.read_value().content() {
         NodeContent::PlainText(_) => "node-rect simple",
-        NodeContent::FnApply(_, _) => "node-rect simple",
+        NodeContent::FnCall(_, _) => "node-rect simple",
         NodeContent::Loop(_, _) => "node-rect loop",
         NodeContent::Switch(_, _) => "node-rect switch",
     };
@@ -96,7 +96,7 @@ pub fn Node(module: StoredValue<ModuleData>, node: NodeLayout) -> impl IntoView 
                                 }}
                             }.into_any()
                         }
-                        NodeContent::FnApply(text, f) => {
+                        NodeContent::FnCall(text, f) => {
                             let [x, y] = text.translation();
 
                             view! {
