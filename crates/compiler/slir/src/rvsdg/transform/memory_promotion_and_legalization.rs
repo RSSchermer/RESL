@@ -783,7 +783,6 @@ mod tests {
         let load_0_node = rvsdg.add_op_load(
             region,
             ValueInput::output(ptr_ty, alloca_node, 0),
-            TY_U32,
             StateOrigin::Node(store_0_node),
         );
         let store_1_node = rvsdg.add_op_store(
@@ -795,7 +794,6 @@ mod tests {
         let load_1_node = rvsdg.add_op_load(
             region,
             ValueInput::output(ptr_ty, alloca_node, 0),
-            TY_U32,
             StateOrigin::Node(store_1_node),
         );
         let add_node = rvsdg.add_op_binary(
@@ -909,7 +907,6 @@ mod tests {
         let load_node = rvsdg.add_op_load(
             region,
             ValueInput::output(ptr_ty, alloca_node, 0),
-            TY_U32,
             StateOrigin::Node(store_1_node),
         );
 
@@ -1008,7 +1005,6 @@ mod tests {
         let load_node = rvsdg.add_op_load(
             region,
             ValueInput::output(ptr_ty, alloca_node, 0),
-            TY_U32,
             StateOrigin::Node(store_node),
         );
 
@@ -1103,13 +1099,11 @@ mod tests {
         let load_node = rvsdg.add_op_load(
             region,
             ValueInput::output(ptr_ty, alloca_node, 0),
-            TY_U32,
             StateOrigin::Node(store_node),
         );
         let element_index_node = rvsdg.add_const_u32(region, 0);
         let element_ptr_node = rvsdg.add_op_ptr_element_ptr(
             region,
-            TY_F32,
             ValueInput::output(ptr_ty, alloca_node, 0),
             [ValueInput::output(TY_U32, element_index_node, 0)],
         );
@@ -1211,7 +1205,6 @@ mod tests {
         let load_node = rvsdg.add_op_load(
             branch_0,
             ValueInput::argument(ptr_ty, 0),
-            TY_U32,
             StateOrigin::Argument,
         );
 
@@ -1371,7 +1364,6 @@ mod tests {
         let load_node = rvsdg.add_op_load(
             inner_branch_0,
             ValueInput::argument(ptr_ty, 0),
-            TY_U32,
             StateOrigin::Argument,
         );
 
@@ -1569,7 +1561,6 @@ mod tests {
         let load_node = rvsdg.add_op_load(
             region,
             ValueInput::output(ptr_ty, alloca_node, 0),
-            TY_U32,
             StateOrigin::Node(switch_node),
         );
 
@@ -1783,7 +1774,6 @@ mod tests {
         let load_node = rvsdg.add_op_load(
             region,
             ValueInput::output(ptr_ty, alloca_node, 0),
-            TY_U32,
             StateOrigin::Node(outer_switch_node),
         );
 
@@ -1959,7 +1949,6 @@ mod tests {
         let load_node = rvsdg.add_op_load(
             loop_region,
             ValueInput::argument(ptr_ty, 2),
-            TY_U32,
             StateOrigin::Argument,
         );
 
@@ -2148,7 +2137,6 @@ mod tests {
         let load_node = rvsdg.add_op_load(
             region,
             ValueInput::output(ptr_ty, alloca_node, 0),
-            TY_U32,
             StateOrigin::Node(loop_node),
         );
 
@@ -2287,7 +2275,6 @@ mod tests {
         let load_node = rvsdg.add_op_load(
             region,
             ValueInput::output(ptr_ty, switch_node, 0),
-            TY_U32,
             StateOrigin::Node(store_1_node),
         );
 

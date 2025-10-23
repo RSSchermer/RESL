@@ -1326,7 +1326,6 @@ impl Cfg {
         &mut self,
         bb: BasicBlock,
         position: BlockPosition,
-        element_ty: Type,
         aggregate: Value,
         indices: impl IntoIterator<Item = Value>,
     ) -> (Statement, LocalBinding) {
@@ -1341,16 +1340,16 @@ impl Cfg {
             "expected aggregate argument to have an aggregate type"
         );
 
-        let mut collected_indices = thin_vec![];
+        let mut element_ty = aggregate_ty;
+        let mut collected_indices = indices.into_iter().collect::<ThinVec<_>>();
 
-        for (i, value) in indices.into_iter().enumerate() {
+        if collected_indices.is_empty() {
+            panic!("expected at least one index");
+        }
+
+        for (i, value) in collected_indices.iter().enumerate() {
             self.validate_value(owner, &value, &format!("index {}", i));
-
-            let ty = self.value_ty(&value);
-
-            assert_eq!(ty, TY_U32, "index {} must be a u32", i);
-
-            collected_indices.push(value);
+            element_ty = self.project_ty((i, value), element_ty);
         }
 
         let result = self.add_local_binding(owner, element_ty);
@@ -1374,7 +1373,6 @@ impl Cfg {
         &mut self,
         bb: BasicBlock,
         position: BlockPosition,
-        element_ty: Type,
         pointer: Value,
         indices: impl IntoIterator<Item = Value>,
     ) -> (Statement, LocalBinding) {
@@ -1384,21 +1382,20 @@ impl Cfg {
 
         let pointer_ty = self.value_ty(&pointer);
 
-        assert!(
-            self.ty.kind(pointer_ty).is_ptr(),
-            "expected pointer argument to have a pointer type"
-        );
+        let TypeKind::Ptr(pointee_ty) = *self.ty.kind(pointer_ty) else {
+            panic!("expected pointer argument to have a pointer type");
+        };
 
-        let mut collected_indices = thin_vec![];
+        let mut element_ty = pointee_ty;
+        let mut collected_indices = indices.into_iter().collect::<ThinVec<_>>();
 
-        for (i, value) in indices.into_iter().enumerate() {
-            self.validate_value(owner, &value, &format!("index {}", i));
+        if collected_indices.is_empty() {
+            panic!("expected at least one index");
+        }
 
-            let ty = self.value_ty(&value);
-
-            assert_eq!(ty, TY_U32, "index {} must be a u32", i);
-
-            collected_indices.push(value);
+        for (i, value) in collected_indices.iter().enumerate() {
+            self.validate_value(owner, value, &format!("index {}", i));
+            element_ty = self.project_ty((i, value), element_ty);
         }
 
         let result_ty = self.ty.register(TypeKind::Ptr(element_ty));
@@ -1797,6 +1794,33 @@ impl Cfg {
         self.function_body_map
             .get_mut(&function)
             .expect("function not registered")
+    }
+
+    fn project_ty(&self, (i, value): (usize, &Value), base_ty: Type) -> Type {
+        let ty = self.value_ty(value);
+
+        assert_eq!(ty, TY_U32, "index `{}` must be a `u32`", i);
+
+        match &*self.ty.kind(base_ty) {
+            TypeKind::Struct(s) => {
+                let Value::InlineConst(InlineConst::U32(index)) = *value else {
+                    panic!(
+                        "index `{}` tried to index into a struct type with a non-constant index",
+                        i
+                    );
+                };
+
+                s.fields[index as usize].ty
+            }
+            TypeKind::Vector(v) => v.scalar.ty(),
+            TypeKind::Matrix(m) => m.column_ty(),
+            TypeKind::Array { element_ty, .. } | TypeKind::Slice { element_ty } => *element_ty,
+            _ => panic!(
+                "index `{}` tried to index a non-aggregate type (`{}`)",
+                i,
+                base_ty.to_string(self.ty())
+            ),
+        }
     }
 }
 

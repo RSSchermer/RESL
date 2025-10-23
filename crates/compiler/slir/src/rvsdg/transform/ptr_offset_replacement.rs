@@ -432,14 +432,12 @@ mod tests {
         );
         let ptr_element_ptr_node = rvsdg.add_op_ptr_element_ptr(
             region,
-            TY_U32,
             ValueInput::output(array_ptr_ty, add_offset_node, 0),
             [ValueInput::output(TY_U32, add_node, 0)],
         );
         let load_node = rvsdg.add_op_load(
             region,
             ValueInput::output(TY_PTR_U32, ptr_element_ptr_node, 0),
-            TY_U32,
             StateOrigin::Argument,
         );
 
@@ -531,14 +529,12 @@ mod tests {
         );
         let ptr_element_ptr_node = rvsdg.add_op_ptr_element_ptr(
             region,
-            TY_U32,
             ValueInput::output(array_ptr_ty, add_offset_1_node, 0),
             [ValueInput::output(TY_U32, index_add_node, 0)],
         );
         let load_node = rvsdg.add_op_load(
             region,
             ValueInput::output(TY_PTR_U32, ptr_element_ptr_node, 0),
-            TY_U32,
             StateOrigin::Argument,
         );
 
@@ -677,14 +673,12 @@ mod tests {
         );
         let ptr_element_ptr_node = rvsdg.add_op_ptr_element_ptr(
             region,
-            TY_U32,
             ValueInput::output(array_ptr_ty, switch_node, 0),
             [ValueInput::output(TY_U32, index_add_node, 0)],
         );
         let load_node = rvsdg.add_op_load(
             region,
             ValueInput::output(TY_PTR_U32, ptr_element_ptr_node, 0),
-            TY_U32,
             StateOrigin::Argument,
         );
 
@@ -869,14 +863,12 @@ mod tests {
         );
         let ptr_element_ptr_node = rvsdg.add_op_ptr_element_ptr(
             region,
-            TY_U32,
             ValueInput::output(array_ptr_ty, loop_node, 0),
             [ValueInput::output(TY_U32, index_add_node, 0)],
         );
         let load_node = rvsdg.add_op_load(
             region,
             ValueInput::output(TY_PTR_U32, ptr_element_ptr_node, 0),
-            TY_U32,
             StateOrigin::Argument,
         );
 

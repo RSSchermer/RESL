@@ -7,9 +7,7 @@ use std::{fmt, mem};
 use indexmap::IndexSet;
 use serde::{Deserialize, Serialize};
 
-use crate::ty::ScalarKind::Bool;
-use crate::ty::TypeKind::Predicate;
-use crate::{BinaryOperator, Function, Module};
+use crate::{BinaryOperator, Function};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct Type(TypeInner);
@@ -176,6 +174,25 @@ pub struct Matrix {
     pub rows: VectorSize,
     pub columns: VectorSize,
     pub scalar: ScalarKind,
+}
+
+impl Matrix {
+    pub fn column_ty(&self) -> Type {
+        match (self.scalar, self.rows) {
+            (ScalarKind::I32, VectorSize::Two) => TY_VEC2_I32,
+            (ScalarKind::I32, VectorSize::Three) => TY_VEC3_I32,
+            (ScalarKind::I32, VectorSize::Four) => TY_VEC4_I32,
+            (ScalarKind::U32, VectorSize::Two) => TY_VEC2_U32,
+            (ScalarKind::U32, VectorSize::Three) => TY_VEC3_U32,
+            (ScalarKind::U32, VectorSize::Four) => TY_VEC4_U32,
+            (ScalarKind::F32, VectorSize::Two) => TY_VEC2_F32,
+            (ScalarKind::F32, VectorSize::Three) => TY_VEC3_F32,
+            (ScalarKind::F32, VectorSize::Four) => TY_VEC4_F32,
+            (ScalarKind::Bool, VectorSize::Two) => TY_VEC2_BOOL,
+            (ScalarKind::Bool, VectorSize::Three) => TY_VEC3_BOOL,
+            (ScalarKind::Bool, VectorSize::Four) => TY_VEC4_BOOL,
+        }
+    }
 }
 
 impl fmt::Display for Matrix {
@@ -382,6 +399,15 @@ impl ScalarKind {
         match self {
             ScalarKind::I32 | ScalarKind::U32 => true,
             ScalarKind::F32 | ScalarKind::Bool => false,
+        }
+    }
+
+    pub fn ty(&self) -> Type {
+        match self {
+            ScalarKind::I32 => TY_I32,
+            ScalarKind::U32 => TY_U32,
+            ScalarKind::F32 => TY_F32,
+            ScalarKind::Bool => TY_BOOL,
         }
     }
 }

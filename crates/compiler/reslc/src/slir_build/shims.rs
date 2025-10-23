@@ -46,22 +46,6 @@ pub fn maybe_shim(item: MonoItem, cx: &CodegenContext) -> Option<MonoItem> {
 
 fn define_usize_slice_index_get(instance: Instance, cx: &CodegenContext) {
     let function = cx.get_fn(&instance);
-    let mut module = cx.module.borrow_mut();
-    let ret_ty = module.fn_sigs[function].args[0].ty;
-
-    let TypeKind::Ptr(pointee_ty) = *module.ty.kind(ret_ty) else {
-        bug!("first argument should be a return pointer");
-    };
-    let TypeKind::Enum(option_enum) = &*module.ty.kind(pointee_ty) else {
-        bug!("`Option` type should be represented in SLIR by an enum`");
-    };
-    let some_variant_ty = option_enum.variants[1];
-    let some_struct_data = module.ty.kind(some_variant_ty);
-    let some_struct_data = some_struct_data.expect_struct();
-    let elem_ptr_ty = some_struct_data.fields[0].ty;
-    let TypeKind::Ptr(elem_ty) = *module.ty.kind(elem_ptr_ty) else {
-        bug!("`Some` variant payload must be a pointer");
-    };
 
     let mut cfg = cx.cfg.borrow_mut();
     let body = cfg
@@ -97,14 +81,12 @@ fn define_usize_slice_index_get(instance: Instance, cx: &CodegenContext) {
     let (_, payload_ptr) = cfg.add_stmt_op_ptr_element_ptr(
         bb1,
         BlockPosition::Append,
-        elem_ptr_ty,
         some_ptr.into(),
         [InlineConst::U32(0).into()],
     );
     let (_, elem_ptr) = cfg.add_stmt_op_ptr_element_ptr(
         bb1,
         BlockPosition::Append,
-        elem_ty,
         slice_ptr.into(),
         [index.into()],
     );
@@ -124,26 +106,7 @@ fn define_usize_slice_index_get(instance: Instance, cx: &CodegenContext) {
 fn define_range_usize_slice_index_get(instance: Instance, cx: &CodegenContext) {
     let function = cx.get_fn(&instance);
 
-    let mut module = cx.module.borrow_mut();
-    let ret_ty = module.fn_sigs[function].args[0].ty;
-
-    let TypeKind::Ptr(pointee_ty) = *module.ty.kind(ret_ty) else {
-        bug!("first argument should be a return pointer");
-    };
-    let TypeKind::Enum(option_enum) = &*module.ty.kind(pointee_ty) else {
-        bug!("`Option` type should be represented in SLIR by an enum`");
-    };
-    let some_variant_ty = option_enum.variants[1];
-    let some_variant_ptr_ty = module.ty.register(TypeKind::Ptr(some_variant_ty));
-    let some_struct_data = module.ty.kind(some_variant_ty);
-    let some_struct_data = some_struct_data.expect_struct();
-    let fat_ptr_ty = some_struct_data.fields[0].ty;
-    let fat_ptr_kind = module.ty.kind(fat_ptr_ty);
-    let fat_ptr_data = fat_ptr_kind.expect_struct();
-    let slice_ptr_ty = fat_ptr_data.fields[0].ty;
-
     let mut cfg = cx.cfg.borrow_mut();
-
     let body = cfg
         .get_function_body(function)
         .expect("function should have been predefined");
@@ -205,7 +168,6 @@ fn define_range_usize_slice_index_get(instance: Instance, cx: &CodegenContext) {
     let (_, out_slice_ptr_ptr) = cfg.add_stmt_op_ptr_element_ptr(
         bb_some,
         BlockPosition::Append,
-        slice_ptr_ty,
         some_variant_ptr.into(),
         [InlineConst::U32(0).into(), InlineConst::U32(0).into()],
     );
@@ -227,7 +189,6 @@ fn define_range_usize_slice_index_get(instance: Instance, cx: &CodegenContext) {
     let (_, out_len_ptr) = cfg.add_stmt_op_ptr_element_ptr(
         bb_some,
         BlockPosition::Append,
-        TY_U32,
         some_variant_ptr.into(),
         [InlineConst::U32(0).into(), InlineConst::U32(1).into()],
     );

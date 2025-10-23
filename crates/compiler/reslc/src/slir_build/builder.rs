@@ -509,7 +509,7 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
         );
     }
 
-    fn load(&mut self, ty: Self::Type, ptr: Self::Value, _align: Align) -> Self::Value {
+    fn load(&mut self, _ty: Self::Type, ptr: Self::Value, _align: Align) -> Self::Value {
         let (_, result) = self.cfg.borrow_mut().add_stmt_op_load(
             self.basic_block,
             BlockPosition::Append,
@@ -577,7 +577,6 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
             _ => bug!(),
         };
 
-        let elem_ty = elem_ty.expect_slir_type();
         let elem = elem.expect_value();
         let dest = dest.val.llval.expect_value();
 
@@ -588,7 +587,6 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
             let (_, elem_ptr) = cfg.add_stmt_op_ptr_element_ptr(
                 self.basic_block,
                 BlockPosition::Append,
-                elem_ty,
                 dest,
                 [index],
             );
@@ -628,16 +626,13 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
 
     fn ptr_element_ptr(
         &mut self,
-        ty: Self::Type,
+        _ty: Self::Type,
         ptr: Self::Value,
         indices: &[Self::Value],
     ) -> Self::Value {
-        let elem_ty = ty.expect_slir_type();
-
         let (_, result) = self.cfg.borrow_mut().add_stmt_op_ptr_element_ptr(
             self.basic_block,
             BlockPosition::Append,
-            elem_ty,
             ptr.expect_value(),
             indices.iter().map(|i| i.expect_value()),
         );
@@ -798,15 +793,6 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
     }
 
     fn extract_value(&mut self, agg_val: Self::Value, idx: u64) -> Self::Value {
-        fn val_ty(kind: &slir::ty::TypeKind, idx: u64) -> slir::ty::Type {
-            match kind {
-                slir::ty::TypeKind::Struct(struct_data) => struct_data.fields[idx as usize].ty,
-                slir::ty::TypeKind::Array { element_ty, .. }
-                | slir::ty::TypeKind::Slice { element_ty } => *element_ty,
-                _ => bug!("can only extract value from an aggregate type"),
-            }
-        }
-
         let mut cfg = self.cfg.borrow_mut();
 
         let agg_val = agg_val.expect_value();
@@ -817,20 +803,17 @@ impl<'a, 'tcx> BuilderMethods<'a> for Builder<'a, 'tcx> {
 
         if let slir::ty::TypeKind::Ptr(pointee_ty) = *agg_ty_kind {
             let pointee_ty_kind = cfg.ty().kind(pointee_ty);
-            let val_ty = val_ty(&pointee_ty_kind, idx);
 
             mem::drop(cfg);
 
-            let val_ptr = self.ptr_element_ptr(val_ty.into(), agg_val.into(), &[index.into()]);
+            let val_ptr =
+                self.ptr_element_ptr(slir::ty::TY_DUMMY.into(), agg_val.into(), &[index.into()]);
 
-            self.load(val_ty.into(), val_ptr, 0)
+            self.load(slir::ty::TY_DUMMY.into(), val_ptr, 0)
         } else {
-            let val_ty = val_ty(&agg_ty_kind, idx);
-
             let (_, result) = cfg.add_stmt_op_extract_value(
                 self.basic_block,
                 BlockPosition::Append,
-                val_ty,
                 agg_val,
                 [index.into()],
             );

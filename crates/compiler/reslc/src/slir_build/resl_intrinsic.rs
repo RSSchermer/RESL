@@ -156,7 +156,6 @@ fn define_mem_resource_as_ref(instance: Instance, cx: &CodegenContext) {
         let (_, ptr_ptr) = cfg.add_stmt_op_ptr_element_ptr(
             bb,
             BlockPosition::Append,
-            ptr_ty,
             alloca_ptr.into(),
             [0u32.into()],
         );
@@ -165,7 +164,6 @@ fn define_mem_resource_as_ref(instance: Instance, cx: &CodegenContext) {
         let (_, len_ptr) = cfg.add_stmt_op_ptr_element_ptr(
             bb,
             BlockPosition::Append,
-            TY_U32,
             alloca_ptr.into(),
             [1u32.into()],
         );

@@ -326,12 +326,10 @@ impl FunctionImporter {
             .iter()
             .map(|v| self.dst_value(src_mod, (dst_mod, dst_cfg), *v))
             .collect::<Vec<_>>();
-        let element_ty = src_data.element_ty();
 
         let (_, dst_result) = dst_cfg.add_stmt_op_extract_value(
             dst_bb,
             BlockPosition::Append,
-            element_ty,
             dst_aggregate,
             dst_indices,
         );
@@ -354,12 +352,10 @@ impl FunctionImporter {
             .iter()
             .map(|v| self.dst_value(src_mod, (dst_mod, dst_cfg), *v))
             .collect::<Vec<_>>();
-        let element_ty = src_data.element_ty();
 
         let (_, dst_result) = dst_cfg.add_stmt_op_ptr_element_ptr(
             dst_bb,
             BlockPosition::Append,
-            element_ty,
             dst_pointer,
             dst_indices,
         );

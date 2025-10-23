@@ -3112,16 +3112,19 @@ impl Rvsdg {
         &mut self,
         region: Region,
         ptr_input: ValueInput,
-        output_ty: Type,
         state_origin: StateOrigin,
     ) -> Node {
         self.validate_node_value_input(region, &ptr_input);
 
+        let TypeKind::Ptr(pointee_ty) = *self.ty.kind(ptr_input.ty) else {
+            panic!("`ptr_input` must be a pointer type");
+        };
+
         let node = self.nodes.insert(NodeData {
             kind: NodeKind::Simple(
                 OpLoad {
-                    ptr_input: ptr_input,
-                    value_output: ValueOutput::new(output_ty),
+                    ptr_input,
+                    value_output: ValueOutput::new(pointee_ty),
                     state: State {
                         origin: state_origin,
                         user: StateUser::Result, // Temp value
@@ -3173,16 +3176,23 @@ impl Rvsdg {
     pub fn add_op_ptr_element_ptr(
         &mut self,
         region: Region,
-        element_ty: Type,
         ptr_input: ValueInput,
         index_inputs: impl IntoIterator<Item = ValueInput>,
     ) -> Node {
         self.validate_node_value_input(region, &ptr_input);
 
+        dbg!(&*self.ty.kind(ptr_input.ty));
+
+        let TypeKind::Ptr(mut element_ty) = *self.ty.kind(ptr_input.ty) else {
+            panic!("`ptr_input` must be a pointer type");
+        };
+
         let mut inputs = vec![ptr_input];
 
-        for input in index_inputs {
+        for (i, input) in index_inputs.into_iter().enumerate() {
             self.validate_node_value_input(region, &input);
+
+            element_ty = self.project_index((i, &input), element_ty);
 
             inputs.push(input);
         }
@@ -3276,23 +3286,26 @@ impl Rvsdg {
     pub fn add_op_extract_element(
         &mut self,
         region: Region,
-        element_ty: Type,
         aggregate_input: ValueInput,
         index_inputs: impl IntoIterator<Item = ValueInput>,
     ) -> Node {
         self.validate_node_value_input(region, &aggregate_input);
+
+        let mut element_ty = aggregate_input.ty;
 
         let mut inputs = vec![aggregate_input];
 
         for input in index_inputs {
             self.validate_node_value_input(region, &input);
 
+            element_ty = self.project_index((0, &input), element_ty);
+
             inputs.push(input);
         }
 
         let node = self.nodes.insert(NodeData {
             kind: NodeKind::Simple(
-                OpPtrElementPtr {
+                OpExtractElement {
                     element_ty,
                     inputs,
                     output: ValueOutput::new(element_ty),
@@ -4784,6 +4797,34 @@ impl Rvsdg {
                 .remove(&user),
         }
     }
+
+    fn project_index(&self, (i, input): (usize, &ValueInput), base_ty: Type) -> Type {
+        match &*self.ty.kind(base_ty) {
+            TypeKind::Struct(s) => {
+                if let ValueOrigin::Output {
+                    producer,
+                    output: 0,
+                } = input.origin
+                    && let NodeKind::Simple(SimpleNode::ConstU32(n)) = self[producer].kind()
+                {
+                    let index = n.value as usize;
+
+                    s.fields[index].ty
+                } else {
+                    panic!(
+                        "index `{}` tried to project into a struct field with a non-constant index",
+                        i
+                    );
+                }
+            }
+            TypeKind::Vector(v) => v.scalar.ty(),
+            TypeKind::Matrix(m) => m.column_ty(),
+            TypeKind::Array { element_ty, .. } | TypeKind::Slice { element_ty } => *element_ty,
+            _ => {
+                panic!("index `{}` tried to index into a non-aggregate type", i);
+            }
+        }
+    }
 }
 
 impl Index<Region> for Rvsdg {
@@ -5508,7 +5549,6 @@ mod tests {
         let node_1 = rvsdg.add_op_load(
             region,
             ValueInput::argument(TY_PTR_U32, 0),
-            TY_U32,
             StateOrigin::Argument,
         );
         let node_2 = rvsdg.add_op_binary(

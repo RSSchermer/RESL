@@ -611,7 +611,6 @@ impl Replacer<'_, '_, '_> {
         let is_multi_layer_access = node_data.index_inputs().len() > 1;
 
         if is_multi_layer_access {
-            let element_ty = node_data.element_ty();
             let indices = node_data
                 .index_inputs()
                 .iter()
@@ -621,7 +620,7 @@ impl Replacer<'_, '_, '_> {
 
             let node = self
                 .rvsdg
-                .add_op_ptr_element_ptr(target_region, element_ty, input, indices);
+                .add_op_ptr_element_ptr(target_region, input, indices);
 
             ValueOrigin::Output {
                 producer: node,
@@ -721,7 +720,6 @@ impl Replacer<'_, '_, '_> {
         let is_multi_layer_access = node_data.indices().len() > 1;
 
         if is_multi_layer_access {
-            let element_ty = node_data.element_ty();
             let indices = node_data
                 .indices()
                 .iter()
@@ -731,7 +729,7 @@ impl Replacer<'_, '_, '_> {
 
             let node = self
                 .rvsdg
-                .add_op_extract_element(target_region, element_ty, input, indices);
+                .add_op_extract_element(target_region, input, indices);
 
             ValueOrigin::Output {
                 producer: node,
@@ -762,9 +760,7 @@ impl Replacer<'_, '_, '_> {
                     panic!("expected input to load operation to be a pointer");
                 };
 
-                let split_node = self
-                    .rvsdg
-                    .add_op_load(region, *input, output_ty, state_origin);
+                let split_node = self.rvsdg.add_op_load(region, *input, state_origin);
 
                 ValueInput {
                     ty: output_ty,
@@ -933,7 +929,6 @@ impl Replacer<'_, '_, '_> {
         } else {
             let element_ptr = self.rvsdg.add_op_ptr_element_ptr(
                 region,
-                element_ty,
                 ptr_input,
                 [ValueInput::output(TY_U32, index_input, 0)],
             );
@@ -946,7 +941,6 @@ impl Replacer<'_, '_, '_> {
         } else {
             let element_value = self.rvsdg.add_op_extract_element(
                 region,
-                element_ty,
                 value_input,
                 [ValueInput::output(TY_U32, index_input, 0)],
             );
@@ -1137,10 +1131,9 @@ impl Replacer<'_, '_, '_> {
                 } => {
                     for i in 0..*count {
                         let ptr_ty = ty_reg.register(TypeKind::Ptr(*base));
-                        let index = self.rvsdg.add_const_u32(region, i as u32);
+                        let index = self.rvsdg.add_const_u32(outer_region, i as u32);
                         let element = self.rvsdg.add_op_ptr_element_ptr(
                             outer_region,
-                            *base,
                             proxy_input,
                             [ValueInput::output(TY_U32, index, 0)],
                         );
@@ -1164,10 +1157,9 @@ impl Replacer<'_, '_, '_> {
                         let element_ty = field.ty;
                         let ptr_ty = ty_reg.register(TypeKind::Ptr(element_ty));
 
-                        let index = self.rvsdg.add_const_u32(region, i as u32);
+                        let index = self.rvsdg.add_const_u32(outer_region, i as u32);
                         let element = self.rvsdg.add_op_ptr_element_ptr(
                             outer_region,
-                            element_ty,
                             proxy_input,
                             [ValueInput::output(TY_U32, index, 0)],
                         );
@@ -1194,10 +1186,9 @@ impl Replacer<'_, '_, '_> {
                 ..
             } => {
                 for i in 0..*count {
-                    let index = self.rvsdg.add_const_u32(region, i as u32);
+                    let index = self.rvsdg.add_const_u32(outer_region, i as u32);
                     let element = self.rvsdg.add_op_extract_element(
                         outer_region,
-                        *base,
                         proxy_input,
                         [ValueInput::output(TY_U32, index, 0)],
                     );
@@ -1220,10 +1211,9 @@ impl Replacer<'_, '_, '_> {
                 for (i, field) in struct_data.fields.iter().enumerate() {
                     let element_ty = field.ty;
 
-                    let index = self.rvsdg.add_const_u32(region, i as u32);
+                    let index = self.rvsdg.add_const_u32(outer_region, i as u32);
                     let element = self.rvsdg.add_op_extract_element(
                         outer_region,
-                        element_ty,
                         proxy_input,
                         [ValueInput::output(TY_U32, index, 0)],
                     );
@@ -1302,16 +1292,11 @@ impl Replacer<'_, '_, '_> {
 
         match ty_reg.kind(original_input.ty).deref() {
             TypeKind::Ptr(pointee_ty) => match ty_reg.kind(*pointee_ty).deref() {
-                TypeKind::Array {
-                    element_ty: base,
-                    count,
-                    ..
-                } => {
+                TypeKind::Array { count, .. } => {
                     for i in 0..*count {
                         let index_node = self.rvsdg.add_const_u32(region, i as u32);
                         let split_node = self.rvsdg.add_op_ptr_element_ptr(
                             region,
-                            *base,
                             original_input,
                             [ValueInput::output(TY_U32, index_node, 0)],
                         );
@@ -1328,11 +1313,10 @@ impl Replacer<'_, '_, '_> {
                     }
                 }
                 TypeKind::Struct(struct_data) => {
-                    for (i, field) in struct_data.fields.iter().enumerate() {
+                    for i in 0..struct_data.fields.len() {
                         let index_node = self.rvsdg.add_const_u32(region, i as u32);
                         let split_node = self.rvsdg.add_op_ptr_element_ptr(
                             region,
-                            field.ty,
                             original_input,
                             [ValueInput::output(TY_U32, index_node, 0)],
                         );
@@ -1350,16 +1334,11 @@ impl Replacer<'_, '_, '_> {
                 }
                 _ => unreachable!("pointee type is not an aggregate"),
             },
-            TypeKind::Array {
-                element_ty: base,
-                count,
-                ..
-            } => {
+            TypeKind::Array { count, .. } => {
                 for i in 0..*count {
                     let index_node = self.rvsdg.add_const_u32(region, i as u32);
                     let split_node = self.rvsdg.add_op_extract_element(
                         region,
-                        *base,
                         original_input,
                         [ValueInput::output(TY_U32, index_node, 0)],
                     );
@@ -1376,11 +1355,10 @@ impl Replacer<'_, '_, '_> {
                 }
             }
             TypeKind::Struct(struct_data) => {
-                for (i, field) in struct_data.fields.iter().enumerate() {
+                for i in 0..struct_data.fields.len() {
                     let index_node = self.rvsdg.add_const_u32(region, i as u32);
                     let split_node = self.rvsdg.add_op_extract_element(
                         region,
-                        field.ty,
                         original_input,
                         [ValueInput::output(TY_U32, index_node, 0)],
                     );
@@ -1555,14 +1533,12 @@ mod tests {
         let element_index = rvsdg.add_const_u32(region, 1);
         let op_ptr_element_ptr = rvsdg.add_op_ptr_element_ptr(
             region,
-            TY_U32,
             ValueInput::output(ptr_ty, op_alloca, 0),
             [ValueInput::output(TY_U32, element_index, 0)],
         );
         let load = rvsdg.add_op_load(
             region,
             ValueInput::output(element_ptr_ty, op_ptr_element_ptr, 0),
-            TY_U32,
             StateOrigin::Argument,
         );
 
@@ -1646,14 +1622,12 @@ mod tests {
         let op_alloca = rvsdg.add_op_alloca(region, ty);
         let op_ptr_element_ptr = rvsdg.add_op_ptr_element_ptr(
             region,
-            TY_U32,
             ValueInput::output(ptr_ty, op_alloca, 0),
             [ValueInput::argument(TY_U32, 0)],
         );
         let load = rvsdg.add_op_load(
             region,
             ValueInput::output(element_ptr_ty, op_ptr_element_ptr, 0),
-            TY_U32,
             StateOrigin::Argument,
         );
 
@@ -1818,13 +1792,11 @@ mod tests {
         let op_load = rvsdg.add_op_load(
             region,
             ValueInput::output(ptr_ty, op_alloca, 0),
-            ty,
             StateOrigin::Argument,
         );
         let element_index = rvsdg.add_const_u32(region, 1);
         let op_extract_element = rvsdg.add_op_extract_element(
             region,
-            TY_U32,
             ValueInput::output(ty, op_load, 0),
             [ValueInput::output(TY_U32, element_index, 0)],
         );
@@ -1926,7 +1898,6 @@ mod tests {
         let op_load = rvsdg.add_op_load(
             region,
             ValueInput::output(ptr_ty, op_alloca, 0),
-            ty,
             StateOrigin::Argument,
         );
         let op_store = rvsdg.add_op_store(
@@ -2146,14 +2117,12 @@ mod tests {
         let branch_0_index = rvsdg.add_const_u32(branch_0, 0);
         let branch_0_op_ptr_element_ptr = rvsdg.add_op_ptr_element_ptr(
             branch_0,
-            TY_U32,
             ValueInput::argument(ptr_ty, 0),
             [ValueInput::output(TY_U32, branch_0_index, 0)],
         );
         let branch_0_load = rvsdg.add_op_load(
             branch_0,
             ValueInput::output(element_ptr_ty, branch_0_op_ptr_element_ptr, 0),
-            TY_U32,
             StateOrigin::Argument,
         );
 
@@ -2170,14 +2139,12 @@ mod tests {
         let branch_1_index = rvsdg.add_const_u32(branch_1, 1);
         let branch_1_op_ptr_element_ptr = rvsdg.add_op_ptr_element_ptr(
             branch_1,
-            TY_U32,
             ValueInput::argument(ptr_ty, 0),
             [ValueInput::output(TY_U32, branch_1_index, 0)],
         );
         let branch_1_load = rvsdg.add_op_load(
             branch_1,
             ValueInput::output(element_ptr_ty, branch_1_op_ptr_element_ptr, 0),
-            TY_U32,
             StateOrigin::Argument,
         );
 
@@ -2365,14 +2332,12 @@ mod tests {
         let element_index = rvsdg.add_const_u32(loop_region, 0);
         let op_ptr_element_ptr_node = rvsdg.add_op_ptr_element_ptr(
             loop_region,
-            TY_U32,
             ValueInput::argument(ptr_ty, 2),
             [ValueInput::output(TY_U32, element_index, 0)],
         );
         let load_node = rvsdg.add_op_load(
             loop_region,
             ValueInput::output(element_ptr_ty, op_ptr_element_ptr_node, 0),
-            TY_U32,
             StateOrigin::Argument,
         );
 

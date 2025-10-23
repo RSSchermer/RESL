@@ -312,7 +312,7 @@ impl EmulationContext {
                            ptr_input: ValueInput,
                            _additional_inputs: &[ValueInput],
                            state_origin: StateOrigin| {
-            rvsdg.add_op_load(region, ptr_input, output_ty, state_origin)
+            rvsdg.add_op_load(region, ptr_input, state_origin)
         };
 
         let mut emulator = Emulator {
@@ -1067,13 +1067,9 @@ where
                 })
                 .collect::<Vec<_>>();
 
-            let TypeKind::Ptr(element_ty) = *self.rvsdg.ty().kind(self.pointer_ty) else {
-                panic!("emulated pointer value must have a pointer type");
-            };
-
-            let pep_node =
-                self.rvsdg
-                    .add_op_ptr_element_ptr(region, element_ty, ptr_input, index_input);
+            let pep_node = self
+                .rvsdg
+                .add_op_ptr_element_ptr(region, ptr_input, index_input);
 
             ValueInput::output(self.pointer_ty, pep_node, 0)
         };
@@ -1177,7 +1173,6 @@ mod tests {
         let load_op = rvsdg.add_op_load(
             region,
             ValueInput::output(ptr_ty, switch_node, 0),
-            TY_U32,
             StateOrigin::Argument,
         );
 
@@ -1355,7 +1350,6 @@ mod tests {
         let load_op = rvsdg.add_op_load(
             switch_1_branch_0,
             ValueInput::argument(ptr_ty, 0),
-            TY_U32,
             StateOrigin::Argument,
         );
 
@@ -1580,7 +1574,6 @@ mod tests {
 
         let ptr_0_node = rvsdg.add_op_ptr_element_ptr(
             region,
-            TY_U32,
             ValueInput::output(array_ptr_ty, array_alloca_node, 0),
             [ValueInput::output(TY_U32, index_node, 0)],
         );
@@ -1610,7 +1603,6 @@ mod tests {
         let load_op = rvsdg.add_op_load(
             region,
             ValueInput::output(ptr_ty, switch_node, 0),
-            TY_U32,
             StateOrigin::Argument,
         );
 
@@ -1808,7 +1800,6 @@ mod tests {
 
         let ptr_0_node = rvsdg.add_op_ptr_element_ptr(
             region,
-            TY_U32,
             ValueInput::output(array_ptr_ty, array_alloca_node, 0),
             [ValueInput::argument(TY_U32, 1)],
         );
@@ -1838,7 +1829,6 @@ mod tests {
         let load_op = rvsdg.add_op_load(
             region,
             ValueInput::output(ptr_ty, switch_node, 0),
-            TY_U32,
             StateOrigin::Argument,
         );
 
@@ -2057,7 +2047,6 @@ mod tests {
 
         let ptr_0_node = rvsdg.add_op_ptr_element_ptr(
             region,
-            array_ty,
             ValueInput::output(array_of_array_ptr_ty, array_alloca_node, 0),
             [ValueInput::output(TY_U32, index_node, 0)],
         );
@@ -2079,7 +2068,6 @@ mod tests {
         let branch_0_index_node = rvsdg.add_const_u32(branch_0, 0);
         let branch_0_ptr_node = rvsdg.add_op_ptr_element_ptr(
             branch_0,
-            TY_U32,
             ValueInput::argument(array_ptr_ty, 0),
             [ValueInput::output(TY_U32, branch_0_index_node, 0)],
         );
@@ -2100,7 +2088,6 @@ mod tests {
         let load_op = rvsdg.add_op_load(
             region,
             ValueInput::output(ptr_ty, switch_node, 0),
-            TY_U32,
             StateOrigin::Argument,
         );
 
@@ -2346,7 +2333,6 @@ mod tests {
         let load_op = rvsdg.add_op_load(
             region,
             ValueInput::output(ptr_ty, second_switch_node, 0),
-            TY_U32,
             StateOrigin::Argument,
         );
 
@@ -2622,7 +2608,6 @@ mod tests {
         let load_op = rvsdg.add_op_load(
             region,
             ValueInput::output(ptr_ty, outer_switch_node, 0),
-            TY_U32,
             StateOrigin::Argument,
         );
 
@@ -3118,7 +3103,6 @@ mod tests {
 
         let branch_0_ptr_node = rvsdg.add_op_ptr_element_ptr(
             branch_0,
-            TY_U32,
             ValueInput::argument(array_of_array_ptr_ty, 0),
             [
                 ValueInput::output(TY_U32, branch_0_index_0, 0),
@@ -3151,7 +3135,6 @@ mod tests {
 
         let branch_1_ptr_node = rvsdg.add_op_ptr_element_ptr(
             branch_1,
-            TY_U32,
             ValueInput::argument(array_of_array_ptr_ty, 0),
             [
                 ValueInput::output(TY_U32, branch_1_index_0, 0),
@@ -3171,7 +3154,6 @@ mod tests {
         let load_op = rvsdg.add_op_load(
             region,
             ValueInput::output(ptr_ty, switch_node, 0),
-            TY_U32,
             StateOrigin::Argument,
         );
 

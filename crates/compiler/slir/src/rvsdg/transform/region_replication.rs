@@ -320,11 +320,10 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
     fn replicate_op_load_node(&mut self, node: Node) -> Node {
         let data = self.rvsdg[node].expect_op_load();
         let ptr_input = self.mapped_value_input(data.ptr_input());
-        let output_ty = data.value_output().ty;
         let state_origin = self.mapped_state_origin(&data.state().unwrap().origin);
 
         self.rvsdg
-            .add_op_load(self.dst_region, ptr_input, output_ty, state_origin)
+            .add_op_load(self.dst_region, ptr_input, state_origin)
     }
 
     fn replicate_op_store_node(&mut self, node: Node) -> Node {
@@ -338,8 +337,8 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
     }
 
     fn replicate_op_ptr_element_ptr_node(&mut self, node: Node) -> Node {
+        dbg!(node);
         let data = self.rvsdg[node].expect_op_ptr_element_ptr();
-        let element_ty = data.element_ty();
         let ptr_input = self.mapped_value_input(data.ptr_input());
         let index_inputs = data
             .index_inputs()
@@ -348,7 +347,7 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
             .collect::<Vec<_>>();
 
         self.rvsdg
-            .add_op_ptr_element_ptr(self.dst_region, element_ty, ptr_input, index_inputs)
+            .add_op_ptr_element_ptr(self.dst_region, ptr_input, index_inputs)
     }
 
     fn replicate_op_ptr_discriminant_ptr_node(&mut self, node: Node) -> Node {
@@ -370,7 +369,6 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
 
     fn replicate_op_extract_element(&mut self, node: Node) -> Node {
         let data = self.rvsdg[node].expect_op_extract_element();
-        let element_ty = data.element_ty();
         let aggregate_input = self.mapped_value_input(data.aggregate());
         let index_inputs = data
             .indices()
@@ -378,12 +376,8 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
             .map(|input| self.mapped_value_input(input))
             .collect::<Vec<_>>();
 
-        self.rvsdg.add_op_ptr_element_ptr(
-            self.dst_region,
-            element_ty,
-            aggregate_input,
-            index_inputs,
-        )
+        self.rvsdg
+            .add_op_extract_element(self.dst_region, aggregate_input, index_inputs)
     }
 
     fn replicate_op_get_discriminant_node(&mut self, node: Node) -> Node {

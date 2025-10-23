@@ -150,7 +150,6 @@ mod tests {
         let load_node = rvsdg.add_op_load(
             region,
             ValueInput::output(TY_PTR_U32, alloca_node, 0),
-            TY_U32,
             StateOrigin::Node(store_node),
         );
 

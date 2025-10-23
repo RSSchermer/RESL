@@ -363,10 +363,9 @@ impl<'a> RegionBuilder<'a> {
 
     fn visit_op_load(&mut self, op: &OpLoad) {
         let ptr_input = self.resolve_value(op.pointer());
-        let output_ty = self.cfg[op.result()].ty();
         let node = self
             .rvsdg
-            .add_op_load(self.region, ptr_input, output_ty, self.state_origin);
+            .add_op_load(self.region, ptr_input, self.state_origin);
 
         self.input_state_tracker
             .insert_value_node(self.cfg, op.result(), node, 0);
@@ -391,12 +390,9 @@ impl<'a> RegionBuilder<'a> {
             .copied()
             .map(|v| self.resolve_value(v))
             .collect::<Vec<_>>();
-        let node = self.rvsdg.add_op_extract_element(
-            self.region,
-            op.element_ty(),
-            aggregate_input,
-            index_inputs,
-        );
+        let node = self
+            .rvsdg
+            .add_op_extract_element(self.region, aggregate_input, index_inputs);
 
         self.input_state_tracker
             .insert_value_node(self.cfg, op.result(), node, 0);
@@ -410,12 +406,9 @@ impl<'a> RegionBuilder<'a> {
             .copied()
             .map(|v| self.resolve_value(v))
             .collect::<Vec<_>>();
-        let node = self.rvsdg.add_op_ptr_element_ptr(
-            self.region,
-            op.element_ty(),
-            ptr_input,
-            index_inputs,
-        );
+        let node = self
+            .rvsdg
+            .add_op_ptr_element_ptr(self.region, ptr_input, index_inputs);
 
         self.input_state_tracker
             .insert_value_node(self.cfg, op.result(), node, 0);
@@ -1133,7 +1126,6 @@ mod tests {
         let load_node = expected.add_op_load(
             region,
             ValueInput::argument(module.ty.register(TypeKind::Ptr(TY_U32)), 0),
-            TY_U32,
             StateOrigin::Argument,
         );
         let add_node = expected.add_op_binary(
