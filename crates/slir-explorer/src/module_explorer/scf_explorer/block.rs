@@ -31,10 +31,10 @@ pub fn Block(
                 let m = module.read_value();
                 let block = &m.expect_scf()[block];
 
-                block.control_flow_var_iter().map(|(binding, expression)| {
+                block.control_flow_var_iter().map(|(var, value)| {
                     view! {
-                        <LocalBinding module binding highlight />
-                        " = "<Expression module expression highlight />";"
+                        <LocalBinding module binding=var highlight />
+                        " = "<LocalBinding module binding=value highlight />";"
                     }
                 }).collect_view()
             }}

@@ -39,10 +39,6 @@ pub fn Statement(
             <ExprBinding module statement highlight /><br/>
         }
         .into_any(),
-        StatementKind::Alloca(_) => view! {
-            <Alloca module statement highlight /><br/>
-        }
-        .into_any(),
         StatementKind::Store(_) => view! {
             <Store module statement highlight /><br/>
         }
@@ -68,12 +64,16 @@ pub fn If(
             let m = module.read_value();
             let stmt = m.expect_scf()[statement].kind().expect_if();
 
-            stmt.out_vars().iter().map(|var| view!{
-                "var "<LocalBinding module binding=*var highlight />": "<Type module ty=var.ty() />";"<br/>
+            stmt.out_vars().iter().map(|var| {
+                let ty = m.scf.as_ref().unwrap()[*var].ty();
+
+                view!{
+                    "var "<LocalBinding module binding=*var highlight />": "<Type module ty />";"<br/>
+                }
             }).collect_view()
         }}
         <br/>
-        "if " <Expression module expression=stmt.condition() highlight /> " {"<br/>
+        "if " <LocalBinding module binding=stmt.condition() highlight /> " {"<br/>
             <Block module block=stmt.then_block() highlight />
         "} "
         {move || {
@@ -105,12 +105,16 @@ pub fn Switch(
             let m = module.read_value();
             let stmt = m.expect_scf()[statement].kind().expect_switch();
 
-            stmt.out_vars().iter().map(|var| view!{
-                "var "<LocalBinding module binding=*var highlight />": "<Type module ty=var.ty() />";"<br/>
+            stmt.out_vars().iter().map(|var| {
+                let ty = m.scf.as_ref().unwrap()[*var].ty();
+
+                view!{
+                    "var "<LocalBinding module binding=*var highlight />": "<Type module ty />";"<br/>
+                }
             }).collect_view()
         }}
         <br/>
-        "switch " <Expression module expression=stmt.on() highlight /> " {"<br/>
+        "switch " <LocalBinding module binding=stmt.on() highlight /> " {"<br/>
             <div class="scf-indent">
                 {move || {
                     let m = module.read_value();
@@ -143,9 +147,11 @@ pub fn Loop(
             let m = module.read_value();
             let stmt = m.expect_scf()[statement].kind().expect_loop();
 
-            stmt.loop_vars().iter().map(|var| view!{
-                "var "<LocalBinding module binding=var.binding() highlight />
-                " = "<Expression module expression=var.initial_value() highlight />";"<br/>
+            stmt.loop_vars().iter().map(|var| {
+                view!{
+                    "var "<LocalBinding module binding=var.binding() highlight />
+                    " = "<LocalBinding module binding=var.initial_value() highlight />";"<br/>
+                }
             }).collect_view()
         }}
         <br/>
@@ -154,15 +160,15 @@ pub fn Loop(
             let stmt = m.expect_scf()[statement].kind().expect_loop();
 
             match stmt.control() {
-                LoopControl::Head(expression) => view!{
-                    "while "<Expression module expression highlight />" {"<br/>
+                LoopControl::Head(binding) => view!{
+                    "while "<LocalBinding module binding highlight />" {"<br/>
                         <Block module block=stmt.block() highlight />
                     "}"<br/>
                 }.into_any(),
-                LoopControl::Tail(expression) => view!{
+                LoopControl::Tail(binding) => view!{
                     "do {"<br/>
                         <Block module block=stmt.block() highlight />
-                    "} while "<Expression module expression highlight />";"<br/>
+                    "} while "<LocalBinding module binding highlight />";"<br/>
                 }.into_any(),
                 LoopControl::Infinite => view!{
                     "loop {"<br/>
@@ -183,9 +189,9 @@ pub fn Return(
     let module_data = module.read_value();
     let stmt = module_data.expect_scf()[statement].kind().expect_return();
 
-    if let Some(expression) = stmt.value() {
+    if let Some(binding) = stmt.value() {
         view! {
-            "return "<Expression module expression highlight />";"
+            "return "<LocalBinding module binding highlight />";"
         }
         .into_any()
     } else {
@@ -209,21 +215,7 @@ pub fn ExprBinding(
 
     view! {
         "let "<LocalBinding module binding=stmt.binding() highlight />
-        " = "<Expression module expression=stmt.expression() highlight />";"
-    }
-}
-
-#[component]
-pub fn Alloca(
-    module: StoredValue<ModuleData>,
-    statement: slir::scf::Statement,
-    highlight: HighlightSignal,
-) -> impl IntoView {
-    let module_data = module.read_value();
-    let stmt = module_data.expect_scf()[statement].kind().expect_alloca();
-
-    view! {
-        "let "<LocalBinding module binding=stmt.binding() highlight />" = alloca;"
+        " = "<Expression module expr_binding=statement highlight />";"
     }
 }
 
@@ -237,9 +229,9 @@ pub fn Store(
     let stmt = module_data.expect_scf()[statement].kind().expect_store();
 
     view! {
-        "*"<Expression module expression=stmt.pointer() highlight />
+        "*"<LocalBinding module binding=stmt.pointer() highlight />
         " = "
-        <Expression module expression=stmt.value() highlight />";"
+        <LocalBinding module binding=stmt.value() highlight />";"
     }
 }
 
@@ -256,8 +248,8 @@ pub fn CallBuiltin(
 
     view! {
         {stmt.callee().ident().as_str()}"("{
-            stmt.arguments().iter().map(|arg| view! {
-                <Expression module expression=*arg highlight />
+            stmt.arguments().iter().copied().map(|binding| view! {
+                <LocalBinding module binding highlight />
             }.into_any())
             .intersperse_with(|| view! {", "}.into_any())
             .collect_view()

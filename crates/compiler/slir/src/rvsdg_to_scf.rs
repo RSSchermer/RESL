@@ -4,12 +4,39 @@ use rustc_hash::FxHashMap;
 
 use crate::rvsdg::analyse::region_stratification::RegionStratifier;
 use crate::rvsdg::{Connectivity, NodeKind, Rvsdg, SimpleNode, ValueOrigin};
-use crate::scf::{BlockPosition, Expression, LoopControl, Scf};
-use crate::{rvsdg, scf, Function, Module};
+use crate::scf::{BlockPosition, LocalBinding, LoopControl, Scf};
+use crate::{
+    rvsdg, scf, Constant, Function, Module, StorageBinding, UniformBinding, WorkgroupBinding,
+};
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Value {
+    Local(LocalBinding),
+    Uniform(UniformBinding),
+    Storage(StorageBinding),
+    Workgroup(WorkgroupBinding),
+    Constant(Constant),
+}
+
+impl Value {
+    fn expect_local(&self) -> LocalBinding {
+        if let Value::Local(binding) = self {
+            *binding
+        } else {
+            panic!("expected a local value");
+        }
+    }
+}
+
+impl From<LocalBinding> for Value {
+    fn from(binding: LocalBinding) -> Self {
+        Value::Local(binding)
+    }
+}
 
 #[derive(Clone, Debug)]
 struct ValueMapping {
-    value_mapping: FxHashMap<rvsdg::ValueOrigin, scf::Expression>,
+    value_mapping: FxHashMap<rvsdg::ValueOrigin, Value>,
 }
 
 impl ValueMapping {
@@ -19,22 +46,22 @@ impl ValueMapping {
         }
     }
 
-    fn map_argument(&mut self, argument: u32, expr: Expression) {
+    fn map_argument(&mut self, argument: u32, value: Value) {
         self.value_mapping
-            .insert(ValueOrigin::Argument(argument), expr);
+            .insert(ValueOrigin::Argument(argument), value);
     }
 
-    fn map_output(&mut self, node: rvsdg::Node, output: u32, expr: Expression) {
+    fn map_output(&mut self, node: rvsdg::Node, output: u32, value: LocalBinding) {
         self.value_mapping.insert(
             ValueOrigin::Output {
                 producer: node,
                 output,
             },
-            expr,
+            value.into(),
         );
     }
 
-    fn mapping(&self, origin: ValueOrigin) -> Expression {
+    fn mapping(&self, origin: ValueOrigin) -> Value {
         *self
             .value_mapping
             .get(&origin)
@@ -43,6 +70,7 @@ impl ValueMapping {
 }
 
 struct RegionVisitor<'a, 'b, 'c> {
+    module: &'a Module,
     rvsdg: &'a Rvsdg,
     region_stratifier: &'b mut RegionStratifier,
     scf: &'c mut Scf,
@@ -84,21 +112,21 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
 
         let data = self.rvsdg[node].expect_switch();
         let predicate_origin = data.predicate().origin;
-        let predicate_expr = self.value_mapping.mapping(predicate_origin);
+        let predicate_binding = self.value_mapping.mapping(predicate_origin).expect_local();
 
         match predicate_origin {
             ValueOrigin::Argument(_) => {
-                self.generate_switch(node, predicate_expr, None);
+                self.generate_switch(node, predicate_binding, None);
             }
             ValueOrigin::Output { producer, .. } => match self.rvsdg[producer].kind() {
                 Simple(OpCaseToSwitchPredicate(op)) => {
-                    self.generate_switch(node, predicate_expr, Some(op.cases()));
+                    self.generate_switch(node, predicate_binding, Some(op.cases()));
                 }
                 Simple(OpBoolToSwitchPredicate(_)) => {
-                    self.generate_if(node, predicate_expr);
+                    self.generate_if(node, predicate_binding);
                 }
                 Simple(OpU32ToSwitchPredicate(_)) => {
-                    self.generate_switch(node, predicate_expr, None);
+                    self.generate_switch(node, predicate_binding, None);
                 }
                 _ => panic!(
                     "a switch node's predicate input must directly connect to a \
@@ -108,7 +136,7 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
         };
     }
 
-    fn generate_if(&mut self, switch_node: rvsdg::Node, condition: scf::Expression) {
+    fn generate_if(&mut self, switch_node: rvsdg::Node, condition: scf::LocalBinding) {
         let data = self.rvsdg[switch_node].expect_switch();
 
         assert_eq!(data.branches().len(), 2);
@@ -118,15 +146,15 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
 
         let (if_stmt, then_block) =
             self.scf
-                .add_stmt_if(self.dst_block, BlockPosition::Append, condition);
+                .add_if(self.dst_block, BlockPosition::Append, condition);
         let else_block = self.scf.add_else_block(if_stmt);
 
         // Add out variables to the if statement and record them in the value mapping.
         for (i, output) in data.value_outputs().iter().enumerate() {
             let binding = self.scf.add_if_out_var(if_stmt, output.ty);
-            let expr = self.scf.make_expr_local_value(binding);
 
-            self.value_mapping.map_output(switch_node, i as u32, expr);
+            self.value_mapping
+                .map_output(switch_node, i as u32, binding);
         }
 
         // Create an argument mapping. Since both the `then` and `else` branches receive the same
@@ -145,22 +173,22 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
     fn generate_switch(
         &mut self,
         switch_node: rvsdg::Node,
-        on: scf::Expression,
+        on: scf::LocalBinding,
         cases: Option<&[u32]>,
     ) {
         let data = self.rvsdg[switch_node].expect_switch();
 
         let switch_stmt = self
             .scf
-            .add_stmt_switch(self.dst_block, BlockPosition::Append, on);
+            .add_switch(self.dst_block, BlockPosition::Append, on);
         let default_block = self.scf[switch_stmt].kind().expect_switch().default();
 
         // Add out variables to the switch statement and record them in the value mapping.
         for (i, output) in data.value_outputs().iter().enumerate() {
             let binding = self.scf.add_switch_out_var(switch_stmt, output.ty);
-            let expr = self.scf.make_expr_local_value(binding);
 
-            self.value_mapping.map_output(switch_node, i as u32, expr);
+            self.value_mapping
+                .map_output(switch_node, i as u32, binding);
         }
 
         // Create an argument mapping. Since each branch receives the same arguments, we construct
@@ -198,30 +226,27 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
             self.visit_sub_region(branch_region, branch_block, argument_mapping);
 
         for (res, input) in self.rvsdg[branch_region].value_results().iter().enumerate() {
-            let expr = sub_region_mapping.mapping(input.origin);
+            let value = sub_region_mapping.mapping(input.origin).expect_local();
 
-            self.scf.set_control_flow_var(branch_block, res, expr);
+            self.scf.set_control_flow_var(branch_block, res, value);
         }
     }
 
     fn visit_loop_node(&mut self, node: rvsdg::Node) {
         let data = self.rvsdg[node].expect_loop();
         let loop_region = data.loop_region();
-        let (loop_stmt, loop_block) = self
-            .scf
-            .add_stmt_loop(self.dst_block, BlockPosition::Append);
+        let (loop_stmt, loop_block) = self.scf.add_loop(self.dst_block, BlockPosition::Append);
         let mut argument_mapping = ValueMapping::new();
 
         for (i, input) in data.value_inputs().iter().enumerate() {
-            let initializer = self.value_mapping.mapping(input.origin);
-            let loop_var = self.scf.add_loop_var(loop_stmt, initializer);
-            let expr = self.scf.make_expr_local_value(loop_var);
+            let initializer = self.value_mapping.mapping(input.origin).expect_local();
+            let binding = self.scf.add_loop_var(loop_stmt, initializer);
 
             // Add a mapping for the loop value's corresponding argument.
-            argument_mapping.map_argument(i as u32, expr);
+            argument_mapping.map_argument(i as u32, binding.into());
 
             // Add a mapping for the loop value's corresponding output.
-            self.value_mapping.map_output(node, i as u32, expr);
+            self.value_mapping.map_output(node, i as u32, binding);
         }
 
         // Process the sub-region and use the value mapping it produces to set the loop block's
@@ -229,7 +254,7 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
         let sub_region_mapping = self.visit_sub_region(loop_region, loop_block, argument_mapping);
 
         let control_origin = self.rvsdg[loop_region].value_results()[0].origin;
-        let control_expr = sub_region_mapping.mapping(control_origin);
+        let control_expr = sub_region_mapping.mapping(control_origin).expect_local();
 
         self.scf
             .set_loop_control(loop_stmt, LoopControl::Tail(control_expr));
@@ -238,9 +263,9 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
             .iter()
             .enumerate()
         {
-            let expr = sub_region_mapping.mapping(result.origin);
+            let binding = sub_region_mapping.mapping(result.origin).expect_local();
 
-            self.scf.set_control_flow_var(loop_block, i, expr);
+            self.scf.set_control_flow_var(loop_block, i, binding);
         }
     }
 
@@ -277,121 +302,200 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
 
     fn visit_const_u32(&mut self, node: rvsdg::Node) {
         let value = self.rvsdg[node].expect_const_u32().value();
-        let expr = self.scf.make_expr_const_u32(value);
+        let (_, binding) =
+            self.scf
+                .add_bind_const_u32(self.dst_block, BlockPosition::Append, value);
 
-        self.bind_and_map_expr(node, 0, expr);
+        self.value_mapping.map_output(node, 0, binding);
     }
 
     fn visit_const_i32(&mut self, node: rvsdg::Node) {
         let value = self.rvsdg[node].expect_const_i32().value();
-        let expr = self.scf.make_expr_const_i32(value);
+        let (_, binding) =
+            self.scf
+                .add_bind_const_i32(self.dst_block, BlockPosition::Append, value);
 
-        self.bind_and_map_expr(node, 0, expr);
+        self.value_mapping.map_output(node, 0, binding);
     }
 
     fn visit_const_f32(&mut self, node: rvsdg::Node) {
         let value = self.rvsdg[node].expect_const_f32().value();
-        let expr = self.scf.make_expr_const_f32(value);
+        let (_, binding) =
+            self.scf
+                .add_bind_const_f32(self.dst_block, BlockPosition::Append, value);
 
-        self.bind_and_map_expr(node, 0, expr);
+        self.value_mapping.map_output(node, 0, binding);
     }
 
     fn visit_const_bool(&mut self, node: rvsdg::Node) {
         let value = self.rvsdg[node].expect_const_bool().value();
-        let expr = self.scf.make_expr_const_bool(value);
+        let (_, binding) =
+            self.scf
+                .add_bind_const_bool(self.dst_block, BlockPosition::Append, value);
 
-        self.bind_and_map_expr(node, 0, expr);
+        self.value_mapping.map_output(node, 0, binding);
     }
 
     fn visit_const_ptr(&mut self, node: rvsdg::Node) {
         let data = self.rvsdg[node].expect_const_ptr();
-        let base_expr = self.value_mapping.mapping(data.base().origin);
-        let expr = self.scf.make_expr_const_ptr(base_expr);
+        let base = self.value_mapping.mapping(data.base().origin);
 
-        self.bind_and_map_expr(node, 0, expr);
+        let (_, binding) = match base {
+            Value::Uniform(b) => self.scf.add_bind_uniform_ptr(
+                self.dst_block,
+                BlockPosition::Append,
+                &self.module.uniform_bindings,
+                b,
+            ),
+            Value::Storage(b) => self.scf.add_bind_storage_ptr(
+                self.dst_block,
+                BlockPosition::Append,
+                &self.module.storage_bindings,
+                b,
+            ),
+            Value::Workgroup(b) => self.scf.add_bind_workgroup_ptr(
+                self.dst_block,
+                BlockPosition::Append,
+                &self.module.workgroup_bindings,
+                b,
+            ),
+            Value::Constant(c) => self.scf.add_bind_constant_ptr(
+                self.dst_block,
+                BlockPosition::Append,
+                &self.module.constants,
+                c,
+            ),
+            Value::Local(_) => panic!("cannot create pointer to a local value"),
+        };
+
+        self.value_mapping.map_output(node, 0, binding);
     }
 
     fn visit_const_fallback(&mut self, node: rvsdg::Node) {
         let data = self.rvsdg[node].expect_const_fallback();
-        let expr = self.scf.make_expr_fallback_value(data.ty());
+        let (_, binding) =
+            self.scf
+                .add_bind_fallback_value(self.dst_block, BlockPosition::Append, data.ty());
 
-        self.bind_and_map_expr(node, 0, expr);
+        self.value_mapping.map_output(node, 0, binding);
     }
 
     fn visit_op_alloca(&mut self, node: rvsdg::Node) {
         let data = self.rvsdg[node].expect_op_alloca();
         let (_, binding) =
             self.scf
-                .add_stmt_alloca(self.dst_block, BlockPosition::Append, data.ty());
-        let expr = self.scf.make_expr_local_value(binding);
+                .add_bind_op_alloca(self.dst_block, BlockPosition::Append, data.ty());
 
-        self.value_mapping.map_output(node, 0, expr);
+        self.value_mapping.map_output(node, 0, binding);
     }
 
     fn visit_op_load(&mut self, node: rvsdg::Node) {
         let data = self.rvsdg[node].expect_op_load();
-        let ptr_expr = self.value_mapping.mapping(data.ptr_input().origin);
-        let expr = self.scf.make_expr_op_load(ptr_expr);
+        let ptr = self
+            .value_mapping
+            .mapping(data.ptr_input().origin)
+            .expect_local();
+        let (_, binding) = self
+            .scf
+            .add_bind_op_load(self.dst_block, BlockPosition::Append, ptr);
 
-        self.bind_and_map_expr(node, 0, expr);
+        self.value_mapping.map_output(node, 0, binding);
     }
 
     fn visit_op_store(&mut self, node: rvsdg::Node) {
         let data = self.rvsdg[node].expect_op_store();
-        let ptr_expr = self.value_mapping.mapping(data.ptr_input().origin);
-        let value_expr = self.value_mapping.mapping(data.value_input().origin);
+        let ptr = self
+            .value_mapping
+            .mapping(data.ptr_input().origin)
+            .expect_local();
+        let value = self
+            .value_mapping
+            .mapping(data.value_input().origin)
+            .expect_local();
 
         self.scf
-            .add_stmt_store(self.dst_block, BlockPosition::Append, ptr_expr, value_expr);
+            .add_store(self.dst_block, BlockPosition::Append, ptr, value);
     }
 
     fn visit_op_ptr_element_ptr(&mut self, node: rvsdg::Node) {
         let data = self.rvsdg[node].expect_op_ptr_element_ptr();
         let element_ty = data.element_ty();
-        let ptr_expr = self.value_mapping.mapping(data.ptr_input().origin);
+        let ptr = self
+            .value_mapping
+            .mapping(data.ptr_input().origin)
+            .expect_local();
         let indices = data
             .index_inputs()
             .iter()
-            .map(|i| self.value_mapping.mapping(i.origin));
-        let expr = self
-            .scf
-            .make_expr_op_ptr_element_ptr(ptr_expr, element_ty, indices);
+            .map(|i| self.value_mapping.mapping(i.origin).expect_local());
+        let (_, binding) = self.scf.add_bind_op_ptr_element_ptr(
+            self.dst_block,
+            BlockPosition::Append,
+            ptr,
+            element_ty,
+            indices,
+        );
 
-        self.bind_and_map_expr(node, 0, expr);
+        self.value_mapping.map_output(node, 0, binding);
     }
 
     fn visit_op_extract_element(&mut self, node: rvsdg::Node) {
         let data = self.rvsdg[node].expect_op_extract_element();
         let element_ty = data.element_ty();
-        let ptr_expr = self.value_mapping.mapping(data.aggregate().origin);
+        let value = self
+            .value_mapping
+            .mapping(data.aggregate().origin)
+            .expect_local();
         let indices = data
             .indices()
             .iter()
-            .map(|i| self.value_mapping.mapping(i.origin));
-        let expr = self
-            .scf
-            .make_expr_op_extract_element(ptr_expr, element_ty, indices);
+            .map(|i| self.value_mapping.mapping(i.origin).expect_local());
+        let (_, binding) = self.scf.add_bind_op_extract_element(
+            self.dst_block,
+            BlockPosition::Append,
+            value,
+            element_ty,
+            indices,
+        );
 
-        self.bind_and_map_expr(node, 0, expr);
+        self.value_mapping.map_output(node, 0, binding);
     }
 
     fn visit_op_unary(&mut self, node: rvsdg::Node) {
         let data = self.rvsdg[node].expect_op_unary();
-        let value_expr = self.value_mapping.mapping(data.input().origin);
-        let expr = self.scf.make_expr_op_unary(data.operator(), value_expr);
+        let value = self
+            .value_mapping
+            .mapping(data.input().origin)
+            .expect_local();
+        let (_, binding) = self.scf.add_bind_op_unary(
+            self.dst_block,
+            BlockPosition::Append,
+            data.operator(),
+            value,
+        );
 
-        self.bind_and_map_expr(node, 0, expr);
+        self.value_mapping.map_output(node, 0, binding);
     }
 
     fn visit_op_binary(&mut self, node: rvsdg::Node) {
         let data = self.rvsdg[node].expect_op_binary();
-        let lhs_expr = self.value_mapping.mapping(data.lhs_input().origin);
-        let rhs_expr = self.value_mapping.mapping(data.rhs_input().origin);
-        let expr = self
-            .scf
-            .make_expr_op_binary(data.operator(), lhs_expr, rhs_expr);
+        let lhs_expr = self
+            .value_mapping
+            .mapping(data.lhs_input().origin)
+            .expect_local();
+        let rhs_expr = self
+            .value_mapping
+            .mapping(data.rhs_input().origin)
+            .expect_local();
+        let (_, binding) = self.scf.add_bind_op_binary(
+            self.dst_block,
+            BlockPosition::Append,
+            data.operator(),
+            lhs_expr,
+            rhs_expr,
+        );
 
-        self.bind_and_map_expr(node, 0, expr);
+        self.value_mapping.map_output(node, 0, binding);
     }
 
     fn visit_op_vector(&mut self, node: rvsdg::Node) {
@@ -400,10 +504,12 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
         let elements = data
             .inputs()
             .iter()
-            .map(|i| self.value_mapping.mapping(i.origin));
-        let expr = self.scf.make_expr_op_vector(vector_ty, elements);
+            .map(|i| self.value_mapping.mapping(i.origin).expect_local());
+        let (_, binding) =
+            self.scf
+                .add_bind_op_vector(self.dst_block, BlockPosition::Append, vector_ty, elements);
 
-        self.bind_and_map_expr(node, 0, expr);
+        self.value_mapping.map_output(node, 0, binding);
     }
 
     fn visit_op_matrix(&mut self, node: rvsdg::Node) {
@@ -412,10 +518,12 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
         let columns = data
             .inputs()
             .iter()
-            .map(|i| self.value_mapping.mapping(i.origin));
-        let expr = self.scf.make_expr_op_matrix(matrix_ty, columns);
+            .map(|i| self.value_mapping.mapping(i.origin).expect_local());
+        let (_, binding) =
+            self.scf
+                .add_bind_op_matrix(self.dst_block, BlockPosition::Append, matrix_ty, columns);
 
-        self.bind_and_map_expr(node, 0, expr);
+        self.value_mapping.map_output(node, 0, binding);
     }
 
     fn visit_op_bool_to_switch_predicate(&mut self, node: rvsdg::Node) {
@@ -424,9 +532,12 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
         // `visit_switch_node`. We therefore simply forward the output mapping to the input mapping.
 
         let data = self.rvsdg[node].expect_op_bool_to_switch_predicate();
-        let expr = self.value_mapping.mapping(data.input().origin);
+        let binding = self
+            .value_mapping
+            .mapping(data.input().origin)
+            .expect_local();
 
-        self.value_mapping.map_output(node, 0, expr);
+        self.value_mapping.map_output(node, 0, binding);
     }
 
     fn visit_op_u32_to_switch_predicate(&mut self, node: rvsdg::Node) {
@@ -436,9 +547,12 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
         // mapping to the input mapping.
 
         let data = self.rvsdg[node].expect_op_u32_to_switch_predicate();
-        let expr = self.value_mapping.mapping(data.input().origin);
+        let binding = self
+            .value_mapping
+            .mapping(data.input().origin)
+            .expect_local();
 
-        self.value_mapping.map_output(node, 0, expr);
+        self.value_mapping.map_output(node, 0, binding);
     }
 
     fn visit_op_case_to_switch_predicate(&mut self, node: rvsdg::Node) {
@@ -448,9 +562,12 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
         // mapping to the input mapping.
 
         let data = self.rvsdg[node].expect_op_case_to_switch_predicate();
-        let expr = self.value_mapping.mapping(data.input().origin);
+        let binding = self
+            .value_mapping
+            .mapping(data.input().origin)
+            .expect_local();
 
-        self.value_mapping.map_output(node, 0, expr);
+        self.value_mapping.map_output(node, 0, binding);
     }
 
     fn visit_op_call_builtin(&mut self, node: rvsdg::Node) {
@@ -459,29 +576,21 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
         let arguments = data
             .argument_inputs()
             .iter()
-            .map(|input| self.value_mapping.mapping(input.origin));
+            .map(|input| self.value_mapping.mapping(input.origin).expect_local());
 
         if data.value_output().is_some() {
-            let expr = self.scf.make_expr_op_call_builtin(callee, arguments);
-
-            self.bind_and_map_expr(node, 0, expr);
-        } else {
-            self.scf.add_stmt_call_builtin(
+            let (_, binding) = self.scf.add_bind_op_call_builtin(
                 self.dst_block,
                 BlockPosition::Append,
                 callee,
                 arguments,
             );
-        }
-    }
 
-    fn bind_and_map_expr(&mut self, node: rvsdg::Node, output: u32, expr: Expression) {
-        let (_, binding) =
+            self.value_mapping.map_output(node, 0, binding);
+        } else {
             self.scf
-                .add_stmt_expr_binding(self.dst_block, BlockPosition::Append, expr);
-        let expr = self.scf.make_expr_local_value(binding);
-
-        self.value_mapping.map_output(node, output, expr);
+                .add_call_builtin(self.dst_block, BlockPosition::Append, callee, arguments);
+        }
     }
 
     fn visit_sub_region(
@@ -491,6 +600,7 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
         argument_mapping: ValueMapping,
     ) -> ValueMapping {
         let mut sub_region_visitor = RegionVisitor {
+            module: self.module,
             rvsdg: self.rvsdg,
             region_stratifier: &mut self.region_stratifier,
             scf: &mut self.scf,
@@ -507,6 +617,7 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
 }
 
 fn visit_region(
+    module: &Module,
     rvsdg: &Rvsdg,
     region_stratifier: &mut RegionStratifier,
     scf: &mut Scf,
@@ -515,6 +626,7 @@ fn visit_region(
     argument_mapping: ValueMapping,
 ) -> ValueMapping {
     let mut region_visitor = RegionVisitor {
+        module,
         rvsdg,
         region_stratifier,
         scf,
@@ -564,12 +676,12 @@ impl<'a, 'b> ScfBuilder<'a, 'b> {
         let arg_start = fn_data.dependencies().len();
         for (i, binding) in arg_bindings.into_iter().enumerate() {
             let arg = arg_start + i;
-            let expr = self.scf.make_expr_local_value(binding);
 
-            argument_mapping.map_argument(arg as u32, expr);
+            argument_mapping.map_argument(arg as u32, binding.into());
         }
 
-        // Set up value mappings for the global (uniform/storage/workgroup) value dependencies
+        // Set up value mappings for the global (uniform/storage/workgroup/constant) value
+        // dependencies
         for (arg, dep) in fn_data.dependencies().iter().enumerate() {
             let ValueOrigin::Output {
                 producer: dep_node,
@@ -583,38 +695,23 @@ impl<'a, 'b> ScfBuilder<'a, 'b> {
 
             match self.rvsdg[dep_node].kind() {
                 UniformBinding(n) => {
-                    let expr = self
-                        .scf
-                        .make_expr_uniform_value(&self.module.uniform_bindings, n.binding());
-
-                    argument_mapping.map_argument(arg as u32, expr);
+                    argument_mapping.map_argument(arg as u32, Value::Uniform(n.binding()));
                 }
                 StorageBinding(n) => {
-                    let expr = self
-                        .scf
-                        .make_expr_storage_value(&self.module.storage_bindings, n.binding());
-
-                    argument_mapping.map_argument(arg as u32, expr);
+                    argument_mapping.map_argument(arg as u32, Value::Storage(n.binding()));
                 }
                 WorkgroupBinding(n) => {
-                    let expr = self
-                        .scf
-                        .make_expr_workgroup_value(&self.module.workgroup_bindings, n.binding());
-
-                    argument_mapping.map_argument(arg as u32, expr);
+                    argument_mapping.map_argument(arg as u32, Value::Workgroup(n.binding()));
                 }
                 Constant(n) => {
-                    let expr = self
-                        .scf
-                        .make_expr_constant_value(&self.module.constants, n.constant());
-
-                    argument_mapping.map_argument(arg as u32, expr);
+                    argument_mapping.map_argument(arg as u32, Value::Constant(n.constant()));
                 }
                 _ => (),
             }
         }
 
         let value_mapping = visit_region(
+            self.module,
             self.rvsdg,
             &mut self.region_stratifier,
             &mut self.scf,
@@ -629,10 +726,10 @@ impl<'a, 'b> ScfBuilder<'a, 'b> {
         );
 
         if let Some(result) = self.rvsdg[body_region].value_results().first() {
-            let expr = value_mapping.mapping(result.origin);
+            let value = value_mapping.mapping(result.origin).expect_local();
 
             self.scf
-                .add_stmt_return(body_block, BlockPosition::Append, Some(expr));
+                .add_return(body_block, BlockPosition::Append, Some(value));
         }
     }
 
@@ -718,8 +815,12 @@ mod tests {
             .expect("should have registered a function body");
 
         assert_eq!(body.argument_bindings().len(), 2);
-        assert_eq!(body.argument_bindings()[0].ty(), TY_U32);
-        assert_eq!(body.argument_bindings()[1].ty(), TY_U32);
+
+        let arg_0 = body.argument_bindings()[0];
+        let arg_1 = body.argument_bindings()[1];
+
+        assert_eq!(scf[arg_0].ty(), TY_U32);
+        assert_eq!(scf[arg_1].ty(), TY_U32);
 
         let block_data = &scf[body.block()];
 
@@ -730,26 +831,19 @@ mod tests {
 
         let statement_0_data = scf[statement_0].kind().expect_expr_binding();
         let statement_0_binding = statement_0_data.binding();
-        let op_binary = scf[statement_0_data.expression()].kind().expect_op_binary();
+        let op_binary = statement_0_data.expression().kind().expect_op_binary();
 
         assert_eq!(op_binary.operator(), BinaryOperator::Add);
-
-        let lhs = scf[op_binary.lhs()].kind().expect_local_value();
-
-        assert_eq!(lhs, body.argument_bindings()[0]);
-
-        let rhs = scf[op_binary.rhs()].kind().expect_local_value();
-
-        assert_eq!(rhs, body.argument_bindings()[1]);
+        assert_eq!(op_binary.lhs(), arg_0);
+        assert_eq!(op_binary.rhs(), arg_1);
 
         let statement_1_data = scf[statement_1].kind().expect_return();
 
         let return_value = statement_1_data
             .value()
             .expect("should have a return value");
-        let return_value_data = scf[return_value].kind().expect_local_value();
 
-        assert_eq!(return_value_data, statement_0_binding);
+        assert_eq!(return_value, statement_0_binding);
     }
 
     #[test]
@@ -845,8 +939,12 @@ mod tests {
             .expect("should have registered a function body");
 
         assert_eq!(body.argument_bindings().len(), 2);
-        assert_eq!(body.argument_bindings()[0].ty(), TY_PREDICATE);
-        assert_eq!(body.argument_bindings()[1].ty(), TY_U32);
+
+        let arg_0 = body.argument_bindings()[0];
+        let arg_1 = body.argument_bindings()[1];
+
+        assert_eq!(scf[arg_0].ty(), TY_PREDICATE);
+        assert_eq!(scf[arg_1].ty(), TY_U32);
 
         let block_data = &scf[body.block()];
 
@@ -866,59 +964,68 @@ mod tests {
         let case_0_block = stmt_switch_data.cases()[0].block();
         let case_0_block_data = &scf[case_0_block];
 
-        assert_eq!(case_0_block_data.statements().len(), 2);
+        assert_eq!(case_0_block_data.statements().len(), 3);
 
-        let case_0_stmt_const = case_0_block_data.statements()[0];
-        let case_0_stmt_add = case_0_block_data.statements()[1];
+        let case_0_stmt_fallback = case_0_block_data.statements()[0];
+        let case_0_stmt_const = case_0_block_data.statements()[1];
+        let case_0_stmt_add = case_0_block_data.statements()[2];
+
+        scf[case_0_stmt_fallback]
+            .kind()
+            .expect_expr_binding()
+            .expression()
+            .kind()
+            .expect_fallback_value();
 
         let case_0_stmt_const_data = scf[case_0_stmt_const].kind().expect_expr_binding();
         let case_0_stmt_const_binding = case_0_stmt_const_data.binding();
         let case_0_stmt_const_expr = case_0_stmt_const_data.expression();
 
-        assert_eq!(scf[case_0_stmt_const_expr].kind().expect_const_u32(), 1);
+        assert_eq!(case_0_stmt_const_expr.kind().expect_const_u32(), 1);
 
         let case_0_stmt_add_data = scf[case_0_stmt_add].kind().expect_expr_binding();
         let case_0_stmt_add_binding = case_0_stmt_add_data.binding();
         let case_0_stmt_add_expr = case_0_stmt_add_data.expression();
 
-        let case_0_add_data = scf[case_0_stmt_add_expr].kind().expect_op_binary();
+        let case_0_add_data = case_0_stmt_add_expr.kind().expect_op_binary();
 
         assert_eq!(case_0_add_data.operator(), BinaryOperator::Add);
+        assert_eq!(case_0_add_data.lhs(), arg_1);
+        assert_eq!(case_0_add_data.rhs(), case_0_stmt_const_binding);
 
-        let lhs_data = scf[case_0_add_data.lhs()].kind().expect_local_value();
-        let rhs_data = scf[case_0_add_data.rhs()].kind().expect_local_value();
+        let case_0_var_0_binding = case_0_block_data.control_flow_var(stmt_switch_out_var);
 
-        assert_eq!(lhs_data, body.argument_bindings()[1]);
-        assert_eq!(rhs_data, case_0_stmt_const_binding);
-
-        let case_0_var_0_expr = case_0_block_data.control_flow_var(stmt_switch_out_var);
-        let case_0_var_0_value = scf[case_0_var_0_expr].kind().expect_local_value();
-
-        assert_eq!(case_0_var_0_value, case_0_stmt_add_binding);
+        assert_eq!(case_0_var_0_binding, case_0_stmt_add_binding);
 
         let default_block_data = &scf[stmt_switch_data.default()];
 
-        assert_eq!(default_block_data.statements().len(), 1);
+        assert_eq!(default_block_data.statements().len(), 2);
 
-        let default_stmt_const = default_block_data.statements()[0];
+        let default_fallback = default_block_data.statements()[0];
+        let default_stmt_const = default_block_data.statements()[1];
+
+        scf[default_fallback]
+            .kind()
+            .expect_expr_binding()
+            .expression()
+            .kind()
+            .expect_fallback_value();
 
         let default_stmt_const_data = scf[default_stmt_const].kind().expect_expr_binding();
         let default_stmt_const_binding = default_stmt_const_data.binding();
         let default_stmt_const_expr = default_stmt_const_data.expression();
 
-        assert_eq!(scf[default_stmt_const_expr].kind().expect_const_u32(), 0);
+        assert_eq!(default_stmt_const_expr.kind().expect_const_u32(), 0);
 
-        let default_var_0_expr = default_block_data.control_flow_var(stmt_switch_out_var);
-        let default_var_0_value = scf[default_var_0_expr].kind().expect_local_value();
+        let default_var_0_binding = default_block_data.control_flow_var(stmt_switch_out_var);
 
-        assert_eq!(default_var_0_value, default_stmt_const_binding);
+        assert_eq!(default_var_0_binding, default_stmt_const_binding);
 
         let stmt_return_data = scf[stmt_return].kind().expect_return();
 
-        let return_expr = stmt_return_data
+        let return_value = stmt_return_data
             .value()
             .expect("should have a return value");
-        let return_value = scf[return_expr].kind().expect_local_value();
 
         assert_eq!(return_value, stmt_switch_out_var);
     }
@@ -1003,7 +1110,10 @@ mod tests {
             .expect("should have registered a function body");
 
         assert_eq!(body.argument_bindings().len(), 1);
-        assert_eq!(body.argument_bindings()[0].ty(), TY_U32);
+
+        let arg = body.argument_bindings()[0];
+
+        assert_eq!(scf[arg].ty(), TY_U32);
 
         let block_data = &scf[body.block()];
 
@@ -1017,83 +1127,70 @@ mod tests {
         assert_eq!(stmt_loop_data.loop_vars().len(), 1);
 
         let loop_var = stmt_loop_data.loop_vars()[0];
-        let loop_var_init_value = scf[loop_var.initial_value()].kind().expect_local_value();
 
-        assert_eq!(loop_var_init_value, body.argument_bindings()[0]);
+        assert_eq!(loop_var.initial_value(), body.argument_bindings()[0]);
 
         let loop_block = stmt_loop_data.block();
         let loop_block_data = &scf[loop_block];
 
-        assert_eq!(loop_block_data.statements().len(), 4);
+        assert_eq!(loop_block_data.statements().len(), 5);
 
-        let loop_block_stmt_0 = loop_block_data.statements()[0];
-        let loop_block_stmt_1 = loop_block_data.statements()[1];
-        let loop_block_stmt_2 = loop_block_data.statements()[2];
-        let loop_block_stmt_3 = loop_block_data.statements()[3];
+        let loop_block_stmt_fallback = loop_block_data.statements()[0];
+        let loop_block_stmt_0 = loop_block_data.statements()[1];
+        let loop_block_stmt_1 = loop_block_data.statements()[2];
+        let loop_block_stmt_2 = loop_block_data.statements()[3];
+        let loop_block_stmt_3 = loop_block_data.statements()[4];
+
+        scf[loop_block_stmt_fallback]
+            .kind()
+            .expect_expr_binding()
+            .expression()
+            .kind()
+            .expect_fallback_value();
 
         let added_value_data = scf[loop_block_stmt_0].kind().expect_expr_binding();
         let added_value_binding = added_value_data.binding();
         let added_value_expr = added_value_data.expression();
 
-        assert_eq!(scf[added_value_expr].kind().expect_const_u32(), 1);
+        assert_eq!(added_value_expr.kind().expect_const_u32(), 1);
 
         let compare_value_data = scf[loop_block_stmt_1].kind().expect_expr_binding();
         let compare_value_binding = compare_value_data.binding();
         let compare_value_expr = compare_value_data.expression();
 
-        assert_eq!(scf[compare_value_expr].kind().expect_const_u32(), 10);
+        assert_eq!(compare_value_expr.kind().expect_const_u32(), 10);
 
         let add_data = scf[loop_block_stmt_2].kind().expect_expr_binding();
         let add_binding = add_data.binding();
-        let add_expr = add_data.expression();
-
-        let add_expr_data = scf[add_expr].kind().expect_op_binary();
+        let add_expr_data = add_data.expression().kind().expect_op_binary();
 
         assert_eq!(add_expr_data.operator(), BinaryOperator::Add);
-
-        let lhs = scf[add_expr_data.lhs()].kind().expect_local_value();
-
-        assert_eq!(lhs, loop_var.binding());
-
-        let rhs = scf[add_expr_data.rhs()].kind().expect_local_value();
-
-        assert_eq!(rhs, added_value_binding);
+        assert_eq!(add_expr_data.lhs(), loop_var.binding());
+        assert_eq!(add_expr_data.rhs(), added_value_binding);
 
         let compare_data = scf[loop_block_stmt_3].kind().expect_expr_binding();
         let compare_binding = compare_data.binding();
-        let compare_expr = compare_data.expression();
-
-        let compare_expr_data = scf[compare_expr].kind().expect_op_binary();
+        let compare_expr_data = compare_data.expression().kind().expect_op_binary();
 
         assert_eq!(compare_expr_data.operator(), BinaryOperator::Lt);
+        assert_eq!(compare_expr_data.lhs(), add_binding);
+        assert_eq!(compare_expr_data.rhs(), compare_value_binding);
 
-        let lhs = scf[compare_expr_data.lhs()].kind().expect_local_value();
+        let loop_var_binding = loop_block_data.control_flow_var(loop_var.binding());
 
-        assert_eq!(lhs, add_binding);
+        assert_eq!(loop_var_binding, add_binding);
 
-        let rhs = scf[compare_expr_data.rhs()].kind().expect_local_value();
-
-        assert_eq!(rhs, compare_value_binding);
-
-        let loop_var_0_expr = loop_block_data.control_flow_var(loop_var.binding());
-        let loop_var_0_value = scf[loop_var_0_expr].kind().expect_local_value();
-
-        assert_eq!(loop_var_0_value, add_binding);
-
-        let LoopControl::Tail(reentry_control_expr) = stmt_loop_data.control() else {
+        let LoopControl::Tail(reentry_control_binding) = stmt_loop_data.control() else {
             panic!("should be tail-controlled loop")
         };
-
-        let reentry_control_binding = scf[reentry_control_expr].kind().expect_local_value();
 
         assert_eq!(reentry_control_binding, compare_binding);
 
         let stmt_return_data = scf[stmt_return].kind().expect_return();
 
-        let return_expr = stmt_return_data
+        let return_value = stmt_return_data
             .value()
             .expect("should have a return value");
-        let return_value = scf[return_expr].kind().expect_local_value();
 
         assert_eq!(return_value, loop_var.binding());
     }

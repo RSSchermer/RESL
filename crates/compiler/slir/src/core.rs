@@ -16,7 +16,6 @@ slotmap::new_key_type! {
     pub struct UniformBinding;
     pub struct StorageBinding;
     pub struct WorkgroupBinding;
-    struct ConstInternal;
 }
 
 pub type Symbol = Intern<String>;
@@ -428,37 +427,6 @@ pub enum BinaryOperator {
     GtEq,
     Lt,
     LtEq,
-}
-
-impl BinaryOperator {
-    pub fn output_ty(
-        &self,
-        type_registry: &TypeRegistry,
-        lhs_ty: Type,
-        rhs_ty: Type,
-    ) -> Option<Type> {
-        if type_registry.is_compatible(lhs_ty, rhs_ty) {
-            match self {
-                BinaryOperator::And
-                | BinaryOperator::Or
-                | BinaryOperator::Add
-                | BinaryOperator::Sub
-                | BinaryOperator::Mul
-                | BinaryOperator::Div
-                | BinaryOperator::Mod
-                | BinaryOperator::Shl
-                | BinaryOperator::Shr => Some(lhs_ty),
-                BinaryOperator::Eq
-                | BinaryOperator::NotEq
-                | BinaryOperator::Gt
-                | BinaryOperator::GtEq
-                | BinaryOperator::Lt
-                | BinaryOperator::LtEq => Some(TY_BOOL),
-            }
-        } else {
-            None
-        }
-    }
 }
 
 impl Display for BinaryOperator {
