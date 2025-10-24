@@ -3181,8 +3181,6 @@ impl Rvsdg {
     ) -> Node {
         self.validate_node_value_input(region, &ptr_input);
 
-        dbg!(&*self.ty.kind(ptr_input.ty));
-
         let TypeKind::Ptr(mut element_ty) = *self.ty.kind(ptr_input.ty) else {
             panic!("`ptr_input` must be a pointer type");
         };

@@ -1,5 +1,5 @@
 use std::hash::{Hash, Hasher};
-use std::ops::{Deref, Index};
+use std::ops::Index;
 
 use delegate::delegate;
 use indexmap::{IndexMap, IndexSet};
@@ -1232,8 +1232,8 @@ impl Scf {
         for i in 0..size {
             let Some(binding) = iter.next() else {
                 panic!(
-                    "expected at least {} elements for a vector of type `{}` (found only {})",
-                    size, vector_ty, i
+                    "expected at least {size} elements for a vector of type `{vector_ty}` (found \
+                    only {i})"
                 );
             };
 
@@ -1241,20 +1241,18 @@ impl Scf {
 
             let TypeKind::Scalar(s) = *self.ty().kind(ty) else {
                 panic!(
-                    "expected all vector element inputs to be `{}` values (element `{}` was of \
+                    "expected all vector element inputs to be `{}` values (element `{i}` was of \
                     type `{}`)",
                     vector_ty.scalar,
-                    i,
                     ty.to_string(self.ty())
                 );
             };
 
             if s != vector_ty.scalar {
                 panic!(
-                    "expected all vector element inputs to be `{}` values (element `{}` was of \
+                    "expected all vector element inputs to be `{}` values (element `{i}` was of \
                     type `{}`)",
                     vector_ty.scalar,
-                    i,
                     ty.to_string(self.ty())
                 );
             }
@@ -1264,8 +1262,8 @@ impl Scf {
 
         if let Some(_) = iter.next() {
             panic!(
-                "expected only {} elements for a vector of type `{}`, but more were provided",
-                size, vector_ty
+                "expected only {size} elements for a vector of type `{vector_ty}`, but more were \
+                provided"
             );
         }
 
@@ -1319,8 +1317,8 @@ impl Scf {
         for i in 0..size {
             let Some(binding) = iter.next() else {
                 panic!(
-                    "expected at least {} columns for a matrix of type `{}` (found only {})",
-                    size, matrix_ty, i
+                    "expected at least {size} columns for a matrix of type `{matrix_ty}` (found \
+                    only {i})"
                 );
             };
 
@@ -1328,18 +1326,16 @@ impl Scf {
 
             let TypeKind::Vector(v) = *self.ty().kind(ty) else {
                 panic!(
-                    "expected all column inputs to be `{}` values (element `{}` was of type `{}`)",
-                    expected_vector_ty,
-                    i,
+                    "expected all column inputs to be `{expected_vector_ty}` values (element `{i}` \
+                    was of type `{}`)",
                     ty.to_string(self.ty())
                 );
             };
 
             if v != expected_vector_ty {
                 panic!(
-                    "expected all column inputs to be `{}` values (element `{}` was of type `{}`)",
-                    expected_vector_ty,
-                    i,
+                    "expected all column inputs to be `{expected_vector_ty}` values (element `{i}` \
+                    was of type `{}`)",
                     ty.to_string(self.ty())
                 );
             }
@@ -1349,8 +1345,8 @@ impl Scf {
 
         if let Some(_) = iter.next() {
             panic!(
-                "expected only {} columns for a matrix of type `{}`, but more were provided",
-                size, matrix_ty
+                "expected only {size} columns for a matrix of type `{matrix_ty}`, but more were \
+                provided",
             );
         }
 
@@ -1389,18 +1385,18 @@ impl Scf {
         block: Block,
         position: BlockPosition,
         pointer: LocalBinding,
-        element_ty: Type,
         indices: impl IntoIterator<Item = LocalBinding>,
     ) -> (Statement, LocalBinding) {
         let ptr_ty = self.local_bindings[pointer].ty();
 
-        let TypeKind::Ptr(_) = *self.ty.kind(ptr_ty) else {
+        let TypeKind::Ptr(pointee_ty) = *self.ty.kind(ptr_ty) else {
             panic!("expected `pointer` expression to have a pointer type")
         };
 
-        let element_ptr_ty = self.ty.register(TypeKind::Ptr(element_ty));
-
         let indices = indices.into_iter().collect::<Vec<_>>();
+
+        let element_ty = self.project_ty(pointee_ty, &indices);
+        let element_ptr_ty = self.ty.register(TypeKind::Ptr(element_ty));
 
         let binding = self.local_bindings.insert(LocalBindingData {
             ty: element_ptr_ty,
@@ -1432,10 +1428,11 @@ impl Scf {
         block: Block,
         position: BlockPosition,
         value: LocalBinding,
-        element_ty: Type,
         indices: impl IntoIterator<Item = LocalBinding>,
     ) -> (Statement, LocalBinding) {
+        let value_ty = self[value].ty();
         let indices = indices.into_iter().collect::<Vec<_>>();
+        let element_ty = self.project_ty(value_ty, &indices);
 
         let binding = self.local_bindings.insert(LocalBindingData {
             ty: element_ty,
@@ -1961,12 +1958,47 @@ impl Scf {
             let arg_ty = self.local_bindings[arg].ty();
             let expected_ty = callee.arguments()[i];
 
-            assert_eq!(arg_ty, expected_ty, "argument {} has wrong type", i);
+            assert_eq!(arg_ty, expected_ty, "argument {i} has wrong type");
 
             collected_args.push(arg);
         }
 
         collected_args
+    }
+
+    fn project_ty(&self, base: Type, indices: &[LocalBinding]) -> Type {
+        let mut element_ty = base;
+
+        for (i, binding) in indices.iter().copied().enumerate() {
+            assert_eq!(
+                self[binding].ty(),
+                TY_U32,
+                "index `{i}` does not resolve to a `u32` value"
+            );
+
+            element_ty = match &*self.ty().kind(element_ty) {
+                TypeKind::Struct(s) => {
+                    let bind_stmt = self[binding].kind().expect_expr_binding();
+
+                    let ExpressionKind::ConstU32(field) =
+                        *self[bind_stmt].expect_expr_binding().expression().kind()
+                    else {
+                        panic!(
+                            "index `{i}` tried to index into a struct, but does not resolve to a \
+                            constant `u32` expression"
+                        );
+                    };
+
+                    s.fields[field as usize].ty
+                }
+                TypeKind::Vector(v) => v.scalar.ty(),
+                TypeKind::Matrix(m) => m.column_ty(),
+                TypeKind::Array { element_ty, .. } | TypeKind::Slice { element_ty } => *element_ty,
+                _ => panic!("can only project into aggregate types"),
+            };
+        }
+
+        element_ty
     }
 }
 

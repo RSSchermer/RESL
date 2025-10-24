@@ -419,7 +419,6 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
 
     fn visit_op_ptr_element_ptr(&mut self, node: rvsdg::Node) {
         let data = self.rvsdg[node].expect_op_ptr_element_ptr();
-        let element_ty = data.element_ty();
         let ptr = self
             .value_mapping
             .mapping(data.ptr_input().origin)
@@ -432,7 +431,6 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
             self.dst_block,
             BlockPosition::Append,
             ptr,
-            element_ty,
             indices,
         );
 
@@ -441,7 +439,6 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
 
     fn visit_op_extract_element(&mut self, node: rvsdg::Node) {
         let data = self.rvsdg[node].expect_op_extract_element();
-        let element_ty = data.element_ty();
         let value = self
             .value_mapping
             .mapping(data.aggregate().origin)
@@ -454,7 +451,6 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
             self.dst_block,
             BlockPosition::Append,
             value,
-            element_ty,
             indices,
         );
 

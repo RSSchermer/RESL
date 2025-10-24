@@ -337,7 +337,6 @@ impl<'a, 'b> RegionReplicator<'a, 'b> {
     }
 
     fn replicate_op_ptr_element_ptr_node(&mut self, node: Node) -> Node {
-        dbg!(node);
         let data = self.rvsdg[node].expect_op_ptr_element_ptr();
         let ptr_input = self.mapped_value_input(data.ptr_input());
         let index_inputs = data
