@@ -960,18 +960,10 @@ mod tests {
         let case_0_block = stmt_switch_data.cases()[0].block();
         let case_0_block_data = &scf[case_0_block];
 
-        assert_eq!(case_0_block_data.statements().len(), 3);
+        assert_eq!(case_0_block_data.statements().len(), 2);
 
-        let case_0_stmt_fallback = case_0_block_data.statements()[0];
-        let case_0_stmt_const = case_0_block_data.statements()[1];
-        let case_0_stmt_add = case_0_block_data.statements()[2];
-
-        scf[case_0_stmt_fallback]
-            .kind()
-            .expect_expr_binding()
-            .expression()
-            .kind()
-            .expect_fallback_value();
+        let case_0_stmt_const = case_0_block_data.statements()[0];
+        let case_0_stmt_add = case_0_block_data.statements()[1];
 
         let case_0_stmt_const_data = scf[case_0_stmt_const].kind().expect_expr_binding();
         let case_0_stmt_const_binding = case_0_stmt_const_data.binding();
@@ -995,17 +987,8 @@ mod tests {
 
         let default_block_data = &scf[stmt_switch_data.default()];
 
-        assert_eq!(default_block_data.statements().len(), 2);
-
-        let default_fallback = default_block_data.statements()[0];
-        let default_stmt_const = default_block_data.statements()[1];
-
-        scf[default_fallback]
-            .kind()
-            .expect_expr_binding()
-            .expression()
-            .kind()
-            .expect_fallback_value();
+        assert_eq!(default_block_data.statements().len(), 1);
+        let default_stmt_const = default_block_data.statements()[0];
 
         let default_stmt_const_data = scf[default_stmt_const].kind().expect_expr_binding();
         let default_stmt_const_binding = default_stmt_const_data.binding();
@@ -1129,20 +1112,12 @@ mod tests {
         let loop_block = stmt_loop_data.block();
         let loop_block_data = &scf[loop_block];
 
-        assert_eq!(loop_block_data.statements().len(), 5);
+        assert_eq!(loop_block_data.statements().len(), 4);
 
-        let loop_block_stmt_fallback = loop_block_data.statements()[0];
-        let loop_block_stmt_0 = loop_block_data.statements()[1];
-        let loop_block_stmt_1 = loop_block_data.statements()[2];
-        let loop_block_stmt_2 = loop_block_data.statements()[3];
-        let loop_block_stmt_3 = loop_block_data.statements()[4];
-
-        scf[loop_block_stmt_fallback]
-            .kind()
-            .expect_expr_binding()
-            .expression()
-            .kind()
-            .expect_fallback_value();
+        let loop_block_stmt_0 = loop_block_data.statements()[0];
+        let loop_block_stmt_1 = loop_block_data.statements()[1];
+        let loop_block_stmt_2 = loop_block_data.statements()[2];
+        let loop_block_stmt_3 = loop_block_data.statements()[3];
 
         let added_value_data = scf[loop_block_stmt_0].kind().expect_expr_binding();
         let added_value_binding = added_value_data.binding();

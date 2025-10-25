@@ -5,7 +5,7 @@ use delegate::delegate;
 use indexmap::{IndexMap, IndexSet};
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
-use slotmap::SlotMap;
+use slotmap::{Key, SlotMap};
 
 use crate::builtin_function::BuiltinFunction;
 use crate::ty::{Type, TypeKind, TypeRegistry, TY_BOOL, TY_F32, TY_I32, TY_U32};
@@ -783,6 +783,18 @@ impl Scf {
         }
     }
 
+    /// The complete collection of all statements across all functions currently registered with
+    /// this SCF representation.
+    pub fn statements(&self) -> &SlotMap<Statement, StatementData> {
+        &self.statements
+    }
+
+    /// The complete collection of all blocks across all functions currently registered with
+    /// this SCF representation.
+    pub fn blocks(&self) -> &SlotMap<Block, BlockData> {
+        &self.blocks
+    }
+
     pub fn ty(&self) -> &TypeRegistry {
         &self.ty
     }
@@ -808,6 +820,10 @@ impl Scf {
                 block,
                 argument_bindings,
             })
+    }
+
+    pub fn registered_functions(&self) -> impl Iterator<Item = Function> + use<'_> {
+        self.function_bodies.keys().copied()
     }
 
     pub fn get_function_body(&self, function: Function) -> Option<&FunctionBody> {
@@ -1577,14 +1593,10 @@ impl Scf {
         let then_block = stmt.then_block;
         let else_block = stmt.else_block;
 
-        let (_, fallback) = self.add_bind_fallback_value(then_block, BlockPosition::Append, ty);
-
-        self.blocks[then_block].add_control_flow_var(binding, fallback);
+        self.blocks[then_block].add_control_flow_var(binding, LocalBinding::null());
 
         if let Some(else_block) = else_block {
-            let (_, fallback) = self.add_bind_fallback_value(else_block, BlockPosition::Append, ty);
-
-            self.blocks[else_block].add_control_flow_var(binding, fallback);
+            self.blocks[else_block].add_control_flow_var(binding, LocalBinding::null());
         }
 
         binding
@@ -1620,10 +1632,8 @@ impl Scf {
 
         for i in 0..out_var_count {
             let binding = self.statements[if_statement].kind.expect_if().out_vars[i];
-            let ty = self.local_bindings[binding].ty();
-            let (_, fallback) = self.add_bind_fallback_value(else_block, BlockPosition::Append, ty);
 
-            case_block_data.add_control_flow_var(binding, fallback);
+            case_block_data.add_control_flow_var(binding, LocalBinding::null());
         }
 
         let stmt = self.statements[if_statement].kind.expect_if_mut();
@@ -1687,14 +1697,11 @@ impl Scf {
 
         for i in 0..case_count {
             let block = self.statements[switch_statement].kind.expect_switch().cases[i].block;
-            let (_, fallback) = self.add_bind_fallback_value(block, BlockPosition::Append, ty);
 
-            self.blocks[block].add_control_flow_var(binding, fallback);
+            self.blocks[block].add_control_flow_var(binding, LocalBinding::null());
         }
 
-        let (_, fallback) = self.add_bind_fallback_value(default, BlockPosition::Append, ty);
-
-        self.blocks[default].add_control_flow_var(binding, fallback);
+        self.blocks[default].add_control_flow_var(binding, LocalBinding::null());
 
         binding
     }
@@ -1743,9 +1750,8 @@ impl Scf {
                 .expect_switch()
                 .out_vars[i];
             let ty = self.local_bindings[binding].ty();
-            let (_, fallback) = self.add_bind_fallback_value(case_block, BlockPosition::Append, ty);
 
-            self.blocks[case_block].add_control_flow_var(binding, fallback);
+            self.blocks[case_block].add_control_flow_var(binding, LocalBinding::null());
         }
 
         case_block
@@ -1812,9 +1818,7 @@ impl Scf {
             initial_value,
         });
 
-        let (_, fallback) = self.add_bind_fallback_value(loop_block, BlockPosition::Append, ty);
-
-        self.blocks[loop_block].add_control_flow_var(binding, fallback);
+        self.blocks[loop_block].add_control_flow_var(binding, LocalBinding::null());
 
         binding
     }
