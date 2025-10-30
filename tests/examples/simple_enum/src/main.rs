@@ -7,7 +7,7 @@ pub mod shader {
     use resl::prelude::*;
 
     #[workgroup_shared]
-    static VALUE: Workgroup<u32> = workgroup!(0);
+    static VALUE: Workgroup<u32>;
 
     fn test(v: u32) -> Result<u32, ()> {
         if v > 10 {

@@ -164,7 +164,6 @@ impl Index<StorageBinding> for StorageBindingRegistry {
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct WorkgroupBindingData {
     pub ty: Type,
-    pub value: Constant,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize, Debug)]

@@ -366,10 +366,6 @@ impl WgslWriter {
         self.w.push_str(":");
         self.write_optional_space();
         self.write_type(ty, data.ty);
-        self.write_optional_space();
-        self.w.push_str("=");
-        self.write_optional_space();
-        self.constant_id_writer.write(&mut self.w, data.value);
         self.w.push_str(";");
         self.write_newline();
     }

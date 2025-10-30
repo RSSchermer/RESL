@@ -171,10 +171,3 @@ impl<T> Workgroup<T> {
         panic!("workgroup shared memory data is only available in shader running in a GPU context");
     }
 }
-
-/// This is a private helper function. `Workgroup` handles are only meant to be initialized by the
-/// compiler.
-#[doc(hidden)]
-pub const unsafe fn __init_workgroup<T>(init: T) -> Workgroup<T> {
-    Workgroup { _init: init }
-}

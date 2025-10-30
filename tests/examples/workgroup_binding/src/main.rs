@@ -12,7 +12,7 @@ pub mod shader {
     }
 
     #[workgroup_shared]
-    static VALUE_0: Workgroup<A> = workgroup!(A { _a: 0, b: 1 });
+    static VALUE_0: Workgroup<A>;
 
     #[resource(group = 0, binding = 0)]
     static VALUES: Storage<[u32]>;

@@ -6,7 +6,7 @@ pub mod shader {
     use resl::prelude::*;
 
     #[workgroup_shared]
-    static VALUE_0: Workgroup<vec2_f32> = workgroup!(vec2_f32(0.0, 1.0));
+    static VALUE_0: Workgroup<vec2_f32>;
 
     #[compute]
     fn main(factor: f32) {

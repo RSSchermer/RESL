@@ -2,7 +2,6 @@ use std::cell::RefCell;
 
 use rustc_hash::FxHashMap;
 use rustc_middle::bug;
-use rustc_query_system::dep_graph::FingerprintStyle::HirId;
 use rustc_smir::rustc_internal::internal;
 use stable_mir::abi::{
     FieldsShape, FloatLength, FnAbi, IntegerLength, PassMode, Primitive, ValueAbi, VariantsShape,
@@ -11,9 +10,7 @@ use stable_mir::abi::{
 use stable_mir::mir::alloc::GlobalAlloc;
 use stable_mir::mir::mono::{Instance, StaticDef};
 use stable_mir::target::{MachineInfo, MachineSize};
-use stable_mir::ty::{
-    AdtKind, Align, Allocation, GenericArgKind, IndexedVal, RigidTy, Ty, TyKind, VariantIdx,
-};
+use stable_mir::ty::{Align, Allocation, GenericArgKind, IndexedVal, RigidTy, TyKind, VariantIdx};
 use stable_mir::{abi, CrateDef};
 
 use crate::context::ReslContext;
@@ -392,7 +389,7 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
         };
 
         let field_defs = def
-            .variant(VariantIdx(0))
+            .variant(VariantIdx::to_val(0))
             .expect("expected a struct variant")
             .fields();
 
@@ -405,7 +402,8 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
                 let ty = self.ty_and_layout_resolve(layout);
                 let io_binding = internal(self.rcx.tcx(), field_defs[i].def)
                     .as_local()
-                    .and_then(|id| *self.rcx.hir_ext().field_ext.get(&id))
+                    .and_then(|id| self.rcx.hir_ext().field_ext.get(&id))
+                    .and_then(|ext| ext.shader_io_binding)
                     .map(shader_io_binding_to_slir);
 
                 slir::ty::StructField {
@@ -514,10 +512,9 @@ impl<'a, 'tcx> PreDefineCodegenMethods for CodegenContext<'a, 'tcx> {
                     .insert(def, SlirStatic::Storage(b));
             }
             StaticExt::Workgroup => {
-                let value = self.workgroup_binding_initializer_const_name(def);
                 let b = module
                     .workgroup_bindings
-                    .register(slir::WorkgroupBindingData { ty, value });
+                    .register(slir::WorkgroupBindingData { ty });
 
                 self.static_to_slir
                     .borrow_mut()
@@ -690,23 +687,7 @@ impl<'a, 'tcx> StaticCodegenMethods for CodegenContext<'a, 'tcx> {
     }
 
     fn codegen_static(&self, def: StaticDef) {
-        if let Some(SlirStatic::Workgroup(b)) = *self.static_to_slir.borrow().get(&def) {
-            let alloc = def.eval_initializer().unwrap();
-            let bytes = alloc
-                .raw_bytes()
-                .expect("could not read constant memory allocation");
-
-            // This guarantees we use the same constant identifier as the one we registered into the
-            // workgrou-binding-registry in the earlier `predefine_static` call.
-            let constant = self.workgroup_binding_initializer_const_name(def);
-            let layout = TyAndLayout::expect_from_ty(def.ty());
-            let ty = self.ty_and_layout_resolve(layout);
-
-            self.module
-                .borrow_mut()
-                .constants
-                .register_byte_data(constant, ty, bytes);
-        }
+        todo!()
     }
 }
 

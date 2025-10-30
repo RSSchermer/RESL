@@ -10,7 +10,7 @@ pub mod shader {
     static VALUES: Uniform<[u32; 4]>;
 
     #[workgroup_shared]
-    static VALUE: Workgroup<u32> = workgroup!(0);
+    static VALUE: Workgroup<u32>;
 
     #[compute]
     fn entry_point_local_range() {
