@@ -221,7 +221,7 @@ impl<'a, V: CodegenObject> OperandRef<V> {
         // Neither a scalar nor scalar pair. Load from a place
         // FIXME: should we cache `const_data_from_alloc` to avoid repeating this for the
         // same `ConstAllocation`?
-        let init = bx.const_data_from_alloc(alloc);
+        let init = bx.const_data_from_alloc(alloc, layout);
         let addr = bx.static_addr_of(init, alloc_align, None);
 
         bx.load_operand(PlaceRef::new_sized(addr, layout))

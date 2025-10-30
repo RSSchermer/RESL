@@ -10,7 +10,7 @@ impl Value {
         if let Value::Value(v) = self {
             *v
         } else {
-            panic!("expected value")
+            panic!("expected a value")
         }
     }
 
@@ -18,7 +18,7 @@ impl Value {
         if let Value::FnAddr(f) = self {
             *f
         } else {
-            panic!("expected function address")
+            panic!("expected a function address")
         }
     }
 }

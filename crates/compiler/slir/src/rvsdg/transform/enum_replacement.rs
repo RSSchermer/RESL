@@ -558,6 +558,7 @@ mod tests {
             fields: vec![StructField {
                 offset: 0,
                 ty: TY_U32,
+                io_binding: None,
             }],
         }));
         let variant_0_ptr_ty = module.ty.register(TypeKind::Ptr(variant_0_ty));
@@ -566,6 +567,7 @@ mod tests {
             fields: vec![StructField {
                 offset: 0,
                 ty: TY_U32,
+                io_binding: None,
             }],
         }));
         let variant_1_ptr_ty = module.ty.register(TypeKind::Ptr(variant_1_ty));

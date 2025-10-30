@@ -7,7 +7,7 @@ use std::{fmt, mem};
 use indexmap::IndexSet;
 use serde::{Deserialize, Serialize};
 
-use crate::{BinaryOperator, Function};
+use crate::{BinaryOperator, Function, ShaderIOBinding};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct Type(TypeInner);
@@ -177,6 +177,13 @@ pub struct Matrix {
 }
 
 impl Matrix {
+    pub fn column_vector(&self) -> Vector {
+        Vector {
+            scalar: self.scalar,
+            size: self.rows,
+        }
+    }
+
     pub fn column_ty(&self) -> Type {
         match (self.scalar, self.rows) {
             (ScalarKind::I32, VectorSize::Two) => TY_VEC2_I32,
@@ -225,6 +232,7 @@ pub struct Enum {
 pub struct StructField {
     pub offset: u64,
     pub ty: Type,
+    pub io_binding: Option<ShaderIOBinding>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]

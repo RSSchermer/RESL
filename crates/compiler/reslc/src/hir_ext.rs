@@ -20,7 +20,7 @@ pub struct HirExt {
     pub impl_ext: IndexMap<ItemId, ImplExt>,
     pub param_ext: IndexMap<HirId, ParamExt>,
     pub generic_param_ext: IndexMap<HirId, GenericParamExt>,
-    pub field_ext: IndexMap<HirId, FieldExt>,
+    pub field_ext: IndexMap<LocalDefId, FieldExt>,
 }
 
 impl HirExt {

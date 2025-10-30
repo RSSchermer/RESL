@@ -466,7 +466,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Locator<'a, 'tcx> {
         if let Ok(shader_io_binding) = try_maybe_shader_io_binding(self.tcx, &attrs, s.span) {
             self.hir_ext
                 .field_ext
-                .insert(s.hir_id, FieldExt { shader_io_binding });
+                .insert(s.def_id, FieldExt { shader_io_binding });
         }
 
         intravisit::walk_field_def(self, s)
