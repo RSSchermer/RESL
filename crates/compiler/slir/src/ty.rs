@@ -241,8 +241,17 @@ pub enum TypeKind {
     Atomic(ScalarKind),
     Vector(Vector),
     Matrix(Matrix),
-    Array { element_ty: Type, count: u64 },
-    Slice { element_ty: Type },
+    Array {
+        /// The type of the elements in the array.
+        element_ty: Type,
+        /// The number of elements in the array.
+        count: u64,
+        /// The stride between elements in bytes.
+        stride: u64,
+    },
+    Slice {
+        element_ty: Type,
+    },
     Struct(Struct),
     Enum(Enum),
     Ptr(Type),
@@ -296,6 +305,10 @@ impl TypeKind {
         }
     }
 
+    pub fn is_struct(&self) -> bool {
+        matches!(self, TypeKind::Struct(_))
+    }
+
     pub fn expect_struct(&self) -> &Struct {
         if let TypeKind::Struct(struct_data) = self {
             struct_data
@@ -347,7 +360,9 @@ impl TypeKind {
             TypeKind::Atomic(scalar) => format!("atomic<{}>", scalar),
             TypeKind::Vector(v) => v.to_string(),
             TypeKind::Matrix(m) => m.to_string(),
-            TypeKind::Array { element_ty, count } => {
+            TypeKind::Array {
+                element_ty, count, ..
+            } => {
                 format!("array<{}, {}>", element_ty.to_string(ty_registry), count)
             }
             TypeKind::Slice { element_ty } => {
@@ -943,17 +958,17 @@ impl TypeRegistry {
         lhs: Type,
         rhs: Type,
     ) -> Result<Type, String> {
+        use BinaryOperator::*;
+
         match op {
-            BinaryOperator::And | BinaryOperator::Or => self.check_logic_op(op, lhs, rhs),
-            BinaryOperator::Add | BinaryOperator::Sub => self.check_add_or_sub_op(op, lhs, rhs),
-            BinaryOperator::Mul => self.check_mul_op(lhs, rhs),
-            BinaryOperator::Div | BinaryOperator::Mod => self.check_div_or_mod_op(op, lhs, rhs),
-            BinaryOperator::Shl | BinaryOperator::Shr => self.check_shift_op(op, lhs, rhs),
-            BinaryOperator::Eq | BinaryOperator::NotEq => self.check_eq_op(op, lhs, rhs),
-            BinaryOperator::Gt
-            | BinaryOperator::GtEq
-            | BinaryOperator::Lt
-            | BinaryOperator::LtEq => self.check_ord_op(op, lhs, rhs),
+            And | Or => self.check_logic_op(op, lhs, rhs),
+            Add | Sub => self.check_add_or_sub_op(op, lhs, rhs),
+            Mul => self.check_mul_op(lhs, rhs),
+            Div | Mod => self.check_div_or_mod_op(op, lhs, rhs),
+            Shl | Shr => self.check_shift_op(op, lhs, rhs),
+            Eq | NotEq => self.check_eq_op(op, lhs, rhs),
+            Gt | GtEq | Lt | LtEq => self.check_ord_op(op, lhs, rhs),
+            BitOr | BitAnd | BitXor => self.check_bit_op(op, lhs, rhs),
         }
     }
 
@@ -1214,6 +1229,35 @@ impl TypeRegistry {
                 lhs.to_string(self),
                 rhs.to_string(self)
             ))
+        }
+    }
+
+    fn check_bit_op(&self, op: BinaryOperator, lhs: Type, rhs: Type) -> Result<Type, String> {
+        match &*self.kind(lhs) {
+            TypeKind::Scalar(ScalarKind::U32 | ScalarKind::I32)
+            | TypeKind::Vector(Vector {
+                scalar: ScalarKind::I32 | ScalarKind::U32,
+                ..
+            }) => {
+                if lhs == rhs {
+                    Ok(lhs)
+                } else {
+                    Err(format!(
+                        "the `{}` operator expects both operand to have the same type (got `{}` \
+                        and `{}`)",
+                        op,
+                        lhs.to_string(self),
+                        rhs.to_string(self)
+                    ))
+                }
+            }
+            _ => Err(format!(
+                "the `{}` operator expects its operands to be signed or unsigned integers or \
+                vectors of signed or unsigned integers (got `{}` and `{}`)",
+                op,
+                lhs.to_string(self),
+                rhs.to_string(self)
+            )),
         }
     }
 }

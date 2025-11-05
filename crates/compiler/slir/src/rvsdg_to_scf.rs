@@ -382,9 +382,9 @@ impl<'a, 'b, 'c> RegionVisitor<'a, 'b, 'c> {
 
     fn visit_op_alloca(&mut self, node: rvsdg::Node) {
         let data = self.rvsdg[node].expect_op_alloca();
-        let (_, binding) =
-            self.scf
-                .add_bind_op_alloca(self.dst_block, BlockPosition::Append, data.ty());
+        let (_, binding) = self
+            .scf
+            .add_alloca(self.dst_block, BlockPosition::Append, data.ty());
 
         self.value_mapping.map_output(node, 0, binding);
     }

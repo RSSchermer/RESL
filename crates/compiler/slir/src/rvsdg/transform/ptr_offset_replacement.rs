@@ -411,6 +411,7 @@ mod tests {
         let array_ty = module.ty.register(TypeKind::Array {
             element_ty: TY_U32,
             count: 4,
+            stride: 4,
         });
         let array_ptr_ty = module.ty.register(TypeKind::Ptr(array_ty));
 
@@ -500,6 +501,7 @@ mod tests {
         let array_ty = module.ty.register(TypeKind::Array {
             element_ty: TY_U32,
             count: 4,
+            stride: 4,
         });
         let array_ptr_ty = module.ty.register(TypeKind::Ptr(array_ty));
 
@@ -619,6 +621,7 @@ mod tests {
         let array_ty = module.ty.register(TypeKind::Array {
             element_ty: TY_U32,
             count: 4,
+            stride: 4,
         });
         let array_ptr_ty = module.ty.register(TypeKind::Ptr(array_ty));
 
@@ -810,6 +813,7 @@ mod tests {
         let array_ty = module.ty.register(TypeKind::Array {
             element_ty: TY_U32,
             count: 4,
+            stride: 4,
         });
         let array_ptr_ty = module.ty.register(TypeKind::Ptr(array_ty));
 

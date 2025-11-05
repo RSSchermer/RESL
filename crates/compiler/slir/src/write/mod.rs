@@ -1,1 +1,1 @@
-mod wgsl;
+pub mod wgsl;

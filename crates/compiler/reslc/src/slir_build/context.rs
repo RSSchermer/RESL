@@ -214,7 +214,7 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
         match shape.fields {
             FieldsShape::Primitive => bug!("primitive should have been handled earlier"),
             FieldsShape::Union(_) => bug!("union types are not supported by RESL"),
-            FieldsShape::Array { count, .. } => self.register_array_ty(count, layout),
+            FieldsShape::Array { count, stride } => self.register_array_ty(count, stride, layout),
             FieldsShape::Arbitrary { ref offsets, .. } => {
                 self.register_struct(&shape, offsets, layout)
             }
@@ -351,6 +351,7 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
         let ty = self.module.borrow().ty.register(slir::ty::TypeKind::Array {
             element_ty: base,
             count,
+            stride: 4,
         });
 
         self.ty_to_slir.borrow_mut().insert(layout, ty);
@@ -358,7 +359,12 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
         ty
     }
 
-    fn register_array_ty(&self, count: u64, layout: TyAndLayout) -> slir::ty::Type {
+    fn register_array_ty(
+        &self,
+        count: u64,
+        stride: MachineSize,
+        layout: TyAndLayout,
+    ) -> slir::ty::Type {
         let element_layout = layout.field(0);
         let base = self.ty_and_layout_resolve(element_layout);
 
@@ -368,6 +374,7 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
             slir::ty::TypeKind::Array {
                 element_ty: base,
                 count,
+                stride: stride.bytes() as u64,
             }
         };
 

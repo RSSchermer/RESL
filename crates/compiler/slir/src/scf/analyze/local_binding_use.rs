@@ -4,18 +4,34 @@ use slotmap::SecondaryMap;
 
 use crate::scf::visit::TopDownVisitor;
 use crate::scf::{
-    visit, Block, ExprBinding, ExpressionKind, If, LocalBinding, Loop, LoopControl, OpCallBuiltin,
-    Return, Scf, Statement, StatementKind, Store, Switch,
+    visit, Block, ExprBinding, ExpressionKind, If, LocalBinding, LocalBindingKind, Loop,
+    LoopControl, OpCallBuiltin, Return, Scf, Statement, StatementKind, Store, Switch,
 };
+
+pub struct Config {
+    pub count_const_index_use: bool,
+}
+
+fn is_const_u32(scf: &Scf, local_binding: LocalBinding) -> bool {
+    if let LocalBindingKind::ExprBinding(stmt) = scf[local_binding].kind()
+        && let StatementKind::ExprBinding(stmt) = scf[*stmt].kind()
+    {
+        stmt.expression().kind().is_const_u32()
+    } else {
+        false
+    }
+}
 
 struct UseCounter {
     count: SecondaryMap<LocalBinding, u32>,
+    config: Config,
 }
 
 impl UseCounter {
-    fn new(capacity: usize) -> Self {
+    fn new(capacity: usize, config: Config) -> Self {
         UseCounter {
             count: SecondaryMap::with_capacity(capacity),
+            config,
         }
     }
 
@@ -50,15 +66,14 @@ impl UseCounter {
         self.increment(store_stmt.value());
     }
 
-    fn count_expr_binding(&mut self, stmt: &ExprBinding) {
+    fn count_expr_binding(&mut self, scf: &Scf, stmt: &ExprBinding) {
         match stmt.expression().kind() {
             ExpressionKind::FallbackValue
             | ExpressionKind::ConstU32(_)
             | ExpressionKind::ConstI32(_)
             | ExpressionKind::ConstF32(_)
             | ExpressionKind::ConstBool(_)
-            | ExpressionKind::GlobalPtr(_)
-            | ExpressionKind::OpAlloca(_) => {}
+            | ExpressionKind::GlobalPtr(_) => {}
             ExpressionKind::OpUnary(op) => self.increment(op.operand()),
             ExpressionKind::OpBinary(op) => {
                 self.increment(op.lhs());
@@ -78,14 +93,18 @@ impl UseCounter {
                 self.increment(op.pointer());
 
                 for index in op.indices() {
-                    self.increment(*index);
+                    if self.config.count_const_index_use || !is_const_u32(scf, *index) {
+                        self.increment(*index);
+                    }
                 }
             }
             ExpressionKind::OpExtractElement(op) => {
                 self.increment(op.value());
 
                 for index in op.indices() {
-                    self.increment(*index);
+                    if self.config.count_const_index_use || !is_const_u32(scf, *index) {
+                        self.increment(*index);
+                    }
                 }
             }
             ExpressionKind::OpLoad(ptr) => self.increment(*ptr),
@@ -127,7 +146,8 @@ impl TopDownVisitor for Visitor {
             StatementKind::Switch(stmt) => self.counter.count_switch(stmt),
             StatementKind::Loop(stmt) => self.counter.count_loop(stmt),
             StatementKind::Return(stmt) => self.counter.count_return(stmt),
-            StatementKind::ExprBinding(stmt) => self.counter.count_expr_binding(stmt),
+            StatementKind::Alloca(_) => (),
+            StatementKind::ExprBinding(stmt) => self.counter.count_expr_binding(scf, stmt),
             StatementKind::Store(stmt) => self.counter.count_store(stmt),
             StatementKind::CallBuiltin(stmt) => self.counter.count_call_builtin(stmt),
         }
@@ -136,8 +156,8 @@ impl TopDownVisitor for Visitor {
     }
 }
 
-pub fn count_local_binding_use(scf: &Scf) -> SecondaryMap<LocalBinding, u32> {
-    let counter = UseCounter::new(scf.statements().capacity());
+pub fn count_local_binding_use(scf: &Scf, config: Config) -> SecondaryMap<LocalBinding, u32> {
+    let counter = UseCounter::new(scf.statements().capacity(), config);
     let mut visitor = Visitor { counter };
 
     for function in scf.registered_functions() {

@@ -37,7 +37,6 @@ pub fn Expression(
             GlobalPtr::Constant(constant) => format!("&{}", constant.name),
         }
         .into_any(),
-        ExpressionKind::OpAlloca(ty) => "alloca".into_any(),
         ExpressionKind::OpUnary(op) => view! {
             {op.operator().to_string()}<LocalBinding module binding=op.operand() highlight />
         }

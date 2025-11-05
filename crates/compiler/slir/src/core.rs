@@ -113,6 +113,10 @@ impl UniformBindingRegistry {
     pub fn keys(&self) -> impl Iterator<Item = UniformBinding> + use<'_> {
         self.store.keys()
     }
+
+    pub fn values(&self) -> impl Iterator<Item = &UniformBindingData> + use<'_> {
+        self.store.values()
+    }
 }
 
 impl Index<UniformBinding> for UniformBindingRegistry {
@@ -151,6 +155,10 @@ impl StorageBindingRegistry {
     pub fn keys(&self) -> impl Iterator<Item = StorageBinding> + use<'_> {
         self.store.keys()
     }
+
+    pub fn values(&self) -> impl Iterator<Item = &StorageBindingData> + use<'_> {
+        self.store.values()
+    }
 }
 
 impl Index<StorageBinding> for StorageBindingRegistry {
@@ -186,6 +194,10 @@ impl WorkgroupBindingRegistry {
 
     pub fn keys(&self) -> impl Iterator<Item = WorkgroupBinding> + use<'_> {
         self.store.keys()
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &WorkgroupBindingData> + use<'_> {
+        self.store.values()
     }
 }
 
@@ -252,6 +264,10 @@ impl ConstantRegistry {
 
     pub fn keys(&self) -> impl Iterator<Item = Constant> + use<'_> {
         self.store.keys().copied()
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &ConstantData> + use<'_> {
+        self.store.values()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&Constant, &ConstantData)> + use<'_> {
@@ -427,6 +443,9 @@ pub enum BinaryOperator {
     GtEq,
     Lt,
     LtEq,
+    BitOr,
+    BitAnd,
+    BitXor,
 }
 
 impl Display for BinaryOperator {
@@ -447,6 +466,9 @@ impl Display for BinaryOperator {
             BinaryOperator::GtEq => write!(f, ">="),
             BinaryOperator::Lt => write!(f, "<"),
             BinaryOperator::LtEq => write!(f, "<="),
+            BinaryOperator::BitOr => write!(f, "|"),
+            BinaryOperator::BitAnd => write!(f, "&"),
+            BinaryOperator::BitXor => write!(f, "^"),
         }
     }
 }

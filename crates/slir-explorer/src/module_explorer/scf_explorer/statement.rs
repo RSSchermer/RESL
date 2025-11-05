@@ -35,6 +35,10 @@ pub fn Statement(
             <Return module statement highlight /><br/>
         }
         .into_any(),
+        StatementKind::Alloca(_) => view! {
+            <Alloca module statement highlight /><br/>
+        }
+        .into_any(),
         StatementKind::ExprBinding(_) => view! {
             <ExprBinding module statement highlight /><br/>
         }
@@ -199,6 +203,20 @@ pub fn Return(
             "return;"
         }
         .into_any()
+    }
+}
+
+#[component]
+pub fn Alloca(
+    module: StoredValue<ModuleData>,
+    statement: slir::scf::Statement,
+    highlight: HighlightSignal,
+) -> impl IntoView {
+    let module_data = module.read_value();
+    let stmt = module_data.expect_scf()[statement].kind().expect_alloca();
+
+    view! {
+        "let "<LocalBinding module binding=stmt.binding() highlight />" = alloca;"
     }
 }
 

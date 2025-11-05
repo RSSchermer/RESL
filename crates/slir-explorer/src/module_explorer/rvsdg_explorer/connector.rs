@@ -17,7 +17,9 @@ fn ty_str(module: &Module, ty: Type) -> String {
         TypeKind::Atomic(s) => format!("atomic<{}>", s),
         TypeKind::Vector(v) => v.to_string(),
         TypeKind::Matrix(m) => m.to_string(),
-        TypeKind::Array { element_ty, count } => {
+        TypeKind::Array {
+            element_ty, count, ..
+        } => {
             format!("array<{}, {}>", ty_str(module, *element_ty), count)
         }
         TypeKind::Slice { element_ty } => format!("array<{}>", ty_str(module, *element_ty)),

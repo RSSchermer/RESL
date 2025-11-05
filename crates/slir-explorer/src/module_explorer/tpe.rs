@@ -12,9 +12,9 @@ pub fn Type(module: StoredValue<ModuleData>, ty: slir::ty::Type) -> impl IntoVie
         TypeKind::Atomic(s) => view! {{format!("atomic<{}>", s)}}.into_any(),
         TypeKind::Vector(v) => view! {{v.to_string()}}.into_any(),
         TypeKind::Matrix(m) => view! {{m.to_string()}}.into_any(),
-        TypeKind::Array { element_ty, count } => {
-            view! { "array<" <Type module ty=*element_ty/> ", " {*count} ">" }.into_any()
-        }
+        TypeKind::Array {
+            element_ty, count, ..
+        } => view! { "array<" <Type module ty=*element_ty/> ", " {*count} ">" }.into_any(),
         TypeKind::Slice { element_ty } => {
             view! { "array<" <Type module ty=*element_ty/> ">" }.into_any()
         }

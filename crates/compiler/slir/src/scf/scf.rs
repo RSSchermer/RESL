@@ -40,6 +40,7 @@ impl LocalBindingData {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub enum LocalBindingKind {
     Argument(u32),
+    Alloca(Statement),
     ExprBinding(Statement),
     ControlFlowVar {
         statement: Statement,
@@ -48,6 +49,10 @@ pub enum LocalBindingKind {
 }
 
 impl LocalBindingKind {
+    pub fn is_argument(&self) -> bool {
+        matches!(self, LocalBindingKind::Argument(_))
+    }
+
     pub fn expect_argument(&self) -> u32 {
         if let LocalBindingKind::Argument(index) = self {
             *index
@@ -56,12 +61,32 @@ impl LocalBindingKind {
         }
     }
 
+    pub fn is_alloca(&self) -> bool {
+        matches!(self, LocalBindingKind::Alloca(_))
+    }
+
+    pub fn expect_alloca(&self) -> Statement {
+        if let LocalBindingKind::Alloca(stmt) = self {
+            *stmt
+        } else {
+            panic!("expected an alloca statement");
+        }
+    }
+
+    pub fn is_expr_binding(&self) -> bool {
+        matches!(self, LocalBindingKind::ExprBinding(_))
+    }
+
     pub fn expect_expr_binding(&self) -> Statement {
         if let LocalBindingKind::ExprBinding(binding) = self {
             *binding
         } else {
             panic!("expected an expression-binding statement");
         }
+    }
+
+    pub fn is_control_flow_var(&self) -> bool {
+        matches!(self, LocalBindingKind::ControlFlowVar { .. })
     }
 
     pub fn expect_control_flow_var(&self) -> (Statement, usize) {
@@ -222,7 +247,6 @@ pub enum ExpressionKind {
     ConstF32(f32),
     ConstBool(bool),
     GlobalPtr(GlobalPtr),
-    OpAlloca(Type),
     OpUnary(OpUnary),
     OpBinary(OpBinary),
     OpVector(OpVector),
@@ -238,6 +262,10 @@ impl ExpressionKind {
         if !matches!(self, ExpressionKind::FallbackValue) {
             panic!("expected a fallback-value expression");
         }
+    }
+
+    pub fn is_const_u32(&self) -> bool {
+        matches!(self, ExpressionKind::ConstU32(_))
     }
 
     pub fn expect_const_u32(&self) -> u32 {
@@ -580,6 +608,22 @@ impl ExprBinding {
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct Alloca {
+    binding: LocalBinding,
+    ty: Type,
+}
+
+impl Alloca {
+    pub fn binding(&self) -> LocalBinding {
+        self.binding
+    }
+
+    pub fn ty(&self) -> Type {
+        self.ty
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Store {
     pointer: LocalBinding,
     value: LocalBinding,
@@ -617,6 +661,9 @@ impl StatementData {
             pub fn expect_loop(&self) -> &Loop;
             pub fn expect_return(&self) -> &Return;
             pub fn expect_expr_binding(&self) -> &ExprBinding;
+            pub fn expect_alloca(&self) -> &Alloca;
+            pub fn expect_store(&self) -> &Store;
+            pub fn expect_call_builtin(&self) -> &OpCallBuiltin;
         }
     }
 }
@@ -628,6 +675,7 @@ pub enum StatementKind {
     Loop(Loop),
     Return(Return),
     ExprBinding(ExprBinding),
+    Alloca(Alloca),
     Store(Store),
     CallBuiltin(OpCallBuiltin),
 }
@@ -694,6 +742,14 @@ impl StatementKind {
             stmt
         } else {
             panic!("expected an expression-binding statement");
+        }
+    }
+
+    pub fn expect_alloca(&self) -> &Alloca {
+        if let StatementKind::Alloca(stmt) = self {
+            stmt
+        } else {
+            panic!("expected an alloca statement");
         }
     }
 
@@ -1117,39 +1173,6 @@ impl Scf {
                 expression: Expression {
                     ty: ptr_ty,
                     kind: ExpressionKind::GlobalPtr(global_ptr),
-                },
-            }),
-        });
-
-        self.blocks[block].add_statement(position, statement);
-
-        // Adjust the temporary value we set above to the actual statement.
-        self.local_bindings[binding].kind = LocalBindingKind::ExprBinding(statement);
-
-        (statement, binding)
-    }
-
-    pub fn add_bind_op_alloca(
-        &mut self,
-        block: Block,
-        position: BlockPosition,
-        ty: Type,
-    ) -> (Statement, LocalBinding) {
-        let ptr_ty = self.ty().register(TypeKind::Ptr(ty));
-
-        let binding = self.local_bindings.insert(LocalBindingData {
-            ty: ptr_ty,
-            // Initialize with a temporary value, remember to adjust after statement initialization.
-            kind: LocalBindingKind::ExprBinding(Statement::default()),
-        });
-
-        let statement = self.statements.insert(StatementData {
-            block,
-            kind: StatementKind::ExprBinding(ExprBinding {
-                binding,
-                expression: Expression {
-                    ty: ptr_ty,
-                    kind: ExpressionKind::OpAlloca(ty),
                 },
             }),
         });
@@ -1854,6 +1877,33 @@ impl Scf {
         self.blocks[block].add_statement(position, statement);
 
         statement
+    }
+
+    pub fn add_alloca(
+        &mut self,
+        block: Block,
+        position: BlockPosition,
+        ty: Type,
+    ) -> (Statement, LocalBinding) {
+        let ptr_ty = self.ty().register(TypeKind::Ptr(ty));
+
+        let binding = self.local_bindings.insert(LocalBindingData {
+            ty: ptr_ty,
+            // Initialize with a temporary value, remember to adjust after statement initialization.
+            kind: LocalBindingKind::Alloca(Statement::default()),
+        });
+
+        let statement = self.statements.insert(StatementData {
+            block,
+            kind: StatementKind::Alloca(Alloca { binding, ty }),
+        });
+
+        self.blocks[block].add_statement(position, statement);
+
+        // Adjust the temporary value we set above to the actual statement.
+        self.local_bindings[binding].kind = LocalBindingKind::Alloca(statement);
+
+        (statement, binding)
     }
 
     pub fn add_store(
