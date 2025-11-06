@@ -9,6 +9,7 @@ pub mod tpe;
 
 use std::fs;
 use std::io::Read as IoRead;
+
 use ar::Archive;
 use leptos::prelude::*;
 use leptos_router::hooks::use_params;
@@ -158,7 +159,9 @@ pub fn ModuleExplorer() -> impl IntoView {
                         if entry.header().identifier() == "wgsl".as_bytes() {
                             let mut decoded = String::new();
 
-                            entry.read_to_string(&mut decoded).expect("could not read WGSL");
+                            entry
+                                .read_to_string(&mut decoded)
+                                .expect("could not read WGSL");
 
                             wgsl = Some(decoded);
                         }

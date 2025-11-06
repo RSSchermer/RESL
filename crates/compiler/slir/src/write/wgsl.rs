@@ -1232,28 +1232,31 @@ impl ConstantValueWriter<'_, '_> {
     }
 
     fn read_u32(&self, offset: usize) -> u32 {
-        let slice = self.data.get(offset..offset + 4).expect("not enough data available at the `offset` to represent a u32 value");
-        let bytes: [u8; 4] = slice
-            .try_into()
-            .unwrap();
+        let slice = self
+            .data
+            .get(offset..offset + 4)
+            .expect("not enough data available at the `offset` to represent a u32 value");
+        let bytes: [u8; 4] = slice.try_into().unwrap();
 
         u32::from_ne_bytes(bytes)
     }
 
     fn read_i32(&self, offset: usize) -> i32 {
-        let slice = self.data.get(offset..offset + 4).expect("not enough data available at the `offset` to represent a i32 value");
-        let bytes: [u8; 4] = slice
-            .try_into()
-            .unwrap();
+        let slice = self
+            .data
+            .get(offset..offset + 4)
+            .expect("not enough data available at the `offset` to represent a i32 value");
+        let bytes: [u8; 4] = slice.try_into().unwrap();
 
         i32::from_ne_bytes(bytes)
     }
 
     fn read_f32(&self, offset: usize) -> f32 {
-        let slice = self.data.get(offset..offset + 4).expect("not enough data available at the `offset` to represent a f32 value");
-        let bytes: [u8; 4] = slice
-            .try_into()
-            .unwrap();
+        let slice = self
+            .data
+            .get(offset..offset + 4)
+            .expect("not enough data available at the `offset` to represent a f32 value");
+        let bytes: [u8; 4] = slice.try_into().unwrap();
 
         f32::from_ne_bytes(bytes)
     }

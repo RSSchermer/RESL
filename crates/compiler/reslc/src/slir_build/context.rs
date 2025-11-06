@@ -703,9 +703,7 @@ impl<'a, 'tcx> StaticCodegenMethods for CodegenContext<'a, 'tcx> {
         todo!()
     }
 
-    fn codegen_static(&self, def: StaticDef) {
-
-    }
+    fn codegen_static(&self, def: StaticDef) {}
 }
 
 impl<'a, 'tcx> ConstCodegenMethods for CodegenContext<'a, 'tcx> {

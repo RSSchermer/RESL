@@ -1,8 +1,13 @@
 use std::ops::Deref;
 
 use slotmap::{SecondaryMap, SlotMap};
+
 use crate::scf::visit::TopDownVisitor;
-use crate::scf::{visit, Block, ExprBinding, ExpressionKind, If, LocalBinding, LocalBindingData, LocalBindingKind, Loop, LoopControl, OpCallBuiltin, Return, Scf, Statement, StatementKind, Store, Switch};
+use crate::scf::{
+    visit, Block, ExprBinding, ExpressionKind, If, LocalBinding, LocalBindingData,
+    LocalBindingKind, Loop, LoopControl, OpCallBuiltin, Return, Scf, Statement, StatementKind,
+    Store, Switch,
+};
 
 pub struct Config {
     pub count_const_index_use: bool,
@@ -31,10 +36,7 @@ impl UseCounter {
             count.insert(local_binding, 0);
         }
 
-        UseCounter {
-            count,
-            config,
-        }
+        UseCounter { count, config }
     }
 
     fn increment(&mut self, local_binding: LocalBinding) {
