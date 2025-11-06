@@ -22,6 +22,7 @@ enum Item {
     UniformBinding(slir::UniformBinding),
     StorageBinding(slir::StorageBinding),
     WorkgroupBinding(slir::WorkgroupBinding),
+    WGSL,
     Invalid,
 }
 
@@ -33,7 +34,9 @@ impl Item {
             return Item::Invalid;
         };
 
-        if label.starts_with(FUNCTION_ITEM_LABEL_START) {
+        if label == "wgsl" {
+            Item::WGSL
+        } else if label.starts_with(FUNCTION_ITEM_LABEL_START) {
             let name = &label[FUNCTION_ITEM_LABEL_START.len()..];
             let mut split = name.split("::");
             let module = split.next().unwrap_or("");
@@ -151,6 +154,10 @@ pub fn ModuleExplorerInner(module: ModuleData, item_label: Option<String>) -> im
                         </ul>
                     </AccordionItem>
                 </Accordion>
+                <Divider />
+                <Link href=format!("/{}/wgsl", urlencode(module.read_value().module.name.as_str()))>
+                    WGSL
+                </Link>
             </div>
             <div class="item-explorer-container">
                 {
@@ -161,6 +168,11 @@ pub fn ModuleExplorerInner(module: ModuleData, item_label: Option<String>) -> im
                             Item::UniformBinding(b) => view! { "uniform placeholder" }.into_any(),
                             Item::StorageBinding(b) => view! { "storage placeholder" }.into_any(),
                             Item::WorkgroupBinding(b) => view! { "workgroup placeholder" }.into_any(),
+                            Item::WGSL => view!{
+                                <pre>
+                                    {module.read_value().wgsl.clone().unwrap_or_default()}
+                                </pre>
+                            }.into_any(),
                             Item::Invalid => view! {
                                 <div class="info-page-container">
                                     <h1>"Invalid item identifier"</h1>

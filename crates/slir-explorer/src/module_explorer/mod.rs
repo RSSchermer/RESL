@@ -8,7 +8,7 @@ pub mod struct_explorer;
 pub mod tpe;
 
 use std::fs;
-
+use std::io::Read as IoRead;
 use ar::Archive;
 use leptos::prelude::*;
 use leptos_router::hooks::use_params;
@@ -47,6 +47,7 @@ struct ModuleData {
     pub rvsdg_initial: Option<slir::rvsdg::Rvsdg>,
     pub rvsdg_transformed: Option<slir::rvsdg::Rvsdg>,
     pub scf: Option<slir::scf::Scf>,
+    pub wgsl: Option<String>,
 }
 
 impl ModuleData {
@@ -97,6 +98,7 @@ pub fn ModuleExplorer() -> impl IntoView {
                     let mut rvsdg_initial = None;
                     let mut rvsdg_transformed = None;
                     let mut scf = None;
+                    let mut wgsl = None;
 
                     while let Some(entry_result) = archive.next_entry() {
                         let mut entry = entry_result.unwrap();
@@ -152,6 +154,14 @@ pub fn ModuleExplorer() -> impl IntoView {
 
                             scf = Some(decoded);
                         }
+
+                        if entry.header().identifier() == "wgsl".as_bytes() {
+                            let mut decoded = String::new();
+
+                            entry.read_to_string(&mut decoded).expect("could not read WGSL");
+
+                            wgsl = Some(decoded);
+                        }
                     }
 
                     let module =
@@ -171,6 +181,7 @@ pub fn ModuleExplorer() -> impl IntoView {
                         rvsdg_initial,
                         rvsdg_transformed,
                         scf,
+                        wgsl,
                     }
                 })
                 .map_err(|err| err.clone())
