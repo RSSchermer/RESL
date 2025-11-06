@@ -9,21 +9,20 @@ pub mod shader {
     #[workgroup_shared]
     static VALUE: Workgroup<u32>;
 
-    fn test(v: u32) -> Result<u32, ()> {
+    fn test(v: u32) -> Result<u32, u32> {
         if v > 10 {
             Ok(1)
         } else {
-            Err(())
+            Err(0)
         }
     }
 
     #[compute]
     fn main() {
         unsafe {
-            *VALUE.as_mut_unchecked() = if let Ok(new_value) = test(*VALUE.as_ref_unchecked()) {
-                new_value
-            } else {
-                0
+            *VALUE.as_mut_unchecked() = match test(*VALUE.as_ref_unchecked()) {
+                Ok(v) => v,
+                Err(v) => v,
             };
         }
     }
