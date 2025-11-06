@@ -449,6 +449,7 @@ impl WgslModuleWriter {
         self.write_type(cx, data.ty);
         self.w.push_str(";");
         self.write_newline();
+        self.write_newline();
     }
 
     fn write_storage_binding(&mut self, cx: Context, binding: StorageBinding) {
@@ -469,6 +470,7 @@ impl WgslModuleWriter {
         self.write_optional_space();
         self.write_type(cx, data.ty);
         self.w.push_str(";");
+        self.write_newline();
         self.write_newline();
     }
 
@@ -492,6 +494,7 @@ impl WgslModuleWriter {
         self.write_type(cx, data.ty);
         self.w.push_str(";");
         self.write_newline();
+        self.write_newline();
     }
 
     fn write_constant_binding(&mut self, cx: Context, constant: Constant) {
@@ -508,6 +511,7 @@ impl WgslModuleWriter {
         self.write_optional_space();
         self.write_constant_value(cx, constant);
         self.w.push_str(";");
+        self.write_newline();
         self.write_newline();
     }
 
@@ -573,6 +577,8 @@ impl WgslModuleWriter {
 
         self.write_optional_space();
         self.write_block(cx, body.block());
+        self.write_newline();
+        self.write_newline();
     }
 
     fn write_entry_point_kind(&mut self, entry_point_kind: &EntryPointKind) {
@@ -607,17 +613,22 @@ impl WgslModuleWriter {
     fn write_block_content(&mut self, cx: Context, block: Block) {
         let data = &cx.scf[block];
 
-        for statement in data.statements() {
+        if !data.statements().is_empty() {
             self.write_newline();
+        }
+
+        for statement in data.statements() {
             self.write_statement(cx, *statement);
         }
 
         for (var, expr) in data.control_flow_var_iter() {
+            self.write_newline();
             self.write_local_binding_id(var);
             self.write_optional_space();
             self.w.push_str("=");
             self.write_optional_space();
             self.write_local_value(cx, expr, InlineContext::None);
+            self.w.push_str(";")
         }
     }
 
@@ -629,7 +640,8 @@ impl WgslModuleWriter {
         self.w.push_str(":");
         self.write_optional_space();
         self.write_type(cx, ty);
-        self.w.push_str(";")
+        self.w.push_str(";");
+        self.write_newline();
     }
 
     fn write_statement(&mut self, cx: Context, statement: Statement) {
@@ -648,6 +660,9 @@ impl WgslModuleWriter {
     fn write_stmt_if(&mut self, cx: Context, if_stmt: &If) {
         for var in if_stmt.out_vars() {
             self.write_var_uninit(cx, *var);
+        }
+
+        if !if_stmt.out_vars().is_empty() {
             self.write_newline();
         }
 
@@ -662,11 +677,16 @@ impl WgslModuleWriter {
             self.write_optional_space();
             self.write_block(cx, else_block);
         }
+
+        self.write_newline();
     }
 
     fn write_stmt_switch(&mut self, cx: Context, switch_stmt: &Switch) {
         for var in switch_stmt.out_vars() {
             self.write_var_uninit(cx, *var);
+        }
+
+        if !switch_stmt.out_vars().is_empty() {
             self.write_newline();
         }
 
@@ -692,7 +712,8 @@ impl WgslModuleWriter {
 
         self.decrement_indent();
         self.write_newline();
-        self.w.push_str("}")
+        self.w.push_str("}");
+        self.write_newline();
     }
 
     fn write_stmt_loop(&mut self, cx: Context, loop_stmt: &Loop) {
@@ -704,6 +725,10 @@ impl WgslModuleWriter {
             self.write_optional_space();
             self.write_local_value(cx, var.initial_value(), InlineContext::None);
             self.w.push_str(";");
+            self.write_newline();
+        }
+
+        if !loop_stmt.loop_vars().is_empty() {
             self.write_newline();
         }
 
@@ -746,6 +771,8 @@ impl WgslModuleWriter {
                 self.write_block(cx, loop_stmt.block());
             }
         }
+
+        self.write_newline();
     }
 
     fn write_stmt_return(&mut self, cx: Context, return_stmt: &Return) {
@@ -756,6 +783,8 @@ impl WgslModuleWriter {
         } else {
             self.w.push_str("return;");
         }
+
+        self.write_newline();
     }
 
     fn write_stmt_expr_binding(&mut self, cx: Context, stmt: &ExprBinding) {
@@ -768,6 +797,8 @@ impl WgslModuleWriter {
             self.w.push_str("=");
             self.write_optional_space();
             self.write_expression(cx, stmt.expression(), InlineContext::None);
+            self.w.push_str(";");
+            self.write_newline();
         }
     }
 
@@ -786,6 +817,7 @@ impl WgslModuleWriter {
         self.write_optional_space();
         self.write_type(cx, stmt.ty());
         self.w.push_str(";");
+        self.write_newline();
     }
 
     fn write_stmt_store(&mut self, cx: Context, store_stmt: &Store) {
@@ -801,11 +833,13 @@ impl WgslModuleWriter {
         self.write_optional_space();
         self.write_local_value(cx, store_stmt.value(), InlineContext::None);
         self.w.push_str(";");
+        self.write_newline();
     }
 
     fn write_stmt_call_builtin(&mut self, cx: Context, op_call_builtin: &OpCallBuiltin) {
         self.write_op_call_builtin(cx, op_call_builtin);
         self.w.push_str(";");
+        self.write_newline();
     }
 
     fn write_op_call_builtin(&mut self, cx: Context, op_call_builtin: &OpCallBuiltin) {
@@ -1198,25 +1232,28 @@ impl ConstantValueWriter<'_, '_> {
     }
 
     fn read_u32(&self, offset: usize) -> u32 {
-        let bytes: [u8; 4] = self.data[offset..]
+        let slice = self.data.get(offset..offset + 4).expect("not enough data available at the `offset` to represent a u32 value");
+        let bytes: [u8; 4] = slice
             .try_into()
-            .expect("not enough data available at the `offset` to represent a u32 value");
+            .unwrap();
 
         u32::from_ne_bytes(bytes)
     }
 
     fn read_i32(&self, offset: usize) -> i32 {
-        let bytes: [u8; 4] = self.data[offset..]
+        let slice = self.data.get(offset..offset + 4).expect("not enough data available at the `offset` to represent a i32 value");
+        let bytes: [u8; 4] = slice
             .try_into()
-            .expect("not enough data available at the `offset` to represent a i32 value");
+            .unwrap();
 
         i32::from_ne_bytes(bytes)
     }
 
     fn read_f32(&self, offset: usize) -> f32 {
-        let bytes: [u8; 4] = self.data[offset..]
+        let slice = self.data.get(offset..offset + 4).expect("not enough data available at the `offset` to represent a f32 value");
+        let bytes: [u8; 4] = slice
             .try_into()
-            .expect("not enough data available at the `offset` to represent a f32 value");
+            .unwrap();
 
         f32::from_ne_bytes(bytes)
     }

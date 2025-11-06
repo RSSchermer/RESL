@@ -84,6 +84,7 @@ pub fn codegen_shader_modules(cx: &Cx) -> (slir::Module, slir::cfg::Cfg) {
                     module_name: name,
                     include_rvsdg_initial: true,
                     include_rvsdg_transformed: true,
+                    include_wgsl: true,
                 },
             );
 
@@ -106,6 +107,10 @@ pub fn codegen_shader_modules(cx: &Cx) -> (slir::Module, slir::cfg::Cfg) {
             scf::transform::transform(&mut module, &mut scf);
 
             artifact_builder.add_scf(&scf);
+
+            let wgsl = slir::write::wgsl::write_wgsl(&module, &scf);
+
+            artifact_builder.maybe_add_wgsl(&wgsl);
 
             artifact_builder.finish(&module);
         }

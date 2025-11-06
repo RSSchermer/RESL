@@ -851,6 +851,12 @@ impl Scf {
         &self.blocks
     }
 
+    /// The complete collection of all statements across all functions currently registered with
+    /// this SCF representation.
+    pub fn local_bindings(&self) -> &SlotMap<LocalBinding, LocalBindingData> {
+        &self.local_bindings
+    }
+
     pub fn ty(&self) -> &TypeRegistry {
         &self.ty
     }

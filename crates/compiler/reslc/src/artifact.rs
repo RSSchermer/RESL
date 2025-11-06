@@ -13,11 +13,13 @@ pub const CFG_IDENTIFIER: &'static str = "cfg";
 pub const SCF_IDENTIFIER: &'static str = "scf";
 pub const RVSDG_INITIAL_IDENTIFIER: &'static str = "rvsdg_initial";
 pub const RVSDG_TRANSFORMED_IDENTIFIER: &'static str = "rvsdg_transformed";
+pub const WGSL_IDENTIFIER: &'static str = "wgsl";
 
 pub struct SlirArtifactBuilderConfig {
     pub module_name: slir::Symbol,
     pub include_rvsdg_initial: bool,
     pub include_rvsdg_transformed: bool,
+    pub include_wgsl: bool,
 }
 
 pub struct SlirArtifactBuilder {
@@ -28,6 +30,7 @@ pub struct SlirArtifactBuilder {
     scf_identifier: Vec<u8>,
     rvsdg_initial_identifier: Option<Vec<u8>>,
     rvsdg_transformed_identifier: Option<Vec<u8>>,
+    wgsl_identifier: Option<Vec<u8>>
 }
 
 impl SlirArtifactBuilder {
@@ -35,7 +38,7 @@ impl SlirArtifactBuilder {
         let SlirArtifactBuilderConfig {
             module_name,
             include_rvsdg_initial,
-            include_rvsdg_transformed,
+            include_rvsdg_transformed, include_wgsl,
         } = config;
 
         let mut filename = cx
@@ -57,6 +60,8 @@ impl SlirArtifactBuilder {
             include_rvsdg_initial.then(|| RVSDG_INITIAL_IDENTIFIER.as_bytes().to_vec());
         let rvsdg_transformed_identifier =
             include_rvsdg_transformed.then(|| RVSDG_TRANSFORMED_IDENTIFIER.as_bytes().to_vec());
+        let wgsl_identifier =
+            include_wgsl.then(|| WGSL_IDENTIFIER.as_bytes().to_vec());
 
         let mut identifiers = vec![
             module_identifier.clone(),
@@ -72,6 +77,10 @@ impl SlirArtifactBuilder {
             identifiers.push(rvsdg_transformed_identifier.clone());
         }
 
+        if let Some(wgsl_identifier) = &wgsl_identifier {
+            identifiers.push(wgsl_identifier.clone());
+        }
+
         let inner = GnuBuilder::new(file, identifiers);
 
         SlirArtifactBuilder {
@@ -82,6 +91,7 @@ impl SlirArtifactBuilder {
             scf_identifier,
             rvsdg_initial_identifier,
             rvsdg_transformed_identifier,
+            wgsl_identifier,
         }
     }
 
@@ -134,6 +144,17 @@ impl SlirArtifactBuilder {
                     encoding.as_slice(),
                 )
                 .expect("failed to append SLIR RVSDG-transformed to SLIR artifact archive");
+        }
+    }
+
+    pub fn maybe_add_wgsl(&mut self, wgsl: &str) {
+        if let Some(identifier) = self.wgsl_identifier.clone() {
+            self.inner
+                .append(
+                    &Header::new(identifier, wgsl.len() as u64),
+                    wgsl.as_bytes(),
+                )
+                .expect("failed to append WGSL to SLIR artifact archive");
         }
     }
 

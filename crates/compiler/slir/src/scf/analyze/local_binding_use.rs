@@ -1,12 +1,8 @@
 use std::ops::Deref;
 
-use slotmap::SecondaryMap;
-
+use slotmap::{SecondaryMap, SlotMap};
 use crate::scf::visit::TopDownVisitor;
-use crate::scf::{
-    visit, Block, ExprBinding, ExpressionKind, If, LocalBinding, LocalBindingKind, Loop,
-    LoopControl, OpCallBuiltin, Return, Scf, Statement, StatementKind, Store, Switch,
-};
+use crate::scf::{visit, Block, ExprBinding, ExpressionKind, If, LocalBinding, LocalBindingData, LocalBindingKind, Loop, LoopControl, OpCallBuiltin, Return, Scf, Statement, StatementKind, Store, Switch};
 
 pub struct Config {
     pub count_const_index_use: bool,
@@ -28,9 +24,15 @@ struct UseCounter {
 }
 
 impl UseCounter {
-    fn new(capacity: usize, config: Config) -> Self {
+    fn new(local_bindings: &SlotMap<LocalBinding, LocalBindingData>, config: Config) -> Self {
+        let mut count = SecondaryMap::with_capacity(local_bindings.capacity());
+
+        for local_binding in local_bindings.keys() {
+            count.insert(local_binding, 0);
+        }
+
         UseCounter {
-            count: SecondaryMap::with_capacity(capacity),
+            count,
             config,
         }
     }
@@ -157,7 +159,7 @@ impl TopDownVisitor for Visitor {
 }
 
 pub fn count_local_binding_use(scf: &Scf, config: Config) -> SecondaryMap<LocalBinding, u32> {
-    let counter = UseCounter::new(scf.statements().capacity(), config);
+    let counter = UseCounter::new(scf.local_bindings(), config);
     let mut visitor = Visitor { counter };
 
     for function in scf.registered_functions() {
