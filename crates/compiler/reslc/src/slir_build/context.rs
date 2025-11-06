@@ -407,11 +407,21 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
             .map(|i| {
                 let layout = layout.field(i);
                 let ty = self.ty_and_layout_resolve(layout);
-                let io_binding = internal(self.rcx.tcx(), field_defs[i].def)
-                    .as_local()
-                    .and_then(|id| self.rcx.hir_ext().field_ext.get(&id))
-                    .and_then(|ext| ext.shader_io_binding)
-                    .map(shader_io_binding_to_slir);
+
+                // Not all types have an equal number of field-defs in the THIR representation as
+                // they do in the ABI shape (notably fat pointers won't), but types that have
+                // io-binding attributes must have io-binding attributes on all fields and therefore
+                // all fields must be of io-bindable types (which does not include fat pointers);
+                // for such types this should always resolve to the correct field-def.
+                let io_binding = if let Some(field_def) = field_defs.get(i) {
+                    internal(self.rcx.tcx(), field_def.def)
+                        .as_local()
+                        .and_then(|id| self.rcx.hir_ext().field_ext.get(&id))
+                        .and_then(|ext| ext.shader_io_binding)
+                        .map(shader_io_binding_to_slir)
+                } else {
+                    None
+                };
 
                 slir::ty::StructField {
                     offset: field_offsets[i].bytes() as u64,
@@ -694,7 +704,7 @@ impl<'a, 'tcx> StaticCodegenMethods for CodegenContext<'a, 'tcx> {
     }
 
     fn codegen_static(&self, def: StaticDef) {
-        todo!()
+
     }
 }
 
