@@ -83,31 +83,6 @@ impl<'tcx> UsageMap<'tcx> {
             .insert(user_item, used_items.items().collect())
             .is_none());
     }
-
-    pub(crate) fn get_user_items(&self, item: MonoItem<'tcx>) -> &[MonoItem<'tcx>] {
-        self.user_map
-            .get(&item)
-            .map(|items| items.as_slice())
-            .unwrap_or(&[])
-    }
-
-    /// Internally iterate over all inlined items used by `item`.
-    pub(crate) fn for_each_inlined_used_item<F>(
-        &self,
-        tcx: TyCtxt<'tcx>,
-        item: MonoItem<'tcx>,
-        mut f: F,
-    ) where
-        F: FnMut(MonoItem<'tcx>),
-    {
-        let used_items = self.used_map.get(&item).unwrap();
-        for used_item in used_items.iter() {
-            let is_inlined = used_item.instantiation_mode(tcx) == InstantiationMode::LocalCopy;
-            if is_inlined {
-                f(*used_item);
-            }
-        }
-    }
 }
 
 struct MonoItems<'tcx> {
@@ -156,30 +131,6 @@ impl<'tcx> Extend<Spanned<MonoItem<'tcx>>> for MonoItems<'tcx> {
     {
         for item in iter {
             self.push(item)
-        }
-    }
-}
-
-fn custom_coerce_unsize_info<'tcx>(
-    tcx: TyCtxtAt<'tcx>,
-    source_ty: Ty<'tcx>,
-    target_ty: Ty<'tcx>,
-) -> Result<CustomCoerceUnsized, ErrorGuaranteed> {
-    let trait_ref = ty::TraitRef::new(
-        tcx.tcx,
-        tcx.require_lang_item(LangItem::CoerceUnsized, Some(tcx.span)),
-        [source_ty, target_ty],
-    );
-
-    match tcx
-        .codegen_select_candidate(ty::TypingEnv::fully_monomorphized().as_query_input(trait_ref))
-    {
-        Ok(traits::ImplSource::UserDefined(traits::ImplSourceUserDefinedData {
-            impl_def_id,
-            ..
-        })) => Ok(tcx.coerce_unsized_info(impl_def_id)?.custom_kind.unwrap()),
-        impl_source => {
-            bug!("invalid `CoerceUnsized` impl_source: {:?}", impl_source);
         }
     }
 }
@@ -304,51 +255,13 @@ fn collect_items_rec<'tcx>(
             });
         }
         MonoItem::GlobalAsm(item_id) => {
-            assert!(
-                mode == CollectionMode::UsedItems,
-                "should never encounter global_asm when collecting mentioned items"
-            );
-            recursion_depth_reset = None;
-
             let item = tcx.hir().item(item_id);
-            if let hir::ItemKind::GlobalAsm(asm) = item.kind {
-                for (op, op_sp) in asm.operands {
-                    match op {
-                        hir::InlineAsmOperand::Const { .. } => {
-                            // Only constants which resolve to a plain integer
-                            // are supported. Therefore the value should not
-                            // depend on any other items.
-                        }
-                        hir::InlineAsmOperand::SymFn { anon_const } => {
-                            let fn_ty = tcx
-                                .typeck_body(anon_const.body)
-                                .node_type(anon_const.hir_id);
-                            visit_fn_use(tcx, fn_ty, false, *op_sp, &mut used_items);
-                        }
-                        hir::InlineAsmOperand::SymStatic { path: _, def_id } => {
-                            let instance = Instance::mono(tcx, *def_id);
-                            if tcx.should_codegen_locally(instance) {
-                                trace!("collecting static {:?}", def_id);
-                                used_items.push(dummy_spanned(MonoItem::Static(*def_id)));
-                            }
-                        }
-                        hir::InlineAsmOperand::In { .. }
-                        | hir::InlineAsmOperand::Out { .. }
-                        | hir::InlineAsmOperand::InOut { .. }
-                        | hir::InlineAsmOperand::SplitInOut { .. }
-                        | hir::InlineAsmOperand::Label { .. } => {
-                            span_bug!(*op_sp, "invalid operand type for global_asm!")
-                        }
-                    }
-                }
-            } else {
-                span_bug!(
-                    item.span,
-                    "Mismatch between hir::Item type and MonoItem type"
-                )
-            }
 
-            // mention_items stays empty as nothing gets optimized here.
+            span_bug!(
+                item.span,
+                "RESL does not support inline ASM; should have been caught during the analysis \
+                phase"
+            )
         }
     };
 
@@ -471,39 +384,6 @@ fn visit_drop_use<'tcx>(
     visit_instance_use(tcx, instance, is_direct_call, source, output);
 }
 
-/// For every call of this function in the visitor, make sure there is a matching call in the
-/// `mentioned_items` pass!
-fn visit_fn_use<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    ty: Ty<'tcx>,
-    is_direct_call: bool,
-    source: Span,
-    output: &mut MonoItems<'tcx>,
-) {
-    if let ty::FnDef(def_id, args) = *ty.kind() {
-        let instance = if is_direct_call {
-            ty::Instance::expect_resolve(
-                tcx,
-                ty::TypingEnv::fully_monomorphized(),
-                def_id,
-                args,
-                source,
-            )
-        } else {
-            match ty::Instance::resolve_for_fn_ptr(
-                tcx,
-                ty::TypingEnv::fully_monomorphized(),
-                def_id,
-                args,
-            ) {
-                Some(instance) => instance,
-                _ => bug!("failed to resolve instance for {ty}"),
-            }
-        };
-        visit_instance_use(tcx, instance, is_direct_call, source, output);
-    }
-}
-
 fn visit_instance_use<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: ty::Instance<'tcx>,
@@ -571,169 +451,12 @@ fn visit_instance_use<'tcx>(
     }
 }
 
-/// For a given pair of source and target type that occur in an unsizing coercion,
-/// this function finds the pair of types that determines the vtable linking
-/// them.
-///
-/// For example, the source type might be `&SomeStruct` and the target type
-/// might be `&dyn SomeTrait` in a cast like:
-///
-/// ```rust,ignore (not real code)
-/// let src: &SomeStruct = ...;
-/// let target = src as &dyn SomeTrait;
-/// ```
-///
-/// Then the output of this function would be (SomeStruct, SomeTrait) since for
-/// constructing the `target` wide-pointer we need the vtable for that pair.
-///
-/// Things can get more complicated though because there's also the case where
-/// the unsized type occurs as a field:
-///
-/// ```rust
-/// struct ComplexStruct<T: ?Sized> {
-///    a: u32,
-///    b: f64,
-///    c: T
-/// }
-/// ```
-///
-/// In this case, if `T` is sized, `&ComplexStruct<T>` is a thin pointer. If `T`
-/// is unsized, `&SomeStruct` is a wide pointer, and the vtable it points to is
-/// for the pair of `T` (which is a trait) and the concrete type that `T` was
-/// originally coerced from:
-///
-/// ```rust,ignore (not real code)
-/// let src: &ComplexStruct<SomeStruct> = ...;
-/// let target = src as &ComplexStruct<dyn SomeTrait>;
-/// ```
-///
-/// Again, we want this `find_vtable_types_for_unsizing()` to provide the pair
-/// `(SomeStruct, SomeTrait)`.
-///
-/// Finally, there is also the case of custom unsizing coercions, e.g., for
-/// smart pointers such as `Rc` and `Arc`.
-fn find_vtable_types_for_unsizing<'tcx>(
-    tcx: TyCtxtAt<'tcx>,
-    source_ty: Ty<'tcx>,
-    target_ty: Ty<'tcx>,
-) -> (Ty<'tcx>, Ty<'tcx>) {
-    let ptr_vtable = |inner_source: Ty<'tcx>, inner_target: Ty<'tcx>| {
-        let typing_env = ty::TypingEnv::fully_monomorphized();
-        let type_has_metadata = |ty: Ty<'tcx>| -> bool {
-            if ty.is_sized(tcx.tcx, typing_env) {
-                return false;
-            }
-            let tail = tcx.struct_tail_for_codegen(ty, typing_env);
-            match tail.kind() {
-                ty::Foreign(..) => false,
-                ty::Str | ty::Slice(..) | ty::Dynamic(..) => true,
-                _ => bug!("unexpected unsized tail: {:?}", tail),
-            }
-        };
-        if type_has_metadata(inner_source) {
-            (inner_source, inner_target)
-        } else {
-            tcx.struct_lockstep_tails_for_codegen(inner_source, inner_target, typing_env)
-        }
-    };
-
-    match (source_ty.kind(), target_ty.kind()) {
-        (&ty::Ref(_, a, _), &ty::Ref(_, b, _) | &ty::RawPtr(b, _))
-        | (&ty::RawPtr(a, _), &ty::RawPtr(b, _)) => ptr_vtable(a, b),
-        (_, _)
-            if let Some(source_boxed) = source_ty.boxed_ty()
-                && let Some(target_boxed) = target_ty.boxed_ty() =>
-        {
-            ptr_vtable(source_boxed, target_boxed)
-        }
-
-        // T as dyn* Trait
-        (_, &ty::Dynamic(_, _, ty::DynStar)) => ptr_vtable(source_ty, target_ty),
-
-        (&ty::Adt(source_adt_def, source_args), &ty::Adt(target_adt_def, target_args)) => {
-            assert_eq!(source_adt_def, target_adt_def);
-
-            let CustomCoerceUnsized::Struct(coerce_index) =
-                match custom_coerce_unsize_info(tcx, source_ty, target_ty) {
-                    Ok(ccu) => ccu,
-                    Err(e) => {
-                        let e = Ty::new_error(tcx.tcx, e);
-                        return (e, e);
-                    }
-                };
-
-            let source_fields = &source_adt_def.non_enum_variant().fields;
-            let target_fields = &target_adt_def.non_enum_variant().fields;
-
-            assert!(
-                coerce_index.index() < source_fields.len()
-                    && source_fields.len() == target_fields.len()
-            );
-
-            find_vtable_types_for_unsizing(
-                tcx,
-                source_fields[coerce_index].ty(*tcx, source_args),
-                target_fields[coerce_index].ty(*tcx, target_args),
-            )
-        }
-        _ => bug!(
-            "find_vtable_types_for_unsizing: invalid coercion {:?} -> {:?}",
-            source_ty,
-            target_ty
-        ),
-    }
-}
-
 fn create_fn_mono_item<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     source: Span,
 ) -> Spanned<MonoItem<'tcx>> {
     respan(source, MonoItem::Fn(instance))
-}
-
-/// Creates a `MonoItem` for each method that is referenced by the vtable for
-/// the given trait/impl pair.
-fn create_mono_items_for_vtable_methods<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    trait_ty: Ty<'tcx>,
-    impl_ty: Ty<'tcx>,
-    source: Span,
-    output: &mut MonoItems<'tcx>,
-) {
-    assert!(!trait_ty.has_escaping_bound_vars() && !impl_ty.has_escaping_bound_vars());
-
-    let ty::Dynamic(trait_ty, ..) = trait_ty.kind() else {
-        bug!("create_mono_items_for_vtable_methods: {trait_ty:?} not a trait type");
-    };
-    if let Some(principal) = trait_ty.principal() {
-        let poly_trait_ref = principal.with_self_ty(tcx, impl_ty);
-        assert!(!poly_trait_ref.has_escaping_bound_vars());
-
-        // Walk all methods of the trait, including those of its supertraits
-        let entries = tcx.vtable_entries(poly_trait_ref);
-        debug!(?entries);
-        let methods = entries
-            .iter()
-            .filter_map(|entry| match entry {
-                VtblEntry::MetadataDropInPlace
-                | VtblEntry::MetadataSize
-                | VtblEntry::MetadataAlign
-                | VtblEntry::Vacant => None,
-                VtblEntry::TraitVPtr(_) => {
-                    // all super trait items already covered, so skip them.
-                    None
-                }
-                VtblEntry::Method(instance) => {
-                    Some(*instance).filter(|instance| tcx.should_codegen_locally(*instance))
-                }
-            })
-            .map(|item| create_fn_mono_item(tcx, item, source));
-        output.extend(methods);
-    }
-
-    // Also add the destructor.
-    visit_drop_use(tcx, impl_ty, false, source, output);
 }
 
 /// Scans the CTFE alloc in order to find function pointers and statics that must be monomorphized.
@@ -768,63 +491,6 @@ fn collect_alloc<'tcx>(tcx: TyCtxt<'tcx>, alloc_id: AllocId, output: &mut MonoIt
         GlobalAlloc::VTable(ty, dyn_ty) => {
             let alloc_id = tcx.vtable_allocation((ty, dyn_ty.principal()));
             collect_alloc(tcx, alloc_id, output)
-        }
-    }
-}
-
-/// `item` must be already monomorphized.
-#[instrument(skip(tcx, span, output), level = "debug")]
-fn visit_mentioned_item<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    item: &MentionedItem<'tcx>,
-    span: Span,
-    output: &mut MonoItems<'tcx>,
-) {
-    match *item {
-        MentionedItem::Fn(ty) => {
-            if let ty::FnDef(def_id, args) = *ty.kind() {
-                let instance = Instance::expect_resolve(
-                    tcx,
-                    ty::TypingEnv::fully_monomorphized(),
-                    def_id,
-                    args,
-                    span,
-                );
-                // `visit_instance_use` was written for "used" item collection but works just as well
-                // for "mentioned" item collection.
-                // We can set `is_direct_call`; that just means we'll skip a bunch of shims that anyway
-                // can't have their own failing constants.
-                visit_instance_use(tcx, instance, /*is_direct_call*/ true, span, output);
-            }
-        }
-        MentionedItem::Drop(ty) => {
-            visit_drop_use(tcx, ty, /*is_direct_call*/ true, span, output);
-        }
-        MentionedItem::UnsizeCast {
-            source_ty,
-            target_ty,
-        } => {
-            let (source_ty, target_ty) =
-                find_vtable_types_for_unsizing(tcx.at(span), source_ty, target_ty);
-            // This could also be a different Unsize instruction, like
-            // from a fixed sized array to a slice. But we are only
-            // interested in things that produce a vtable.
-            if (target_ty.is_trait() && !source_ty.is_trait())
-                || (target_ty.is_dyn_star() && !source_ty.is_dyn_star())
-            {
-                create_mono_items_for_vtable_methods(tcx, target_ty, source_ty, span, output);
-            }
-        }
-        MentionedItem::Closure(source_ty) => {
-            if let ty::Closure(def_id, args) = *source_ty.kind() {
-                let instance =
-                    Instance::resolve_closure(tcx, def_id, args, ty::ClosureKind::FnOnce);
-                if tcx.should_codegen_locally(instance) {
-                    output.push(create_fn_mono_item(tcx, instance, span));
-                }
-            } else {
-                bug!()
-            }
         }
     }
 }
