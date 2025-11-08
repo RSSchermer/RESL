@@ -1,5 +1,5 @@
 use rustc_middle::bug;
-use stable_mir::mir::mono::{Instance, MonoItem};
+use rustc_public::mir::mono::{Instance, MonoItem};
 use tracing::debug;
 
 use crate::stable_cg::mir::codegen_mir;

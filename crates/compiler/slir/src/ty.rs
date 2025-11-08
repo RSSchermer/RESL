@@ -992,18 +992,19 @@ impl TypeRegistry {
         rhs: Type,
     ) -> Result<Type, String> {
         match &*self.kind(lhs) {
-            TypeKind::Scalar(kind) if kind.is_numeric() => {
-                match &*self.kind(rhs) {
-                    TypeKind::Scalar(kind) if kind == kind => Ok(lhs),
-                    TypeKind::Vector(v) if &v.scalar == kind => Ok(rhs),
-                    TypeKind::Matrix(m) if &m.scalar == kind => Ok(rhs),
-                    _ => Err(format!(
+            TypeKind::Scalar(kind) if kind.is_numeric() => match &*self.kind(rhs) {
+                TypeKind::Scalar(kind) if kind == kind => Ok(lhs),
+                TypeKind::Vector(v) if &v.scalar == kind => Ok(rhs),
+                TypeKind::Matrix(m) if &m.scalar == kind => Ok(rhs),
+                _ => Err(format!(
                     "if the left-hand-side operand to the `{}` operator is a `{}` value, then the \
                     right-hand-side value must be a numeric scalar, vector or matrix of the same \
                     (element) type (got `{}`)",
-                    op, lhs.to_string(self), rhs.to_string(self))),
-                }
-            }
+                    op,
+                    lhs.to_string(self),
+                    rhs.to_string(self)
+                )),
+            },
             TypeKind::Vector(v) if v.scalar.is_numeric() => match &*self.kind(rhs) {
                 TypeKind::Scalar(kind) if &v.scalar == kind => Ok(lhs),
                 TypeKind::Vector(other) if v.scalar == other.scalar && v.size == other.size => {
@@ -1013,7 +1014,10 @@ impl TypeRegistry {
                     "if the left-hand-side operand to the `{}` operator is a `{}` vector, then the \
                     right-hand-side value must be a vector of the same type, or a numeric scalar \
                     that matches the element type of the vector (got `{}`)",
-                    op, lhs.to_string(self), rhs.to_string(self))),
+                    op,
+                    lhs.to_string(self),
+                    rhs.to_string(self)
+                )),
             },
             TypeKind::Matrix(m) if m.scalar.is_numeric() => match &*self.kind(rhs) {
                 TypeKind::Scalar(kind) if &m.scalar == kind => Ok(lhs),
@@ -1028,14 +1032,17 @@ impl TypeRegistry {
                     "if the left-hand-side operand to the `{}` operator is a `{}` matrix, then the \
                     right-hand-side value must be a matrix of the same size and type, or a numeric \
                     scalar that matches the element type of the matrix (got `{}`)",
-                    op, lhs.to_string(self), rhs.to_string(self))),
+                    op,
+                    lhs.to_string(self),
+                    rhs.to_string(self)
+                )),
             },
-            _ => {
-                Err(format!(
+            _ => Err(format!(
                 "the `{}` operator expects a numeric scalar, a numeric vector or a matrix as its \
                 left-hand-side operand (got `{}`)",
-                op, lhs.to_string(self)))
-            }
+                op,
+                lhs.to_string(self)
+            )),
         }
     }
 
@@ -1163,13 +1170,13 @@ impl TypeRegistry {
                     Ok(lhs)
                 } else {
                     Err(format!(
-                    "if the left-hand-side operand to the `{}` operator is a `{}` value, then the \
+                        "if the left-hand-side operand to the `{}` operator is a `{}` value, then the \
                     right-hand-side value must be a `{}` (got `{}`)",
-                    op,
-                    lhs.to_string(self),
-                    TY_U32.to_string(self),
+                        op,
+                        lhs.to_string(self),
+                        TY_U32.to_string(self),
                         rhs.to_string(self)
-                ))
+                    ))
                 }
             }
             TypeKind::Vector(v) if v.scalar.is_integer() => {

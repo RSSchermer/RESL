@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
 
-use crate::ty::{Type, TY_U32};
+use crate::ty::{TY_U32, Type};
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct BuiltinFunction {

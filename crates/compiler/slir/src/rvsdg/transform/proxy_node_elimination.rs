@@ -1,5 +1,5 @@
-use crate::rvsdg::{Node, NodeKind, Region, Rvsdg, SimpleNode};
 use crate::Module;
+use crate::rvsdg::{Node, NodeKind, Region, Rvsdg, SimpleNode};
 
 fn process_node(rvsdg: &mut Rvsdg, node: Node) {
     match rvsdg[node].kind() {
@@ -73,7 +73,7 @@ mod tests {
     use super::*;
     use crate::rvsdg::{ValueInput, ValueOrigin, ValueOutput, ValueUser};
     use crate::ty::{TY_DUMMY, TY_PREDICATE, TY_U32};
-    use crate::{thin_set, BinaryOperator, FnArg, FnSig, Function, Symbol};
+    use crate::{BinaryOperator, FnArg, FnSig, Function, Symbol, thin_set};
 
     #[test]
     fn test_eliminate_proxy_node() {

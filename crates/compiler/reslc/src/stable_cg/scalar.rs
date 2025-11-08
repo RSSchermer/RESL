@@ -1,14 +1,14 @@
 use std::num::NonZero;
 
 use rustc_middle::bug;
-use stable_mir::abi::{FloatLength, IntegerLength, Primitive, ValueAbi, WrappingRange};
-use stable_mir::mir::alloc::AllocId;
-use stable_mir::target::{MachineInfo, MachineSize};
-use stable_mir::ty::{Allocation, Prov, RigidTy, Size, TyKind};
-use stable_mir::{abi, Error};
+use rustc_public::abi::{FloatLength, IntegerLength, Primitive, ValueAbi, WrappingRange};
+use rustc_public::mir::alloc::AllocId;
+use rustc_public::target::{MachineInfo, MachineSize};
+use rustc_public::ty::{Allocation, Prov, RigidTy, Size, TyKind};
+use rustc_public::{Error, abi};
 
-use crate::stable_cg::layout::ScalarExt;
 use crate::stable_cg::TyAndLayout;
+use crate::stable_cg::layout::ScalarExt;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Scalar {

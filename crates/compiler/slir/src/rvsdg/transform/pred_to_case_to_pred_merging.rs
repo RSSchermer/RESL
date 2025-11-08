@@ -2,7 +2,7 @@ use rustc_hash::FxHashSet;
 
 use crate::rvsdg::visit::region_nodes::RegionNodesVisitor;
 use crate::rvsdg::visit::value_flow::ValueFlowVisitor;
-use crate::rvsdg::{visit, Node, NodeKind, Region, Rvsdg, SimpleNode, ValueOrigin, ValueUser};
+use crate::rvsdg::{Node, NodeKind, Region, Rvsdg, SimpleNode, ValueOrigin, ValueUser, visit};
 use crate::{Function, Module};
 
 struct NodeCollector<'a> {

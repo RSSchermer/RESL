@@ -1,5 +1,5 @@
 use crate::rvsdg::visit::region_nodes::RegionNodesVisitor;
-use crate::rvsdg::{visit, Connectivity, Node, NodeKind, Rvsdg, SimpleNode, ValueOrigin};
+use crate::rvsdg::{Connectivity, Node, NodeKind, Rvsdg, SimpleNode, ValueOrigin, visit};
 use crate::{Function, Module};
 
 struct NodeCollector<'a> {

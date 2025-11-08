@@ -1,5 +1,6 @@
 use rustc_hash::FxHashMap;
 
+use crate::Module;
 use crate::rvsdg::NodeKind::{
     Function, Loop, Simple, StorageBinding, Switch, UniformBinding, WorkgroupBinding,
 };
@@ -14,7 +15,6 @@ use crate::rvsdg::{
     Connectivity, Node, OpMatrix, OpVector, Region, Rvsdg, StateOrigin, ValueInput, ValueOrigin,
     ValueOutput,
 };
-use crate::Module;
 
 struct RegionReplicator<'a, 'b> {
     module: &'a mut Module,

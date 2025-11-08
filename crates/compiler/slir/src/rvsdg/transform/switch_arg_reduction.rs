@@ -1,5 +1,5 @@
 use crate::rvsdg::visit::region_nodes::RegionNodesVisitor;
-use crate::rvsdg::{visit, Node, NodeKind, Rvsdg, ValueOrigin};
+use crate::rvsdg::{Node, NodeKind, Rvsdg, ValueOrigin, visit};
 use crate::{Function, Module};
 
 // TODO: for the time being, this pass only does a very simple thing: it tests if any of a switch

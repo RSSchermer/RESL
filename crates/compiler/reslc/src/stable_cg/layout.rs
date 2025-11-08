@@ -1,8 +1,9 @@
 use internment::Intern;
 use rustc_middle::bug;
-use stable_mir::abi::{Layout as LayoutToken, LayoutShape, Primitive, Scalar, VariantsShape};
-use stable_mir::target::{MachineInfo, MachineSize};
-use stable_mir::ty::{IndexedVal, Region, RegionKind, RigidTy, Ty, TyKind, UintTy, VariantIdx};
+use rustc_public::abi::{Layout as LayoutToken, LayoutShape, Primitive, Scalar, VariantsShape};
+use rustc_public::target::{MachineInfo, MachineSize};
+use rustc_public::ty::{Region, RegionKind, RigidTy, Ty, TyKind, UintTy, VariantIdx};
+use rustc_public_bridge::IndexedVal;
 
 pub type ShapeToken = Intern<LayoutShape>;
 

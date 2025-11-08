@@ -4,10 +4,10 @@ use std::fmt;
 use arrayvec::ArrayVec;
 use either::Either;
 use rustc_middle::bug;
-use stable_mir::abi::ValueAbi;
-use stable_mir::target::MachineInfo;
-use stable_mir::ty::{Align, Allocation, ConstantKind, MirConst, Size, Ty};
-use stable_mir::{abi, mir};
+use rustc_public::abi::ValueAbi;
+use rustc_public::target::MachineInfo;
+use rustc_public::ty::{Align, Allocation, ConstantKind, MirConst, Size, Ty};
+use rustc_public::{abi, mir};
 use tracing::debug;
 
 use super::place::{PlaceRef, PlaceValue};
@@ -169,7 +169,7 @@ impl<'a, V: CodegenObject> OperandRef<V> {
         let alloc = match val.kind() {
             ConstantKind::Allocated(alloc) => alloc,
             ConstantKind::ZeroSized => {
-                return Self::zero_sized(TyAndLayout::expect_from_ty(val.ty()))
+                return Self::zero_sized(TyAndLayout::expect_from_ty(val.ty()));
             }
             _ => bug!("cannot construct const operand without a data allocation"),
         };
@@ -390,10 +390,7 @@ impl<'a, V: CodegenObject> OperandRef<V> {
 
                 *llval = bx.load(llfield_ty, llptr, field_shape.abi_align);
             }
-            (
-                OperandValue::Immediate(_),
-                ValueAbi::Uninhabited | ValueAbi::Aggregate { sized: false },
-            )
+            (OperandValue::Immediate(_), ValueAbi::Aggregate { sized: false })
             | (OperandValue::Pair(..), _)
             | (OperandValue::Ref(..), _) => bug!(),
         }
@@ -620,7 +617,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
             });
         }
 
-        // TODO: stable_mir::visit::PlaceRef currently does not implement Copy (it should)
+        // TODO: rustc_public::visit::PlaceRef currently does not implement Copy (it should)
         let place_ref_copy = mir::visit::PlaceRef {
             local: place_ref.local,
             projection: place_ref.projection,

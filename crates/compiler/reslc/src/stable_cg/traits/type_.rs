@@ -1,11 +1,11 @@
 use rustc_abi::{Float, Integer};
-use stable_mir::abi::{ArgAbi, FnAbi};
-use stable_mir::ty::VariantIdx;
+use rustc_public::abi::{ArgAbi, FnAbi};
+use rustc_public::ty::VariantIdx;
 
 use super::{BackendTypes, MiscCodegenMethods};
+use crate::stable_cg::TyAndLayout;
 use crate::stable_cg::common::TypeKind;
 use crate::stable_cg::mir::place::PlaceRef;
-use crate::stable_cg::TyAndLayout;
 
 pub trait BaseTypeCodegenMethods: BackendTypes {
     fn type_i8(&self) -> Self::Type;

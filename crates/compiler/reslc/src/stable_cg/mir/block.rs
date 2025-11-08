@@ -1,13 +1,14 @@
 use std::cmp;
 
-use index_vec::{index_vec, IndexVec};
+use index_vec::{IndexVec, index_vec};
 use rustc_middle::bug;
+use rustc_public::abi::{ArgAbi, FnAbi, PassMode, ValueAbi};
+use rustc_public::mir;
+use rustc_public::mir::mono::{Instance, InstanceKind};
+use rustc_public::mir::{BasicBlockIdx, SwitchTargets, TerminatorKind};
+use rustc_public::ty::{Abi, IntrinsicDef, RigidTy, Ty, TyKind};
+use rustc_public_bridge::IndexedVal;
 use smallvec::SmallVec;
-use stable_mir::abi::{ArgAbi, FnAbi, PassMode, ValueAbi};
-use stable_mir::mir;
-use stable_mir::mir::mono::{Instance, InstanceKind};
-use stable_mir::mir::{BasicBlockIdx, SwitchTargets, TerminatorKind};
-use stable_mir::ty::{Abi, IntrinsicDef, RigidTy, Ty, TyKind};
 use tracing::{debug, info};
 
 use super::operand::OperandRef;
@@ -155,12 +156,6 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
     }
 
     fn codegen_return_terminator(&mut self, bx: &mut Bx) {
-        if matches!(self.fn_abi.ret.layout.shape().abi, ValueAbi::Uninhabited) {
-            bx.unreachable();
-
-            return;
-        }
-
         let llval = match &self.fn_abi.ret.mode {
             PassMode::Ignore | PassMode::Indirect { .. } => {
                 bx.ret_void();

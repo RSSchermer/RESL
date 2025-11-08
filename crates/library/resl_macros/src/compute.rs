@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
-use syn::{meta, parse_macro_input, Item, LitInt};
+use syn::{Item, LitInt, meta, parse_macro_input};
 
 pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut x = LitInt::new("1", Span::call_site());

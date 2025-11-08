@@ -505,7 +505,7 @@ mod tests {
         Assign, BlockPosition, Branch, InlineConst, LocalBindingData, OpBinary, Terminator,
     };
     use crate::cfg_to_rvsdg::control_flow_restructuring::{
-        restructure_branches, restructure_loops, Graph,
+        Graph, restructure_branches, restructure_loops,
     };
     use crate::ty::{TY_BOOL, TY_DUMMY, TY_U32};
     use crate::{BinaryOperator, FnArg, FnSig, Function, Module, Symbol};

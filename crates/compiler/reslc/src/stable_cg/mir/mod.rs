@@ -5,14 +5,14 @@ use std::{io, iter};
 
 use bit_set::BitSet;
 use bit_vec::BitVec;
-use index_vec::{index_vec, IndexVec};
+use index_vec::{IndexVec, index_vec};
 use rustc_middle::{bug, span_bug};
+use rustc_public::abi::{FnAbi, PassMode};
+use rustc_public::mir;
+use rustc_public::mir::mono::Instance;
+use rustc_public::mir::{BasicBlockIdx, Body, Local, LocalDecl};
+use rustc_public::ty::{RigidTy, TyKind};
 use smallvec::SmallVec;
-use stable_mir::abi::{FnAbi, PassMode};
-use stable_mir::mir;
-use stable_mir::mir::mono::Instance;
-use stable_mir::mir::{BasicBlockIdx, Body, Local, LocalDecl};
-use stable_mir::ty::{RigidTy, TyKind};
 use tracing::{debug, instrument};
 
 use crate::stable_cg::layout::TyAndLayout;

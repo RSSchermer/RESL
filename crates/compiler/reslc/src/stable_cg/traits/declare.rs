@@ -1,5 +1,5 @@
-use stable_mir::mir::mono::{Instance, StaticDef};
-use stable_mir::DefId;
+use rustc_public::DefId;
+use rustc_public::mir::mono::{Instance, StaticDef};
 
 pub trait PreDefineCodegenMethods {
     fn predefine_static(&self, def: StaticDef, symbol_name: &str);

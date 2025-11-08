@@ -3,8 +3,8 @@ use proc_macro2::{Ident, Span};
 use quote::quote;
 use syn::token::Paren;
 use syn::{
-    parse_macro_input, Field, Item, MacroDelimiter, Meta, MetaList, Path, PathArguments,
-    PathSegment,
+    Field, Item, MacroDelimiter, Meta, MetaList, Path, PathArguments, PathSegment,
+    parse_macro_input,
 };
 
 pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {

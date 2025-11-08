@@ -1,10 +1,10 @@
 use rustc_hash::FxHashSet;
 
-use crate::rvsdg::visit::bottom_up::{visit_node_bottom_up, BottomUpVisitor};
 use crate::rvsdg::NodeKind::Simple;
 use crate::rvsdg::SimpleNode::OpPtrElementPtr;
+use crate::rvsdg::visit::bottom_up::{BottomUpVisitor, visit_node_bottom_up};
 use crate::rvsdg::{Node, Region, Rvsdg, ValueInput, ValueOrigin};
-use crate::ty::{Type, TypeKind, TypeRegistry, TY_U32};
+use crate::ty::{TY_U32, Type, TypeKind, TypeRegistry};
 use crate::{BinaryOperator, Function, Module};
 
 fn is_slice_ptr_ty(type_registry: &TypeRegistry, ty: Type) -> bool {

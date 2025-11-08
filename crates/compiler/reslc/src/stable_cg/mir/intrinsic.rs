@@ -1,5 +1,5 @@
 use rustc_middle::{bug, span_bug};
-use stable_mir::ty::Ty;
+use rustc_public::ty::Ty;
 
 use super::operand::OperandRef;
 use super::place::PlaceRef;

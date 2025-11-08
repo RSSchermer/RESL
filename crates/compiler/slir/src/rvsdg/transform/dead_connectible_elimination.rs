@@ -2,9 +2,9 @@ use std::mem;
 
 use rustc_hash::FxHashSet;
 
+use crate::Module;
 use crate::rvsdg::transform::proxy_node_elimination::region_eliminate_proxy_nodes;
 use crate::rvsdg::{Connectivity, Node, NodeKind, Region, Rvsdg, StateUser, ValueOrigin};
-use crate::Module;
 
 pub struct DeadConnectibleEliminator {
     current_candidates: FxHashSet<Node>,

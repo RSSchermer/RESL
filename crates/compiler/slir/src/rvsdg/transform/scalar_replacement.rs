@@ -4,14 +4,14 @@ use std::ops::{Deref, Range};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::rvsdg::analyse::element_index::ElementIndex;
-use crate::rvsdg::transform::enum_replacement::{replace_enum_alloca, EnumAllocaReplacer};
+use crate::rvsdg::transform::enum_replacement::{EnumAllocaReplacer, replace_enum_alloca};
 use crate::rvsdg::visit::value_flow::ValueFlowVisitor;
 use crate::rvsdg::{
-    visit, Connectivity, LoopNode, Node, NodeKind, OpAlloca, OpLoad, OpPtrDiscriminantPtr,
-    ProxyKind, Region, Rvsdg, SimpleNode, StateOrigin, SwitchNode, ValueInput, ValueOrigin,
-    ValueOutput, ValueUser,
+    Connectivity, LoopNode, Node, NodeKind, OpAlloca, OpLoad, OpPtrDiscriminantPtr, ProxyKind,
+    Region, Rvsdg, SimpleNode, StateOrigin, SwitchNode, ValueInput, ValueOrigin, ValueOutput,
+    ValueUser, visit,
 };
-use crate::ty::{Type, TypeKind, TypeRegistry, TY_PREDICATE, TY_U32};
+use crate::ty::{TY_PREDICATE, TY_U32, Type, TypeKind, TypeRegistry};
 use crate::{Function, Module};
 
 enum Job {
@@ -1498,7 +1498,7 @@ mod tests {
 
     use super::*;
     use crate::ty::{TY_DUMMY, TY_PREDICATE};
-    use crate::{thin_set, BinaryOperator, FnArg, FnSig, Symbol};
+    use crate::{BinaryOperator, FnArg, FnSig, Symbol, thin_set};
 
     #[test]
     fn test_scalar_replace_op_ptr_element_ptr() {

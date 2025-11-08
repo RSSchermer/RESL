@@ -7,7 +7,7 @@ use crate::rvsdg::{
     Connectivity, Node, NodeKind, Region, Rvsdg, SimpleNode, StateOrigin, ValueInput, ValueOrigin,
     ValueOutput,
 };
-use crate::ty::{Type, TypeKind, TypeRegistry, TY_PREDICATE, TY_U32};
+use crate::ty::{TY_PREDICATE, TY_U32, Type, TypeKind, TypeRegistry};
 
 /// A variable pointer emulation program description.
 #[derive(Clone, Debug)]
@@ -1119,7 +1119,7 @@ mod tests {
     use super::*;
     use crate::rvsdg::ValueUser;
     use crate::ty::TY_DUMMY;
-    use crate::{thin_set, BinaryOperator, FnArg, FnSig, Function, Module, Symbol};
+    use crate::{BinaryOperator, FnArg, FnSig, Function, Module, Symbol, thin_set};
 
     #[test]
     fn test_emulate_single_switch_output_load() {
@@ -1414,13 +1414,17 @@ mod tests {
             }]
         );
 
-        assert_eq!(rvsdg[switch_1_node].value_inputs(), &[
-            ValueInput::argument(TY_PREDICATE, 0),
-            ValueInput::output(ptr_ty, switch_0_node, 0),
-            ValueInput::argument(TY_PREDICATE, 0),
-            ValueInput::output(ptr_ty, ptr_0, 0),
-            ValueInput::output(ptr_ty, ptr_1, 0),
-        ], "the predicate and both alloca nodes have been added as inputs to the second switch node");
+        assert_eq!(
+            rvsdg[switch_1_node].value_inputs(),
+            &[
+                ValueInput::argument(TY_PREDICATE, 0),
+                ValueInput::output(ptr_ty, switch_0_node, 0),
+                ValueInput::argument(TY_PREDICATE, 0),
+                ValueInput::output(ptr_ty, ptr_0, 0),
+                ValueInput::output(ptr_ty, ptr_1, 0),
+            ],
+            "the predicate and both alloca nodes have been added as inputs to the second switch node"
+        );
 
         assert!(
             rvsdg[switch_1_branch_0].value_arguments()[0]

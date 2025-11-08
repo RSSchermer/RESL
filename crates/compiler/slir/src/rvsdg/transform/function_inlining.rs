@@ -2,12 +2,12 @@ use std::collections::VecDeque;
 
 use rustc_hash::FxHashSet;
 
+use crate::Module;
 use crate::rvsdg::transform::region_replication::replicate_region;
-use crate::rvsdg::visit::bottom_up::{visit_node_bottom_up, BottomUpVisitor};
+use crate::rvsdg::visit::bottom_up::{BottomUpVisitor, visit_node_bottom_up};
 use crate::rvsdg::{
     Connectivity, Node, NodeKind, Region, Rvsdg, StateOrigin, ValueInput, ValueOrigin, ValueUser,
 };
-use crate::Module;
 
 /// Adds missing dependencies to the function we're inlining into.
 ///
@@ -255,7 +255,7 @@ mod tests {
 
     use super::*;
     use crate::rvsdg::StateUser;
-    use crate::ty::{TypeKind, TY_DUMMY, TY_U32};
+    use crate::ty::{TY_DUMMY, TY_U32, TypeKind};
     use crate::{BinaryOperator, EntryPointKind, FnArg, FnSig, Function, Symbol};
 
     #[test]
@@ -445,11 +445,13 @@ mod tests {
 
         // After inlining the only call node in the region, the destination region should no longer
         // contain any call nodes.
-        assert!(!rvsdg[dst_region]
-            .nodes()
-            .into_iter()
-            .copied()
-            .any(|n| rvsdg[n].is_op_call()));
+        assert!(
+            !rvsdg[dst_region]
+                .nodes()
+                .into_iter()
+                .copied()
+                .any(|n| rvsdg[n].is_op_call())
+        );
     }
 
     #[test]

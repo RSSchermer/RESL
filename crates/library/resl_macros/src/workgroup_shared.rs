@@ -5,7 +5,7 @@ use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 use syn::token::{Brace, Bracket, Paren};
 use syn::{
-    parse_macro_input, Attribute, MacroDelimiter, StaticMutability, Token, Type, Visibility,
+    Attribute, MacroDelimiter, StaticMutability, Token, Type, Visibility, parse_macro_input,
 };
 
 pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {

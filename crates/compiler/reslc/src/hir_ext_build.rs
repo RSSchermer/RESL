@@ -3,19 +3,19 @@ use std::convert::identity;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::intravisit::Visitor;
 use rustc_hir::{
-    intravisit, Arm, ConstBlock, Expr, ExprField, ExprKind, FieldDef, ForeignItem, GenericParam,
-    Impl, ImplItem, ImplItemKind, Item, ItemKind, MethodKind, Param, PatField, QPath, Stmt,
-    StmtKind, Target, TyKind, UseKind, Variant,
+    Arm, ConstBlock, Expr, ExprField, ExprKind, FieldDef, ForeignItem, GenericParam, Impl,
+    ImplItem, ImplItemKind, Item, ItemKind, MethodKind, Param, PatField, QPath, Stmt, StmtKind,
+    Target, TyKind, UseKind, Variant, intravisit,
 };
 use rustc_middle::hir::nested_filter;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::{DefId, LocalModDefId};
-use rustc_span::source_map::{respan, Spanned};
+use rustc_span::source_map::{Spanned, respan};
 use rustc_span::{ErrorGuaranteed, Span};
 
 use crate::attr::{
-    collect_resl_attributes, AttrBlendSrc, AttrInterpolate, Attributes, BuiltinName,
-    InterpolationSamplingName, InterpolationTypeName,
+    AttrBlendSrc, AttrInterpolate, Attributes, BuiltinName, InterpolationSamplingName,
+    InterpolationTypeName, collect_resl_attributes,
 };
 use crate::hir_ext::{
     BlendSrc, ConstExt, EnumExt, FieldExt, FnExt, HirExt, ImplExt, Interpolation,
@@ -28,8 +28,8 @@ fn target_from_impl_item(tcx: TyCtxt<'_>, impl_item: &ImplItem<'_>) -> Target {
     match impl_item.kind {
         ImplItemKind::Const(..) => Target::AssocConst,
         ImplItemKind::Fn(..) => {
-            let parent_owner_id = tcx.hir().get_parent_item(impl_item.hir_id());
-            let containing_item = tcx.hir().expect_item(parent_owner_id.def_id);
+            let parent_owner_id = tcx.hir_get_parent_item(impl_item.hir_id());
+            let containing_item = tcx.hir_expect_item(parent_owner_id.def_id);
             let containing_impl_is_for_trait = match &containing_item.kind {
                 ItemKind::Impl(Impl { of_trait, .. }) => of_trait.is_some(),
                 _ => unreachable!("parent of an ImplItem must be an Impl"),
@@ -46,10 +46,10 @@ fn target_from_impl_item(tcx: TyCtxt<'_>, impl_item: &ImplItem<'_>) -> Target {
 
 fn try_resolve_stmt_to_mod_id(tcx: TyCtxt<'_>, stmt: &Stmt) -> Result<DefId, ErrorGuaranteed> {
     if let StmtKind::Item(item_id) = &stmt.kind {
-        let item = tcx.hir().item(*item_id);
+        let item = tcx.hir_item(*item_id);
 
-        if let ItemKind::Use(path, UseKind::Single) = &item.kind {
-            if let Res::Def(DefKind::Mod, id) = path.res[0] {
+        if let ItemKind::Use(path, UseKind::Single(_)) = &item.kind {
+            if let Some(Res::Def(DefKind::Mod, id)) = path.res.type_ns {
                 return Ok(id);
             }
         }
@@ -66,7 +66,7 @@ fn try_build_shader_source_request(
     block: &ConstBlock,
     span: Span,
 ) -> Result<ShaderSourceRequest, ErrorGuaranteed> {
-    let body = tcx.hir().body(block.body);
+    let body = tcx.hir_body(block.body);
 
     if let ExprKind::Block(e, _) = body.value.kind {
         if let Some(stmt) = e.stmts.first() {
@@ -98,7 +98,7 @@ fn try_blend_src_from_attr(
             return Err(tcx.dcx().span_err(
                 attr.span,
                 "the value of a `blend_src` attribute must be either `0` or `1`",
-            ))
+            ));
         }
     };
 
@@ -267,7 +267,7 @@ impl<'a, 'tcx> Locator<'a, 'tcx> {
         }
 
         if let Some(attr) = attrs.resource.as_ref() {
-            let (ty, _, _) = item.expect_static();
+            let (_, _, ty, _) = item.expect_static();
 
             let TyKind::Path(path) = ty.kind else {
                 self.tcx
@@ -400,24 +400,24 @@ impl<'a, 'tcx> Locator<'a, 'tcx> {
 impl<'a, 'tcx> Visitor<'tcx> for Locator<'a, 'tcx> {
     type NestedFilter = nested_filter::OnlyBodies;
 
-    fn nested_visit_map(&mut self) -> Self::Map {
-        self.tcx.hir()
+    fn maybe_tcx(&mut self) -> Self::MaybeTyCtxt {
+        self.tcx
     }
 
     fn visit_item(&mut self, item: &'tcx Item<'tcx>) {
-        let attrs = self.tcx.hir().attrs(item.hir_id());
+        let attrs = self.tcx.hir_attrs(item.hir_id());
         let attrs = collect_resl_attributes(self.tcx, attrs);
 
         attrs.check_target(self.tcx, &Target::from_item(item));
 
         match &item.kind {
-            ItemKind::Static(_, _, _) => self.visit_item_static(item, &attrs),
-            ItemKind::Const(_, _, _) => self.visit_item_const(item, &attrs),
+            ItemKind::Static(_, _, _, _) => self.visit_item_static(item, &attrs),
+            ItemKind::Const(_, _, _, _) => self.visit_item_const(item, &attrs),
             ItemKind::Fn { .. } => self.visit_item_fn(item, &attrs),
-            ItemKind::Mod(_) => self.visit_item_mod(item, &attrs),
-            ItemKind::Struct(_, _) => self.visit_item_struct(item, &attrs),
-            ItemKind::Enum(_, _) => self.visit_item_enum(item, &attrs),
-            ItemKind::Trait(_, _, _, _, _) => self.visit_item_trait(item, &attrs),
+            ItemKind::Mod(_, _) => self.visit_item_mod(item, &attrs),
+            ItemKind::Struct(_, _, _) => self.visit_item_struct(item, &attrs),
+            ItemKind::Enum(_, _, _) => self.visit_item_enum(item, &attrs),
+            ItemKind::Trait(_, _, _, _, _, _, _) => self.visit_item_trait(item, &attrs),
             ItemKind::Impl(_) => self.visit_item_impl(item, &attrs),
             _ => (),
         }
@@ -426,7 +426,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Locator<'a, 'tcx> {
     }
 
     fn visit_expr(&mut self, ex: &'tcx Expr<'tcx>) {
-        let attrs = self.tcx.hir().attrs(ex.hir_id);
+        let attrs = self.tcx.hir_attrs(ex.hir_id);
         let attrs = collect_resl_attributes(self.tcx, attrs);
 
         attrs.check_target(self.tcx, &Target::Expression);
@@ -443,7 +443,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Locator<'a, 'tcx> {
     }
 
     fn visit_param(&mut self, param: &'tcx Param<'tcx>) {
-        let attrs = self.tcx.hir().attrs(param.hir_id);
+        let attrs = self.tcx.hir_attrs(param.hir_id);
         let attrs = collect_resl_attributes(self.tcx, attrs);
 
         attrs.check_target(self.tcx, &Target::Param);
@@ -458,7 +458,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Locator<'a, 'tcx> {
     }
 
     fn visit_field_def(&mut self, s: &'tcx FieldDef<'tcx>) {
-        let attrs = self.tcx.hir().attrs(s.hir_id);
+        let attrs = self.tcx.hir_attrs(s.hir_id);
         let attrs = collect_resl_attributes(self.tcx, attrs);
 
         attrs.check_target(self.tcx, &Target::Field);
@@ -473,7 +473,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Locator<'a, 'tcx> {
     }
 
     fn visit_generic_param(&mut self, p: &'tcx GenericParam<'tcx>) {
-        let attrs = self.tcx.hir().attrs(p.hir_id);
+        let attrs = self.tcx.hir_attrs(p.hir_id);
         let attrs = collect_resl_attributes(self.tcx, attrs);
 
         attrs.check_target(self.tcx, &Target::from_generic_param(p));
@@ -484,7 +484,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Locator<'a, 'tcx> {
     // Visit all remaining node types that can be attribute targets to ensure we emit errors for
     // missplaced attributes.
     fn visit_expr_field(&mut self, field: &'tcx ExprField<'tcx>) {
-        let attrs = self.tcx.hir().attrs(field.hir_id);
+        let attrs = self.tcx.hir_attrs(field.hir_id);
         let attrs = collect_resl_attributes(self.tcx, attrs);
 
         attrs.check_target(self.tcx, &Target::ExprField);
@@ -493,7 +493,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Locator<'a, 'tcx> {
     }
 
     fn visit_arm(&mut self, a: &'tcx Arm<'tcx>) {
-        let attrs = self.tcx.hir().attrs(a.hir_id);
+        let attrs = self.tcx.hir_attrs(a.hir_id);
         let attrs = collect_resl_attributes(self.tcx, attrs);
 
         attrs.check_target(self.tcx, &Target::Arm);
@@ -502,7 +502,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Locator<'a, 'tcx> {
     }
 
     fn visit_pat_field(&mut self, f: &'tcx PatField<'tcx>) {
-        let attrs = self.tcx.hir().attrs(f.hir_id);
+        let attrs = self.tcx.hir_attrs(f.hir_id);
         let attrs = collect_resl_attributes(self.tcx, attrs);
 
         attrs.check_target(self.tcx, &Target::PatField);
@@ -511,7 +511,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Locator<'a, 'tcx> {
     }
 
     fn visit_variant(&mut self, v: &'tcx Variant<'tcx>) {
-        let attrs = self.tcx.hir().attrs(v.hir_id);
+        let attrs = self.tcx.hir_attrs(v.hir_id);
         let attrs = collect_resl_attributes(self.tcx, attrs);
 
         attrs.check_target(self.tcx, &Target::Variant);
@@ -520,7 +520,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Locator<'a, 'tcx> {
     }
 
     fn visit_stmt(&mut self, s: &'tcx Stmt<'tcx>) {
-        let attrs = self.tcx.hir().attrs(s.hir_id);
+        let attrs = self.tcx.hir_attrs(s.hir_id);
         let attrs = collect_resl_attributes(self.tcx, attrs);
 
         attrs.check_target(self.tcx, &Target::Statement);
@@ -529,7 +529,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Locator<'a, 'tcx> {
     }
 
     fn visit_foreign_item(&mut self, i: &'tcx ForeignItem<'tcx>) -> Self::Result {
-        let attrs = self.tcx.hir().attrs(i.hir_id());
+        let attrs = self.tcx.hir_attrs(i.hir_id());
         let attrs = collect_resl_attributes(self.tcx, attrs);
 
         attrs.check_target(self.tcx, &Target::from_foreign_item(i));
@@ -541,5 +541,5 @@ impl<'a, 'tcx> Visitor<'tcx> for Locator<'a, 'tcx> {
 pub fn build(hir_ext: &mut HirExt, tcx: TyCtxt<'_>) {
     let mut locator = Locator { tcx, hir_ext };
 
-    tcx.hir().visit_all_item_likes_in_crate(&mut locator);
+    tcx.hir_visit_all_item_likes_in_crate(&mut locator);
 }

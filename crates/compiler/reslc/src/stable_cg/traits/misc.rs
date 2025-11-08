@@ -1,4 +1,4 @@
-use stable_mir::mir::mono::Instance;
+use rustc_public::mir::mono::Instance;
 
 use super::BackendTypes;
 

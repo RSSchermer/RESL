@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
-use syn::{parse_macro_input, LitInt, Token};
+use syn::{LitInt, Token, parse_macro_input};
 
 pub fn expand_macro(token_stream: TokenStream) -> TokenStream {
     let MatMul { lhs, rhs } = parse_macro_input!(token_stream as MatMul);

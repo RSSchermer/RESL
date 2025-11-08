@@ -4,9 +4,8 @@ use slotmap::{SecondaryMap, SlotMap};
 
 use crate::scf::visit::TopDownVisitor;
 use crate::scf::{
-    visit, Block, ExprBinding, ExpressionKind, If, LocalBinding, LocalBindingData,
-    LocalBindingKind, Loop, LoopControl, OpCallBuiltin, Return, Scf, Statement, StatementKind,
-    Store, Switch,
+    Block, ExprBinding, ExpressionKind, If, LocalBinding, LocalBindingData, LocalBindingKind, Loop,
+    LoopControl, OpCallBuiltin, Return, Scf, Statement, StatementKind, Store, Switch, visit,
 };
 
 pub struct Config {

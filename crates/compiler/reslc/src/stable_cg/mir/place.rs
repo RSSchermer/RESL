@@ -1,13 +1,11 @@
 use std::hash::Hash;
 
-use rustc_middle::mir::tcx::PlaceTy;
-use rustc_middle::{bug, ty};
-use stable_mir::abi::{FieldsShape, ValueAbi, VariantsShape};
-use stable_mir::mir;
-use stable_mir::mir::Mutability;
-use stable_mir::target::MachineSize;
-use stable_mir::ty::{Align, RigidTy, Size, Ty, TyKind, VariantIdx};
-use tracing::{debug, instrument};
+use rustc_middle::bug;
+use rustc_public::abi::{FieldsShape, VariantsShape};
+use rustc_public::mir;
+use rustc_public::mir::Mutability;
+use rustc_public::ty::{Align, RigidTy, Ty, TyKind, VariantIdx};
+use tracing::instrument;
 
 use super::operand::OperandValue;
 use super::{FunctionCx, LocalRef};
@@ -292,9 +290,6 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                 mir::ProjectionElem::Field(field, _) => cg_base.project_field(bx, field),
                 mir::ProjectionElem::OpaqueCast(ty) => {
                     bug!("encountered OpaqueCast({ty}) in codegen")
-                }
-                mir::ProjectionElem::Subtype(..) => {
-                    bug!("RESL does not support type casts")
                 }
                 mir::ProjectionElem::Index(index) => {
                     let index = &mir::Operand::Copy(mir::Place::from(index));

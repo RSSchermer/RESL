@@ -4,7 +4,7 @@ use crate::rvsdg::analyse::region_stratification::RegionStratifier;
 use crate::rvsdg::transform::region_replication::replicate_region;
 use crate::rvsdg::visit::region_nodes::RegionNodesVisitor;
 use crate::rvsdg::{
-    visit, Connectivity, Node, NodeKind, Region, Rvsdg, StateOrigin, ValueOrigin, ValueUser,
+    Connectivity, Node, NodeKind, Region, Rvsdg, StateOrigin, ValueOrigin, ValueUser, visit,
 };
 use crate::{Function, Module};
 

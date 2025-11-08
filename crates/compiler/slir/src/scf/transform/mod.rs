@@ -1,5 +1,5 @@
-use crate::scf::Scf;
 use crate::Module;
+use crate::scf::Scf;
 
 pub mod remove_empty_else_blocks;
 

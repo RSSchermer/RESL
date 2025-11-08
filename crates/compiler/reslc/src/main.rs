@@ -2,7 +2,7 @@
     assert_matches,
     if_let_guard,
     impl_trait_in_assoc_type,
-    let_chains,
+    once_cell_get_mut,
     rustc_private,
     trait_alias
 )]
@@ -18,16 +18,16 @@ extern crate rustc_fluent_macro;
 extern crate rustc_hir;
 extern crate rustc_interface;
 #[macro_use]
-extern crate rustc_smir;
+extern crate rustc_public_bridge;
 extern crate core;
 extern crate rustc_macros;
 extern crate rustc_metadata;
 extern crate rustc_middle;
 extern crate rustc_monomorphize;
+extern crate rustc_public;
 extern crate rustc_session;
 extern crate rustc_span;
 extern crate rustc_target;
-extern crate stable_mir;
 
 mod abi;
 mod artifact;
@@ -46,8 +46,8 @@ use std::process::ExitCode;
 use std::{env, process};
 
 use rustc_driver::{args, catch_with_exit_code, init_rustc_env_logger};
-use rustc_session::config::ErrorOutputType;
 use rustc_session::EarlyDiagCtxt;
+use rustc_session::config::ErrorOutputType;
 
 rustc_fluent_macro::fluent_messages! { "../messages.ftl" }
 
@@ -56,16 +56,10 @@ fn main() -> ExitCode {
 
     init_rustc_env_logger(&early_dcx);
 
-    let args = args::raw_args(&early_dcx)
-        .unwrap()
-        .into_iter()
-        .skip(1)
-        .collect();
+    let args = args::raw_args(&early_dcx).into_iter().skip(1).collect();
 
     let exit_code = catch_with_exit_code(|| {
         compiler::run(args);
-
-        Ok(())
     });
 
     process::exit(exit_code)

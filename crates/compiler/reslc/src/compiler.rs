@@ -2,10 +2,10 @@ use std::env;
 use std::fs::File;
 
 use ar::{GnuBuilder, Header};
-use rustc_driver::{run_compiler, Callbacks, Compilation};
+use rustc_driver::{Callbacks, Compilation, run_compiler};
 use rustc_interface::interface;
-use rustc_metadata::fs::encode_and_write_metadata;
 use rustc_metadata::METADATA_FILENAME;
+use rustc_metadata::fs::encode_and_write_metadata;
 use rustc_middle::ty::TyCtxt;
 use rustc_session::config::{CrateType, DebugInfo};
 use rustc_session::output::out_filename;
@@ -113,8 +113,8 @@ fn create_rlib(tcx: TyCtxt, lib_module: &(slir::Module, slir::cfg::Cfg)) {
             .collect(),
     );
 
-    let (metadata, _) = encode_and_write_metadata(tcx);
-    let raw_metadata = metadata.raw_data();
+    let metadata = encode_and_write_metadata(tcx);
+    let raw_metadata = metadata.full();
 
     builder
         .append(

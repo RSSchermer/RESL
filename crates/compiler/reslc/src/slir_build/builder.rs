@@ -1,15 +1,15 @@
 use std::mem;
-use std::ops::{Deref, Range};
+use std::ops::Deref;
 
 use rustc_middle::bug;
-use rustc_middle::ty::inherent::SliceLike;
+use rustc_public::abi;
+use rustc_public::abi::{ArgAbi, FnAbi, PassMode, ValueAbi};
+use rustc_public::mir::mono::{Instance, StaticDef};
+use rustc_public::target::MachineSize;
+use rustc_public::ty::{Align, Span, VariantIdx};
+use rustc_public_bridge::IndexedVal;
 use slir::cfg::BlockPosition;
-use smallvec::{smallvec, SmallVec};
-use stable_mir::abi;
-use stable_mir::abi::{ArgAbi, FnAbi, PassMode, ValueAbi};
-use stable_mir::mir::mono::{Instance, StaticDef};
-use stable_mir::target::MachineSize;
-use stable_mir::ty::{Align, IndexedVal, Span, VariantIdx};
+use smallvec::{SmallVec, smallvec};
 
 use crate::slir_build::context::CodegenContext as Cx;
 use crate::slir_build::ty::Type;

@@ -2,17 +2,17 @@ use indexmap::IndexSet;
 use rustc_hash::{FxHashMap, FxHashSet};
 use slotmap::KeyData;
 
+use crate::Module;
 use crate::cfg::OpAlloca;
+use crate::rvsdg::NodeKind::{Loop, Switch};
 use crate::rvsdg::transform::variable_pointer_emulation::EmulationContext;
 use crate::rvsdg::visit::reverse_value_flow::ReverseValueFlowVisitor;
 use crate::rvsdg::visit::value_flow::ValueFlowVisitor;
-use crate::rvsdg::NodeKind::{Loop, Switch};
 use crate::rvsdg::{
-    visit, Connectivity, Node, NodeKind, Region, Rvsdg, SimpleNode, StateOrigin, StateUser,
-    ValueInput, ValueOrigin, ValueUser,
+    Connectivity, Node, NodeKind, Region, Rvsdg, SimpleNode, StateOrigin, StateUser, ValueInput,
+    ValueOrigin, ValueUser, visit,
 };
 use crate::ty::{TypeKind, TypeRegistry};
-use crate::Module;
 
 #[derive(Debug)]
 struct AggregateAnalyzer {
@@ -737,8 +737,8 @@ mod tests {
 
     use super::*;
     use crate::rvsdg::ValueOutput;
-    use crate::ty::{TypeKind, TY_DUMMY, TY_F32, TY_PREDICATE, TY_U32, TY_VEC2_F32};
-    use crate::{thin_set, ty, BinaryOperator, FnArg, FnSig, Function, Module, Symbol};
+    use crate::ty::{TY_DUMMY, TY_F32, TY_PREDICATE, TY_U32, TY_VEC2_F32, TypeKind};
+    use crate::{BinaryOperator, FnArg, FnSig, Function, Module, Symbol, thin_set, ty};
 
     #[test]
     fn test_promote_store_then_load_then_store_then_load() {

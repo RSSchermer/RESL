@@ -2,7 +2,7 @@
 
 use bit_set::BitSet;
 use bit_vec::BitVec;
-use stable_mir::mir::{BasicBlock, BasicBlockIdx, Body};
+use rustc_public::mir::{BasicBlock, BasicBlockIdx, Body};
 
 /// Postorder traversal of a graph.
 ///

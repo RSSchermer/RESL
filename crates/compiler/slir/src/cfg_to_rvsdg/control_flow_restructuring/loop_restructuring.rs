@@ -3,7 +3,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::cfg::{Assign, BasicBlock, BlockPosition, LocalBinding};
 use crate::cfg_to_rvsdg::control_flow_restructuring::strongly_connected_components::{
-    strongly_connected_components, SccStructure,
+    SccStructure, strongly_connected_components,
 };
 use crate::cfg_to_rvsdg::control_flow_restructuring::{Edge, Graph};
 use crate::ty::TY_PREDICATE;

@@ -1,6 +1,6 @@
-use stable_mir::mir::mono::StaticDef;
-use stable_mir::ty::Align;
-use stable_mir::DefId;
+use rustc_public::DefId;
+use rustc_public::mir::mono::StaticDef;
+use rustc_public::ty::Align;
 
 use super::BackendTypes;
 

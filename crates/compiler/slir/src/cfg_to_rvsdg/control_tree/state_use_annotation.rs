@@ -1,4 +1,4 @@
-use index_vec::{index_vec, IndexVec};
+use index_vec::{IndexVec, index_vec};
 
 use crate::cfg::{BasicBlock, Cfg, StatementData};
 use crate::cfg_to_rvsdg::control_tree::{

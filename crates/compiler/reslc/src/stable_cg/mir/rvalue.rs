@@ -2,12 +2,11 @@ use std::assert_matches::assert_matches;
 
 use arrayvec::ArrayVec;
 use rustc_middle::{bug, span_bug};
-use stable_mir::abi::ValueAbi;
-use stable_mir::mir::{AggregateKind, CastKind, Mutability, PointerCoercion, Rvalue};
-use stable_mir::ty::{
-    IndexedVal, Region, RegionKind, RigidTy, Span, Ty, TyKind, UintTy, VariantIdx,
-};
-use stable_mir::{abi, mir};
+use rustc_public::abi::ValueAbi;
+use rustc_public::mir::{AggregateKind, CastKind, Mutability, NullOp, PointerCoercion, Rvalue};
+use rustc_public::ty::{Region, RegionKind, RigidTy, Span, Ty, TyKind, UintTy, VariantIdx};
+use rustc_public::{abi, mir};
+use rustc_public_bridge::IndexedVal;
 use tracing::{debug, instrument, trace};
 
 use super::operand::{OperandRef, OperandValue};
@@ -333,7 +332,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
 
             mir::Rvalue::Cast(
                 mir::CastKind::PointerCoercion(PointerCoercion::Unsize),
-                ref source,
+                source,
                 _,
             ) => {
                 // The destination necessarily contains a wide pointer, so if
@@ -530,7 +529,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                     | mir::CastKind::PointerExposeAddress
                     | mir::CastKind::PointerWithExposedProvenance
                     | mir::CastKind::Transmute
-                    | mir::CastKind::DynStar
+                    | mir::CastKind::Subtype
                     | mir::CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer)
                     | mir::CastKind::PointerCoercion(PointerCoercion::ClosureFnPointer(_))
                     | mir::CastKind::PointerCoercion(PointerCoercion::UnsafeFnPointer) => {
@@ -559,13 +558,6 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                         assert!(bx.is_backend_immediate(cast));
 
                         let to_backend_ty = bx.immediate_backend_type(cast);
-
-                        if matches!(operand.layout.layout.shape().abi, ValueAbi::Uninhabited) {
-                            let val = OperandValue::Immediate(bx.cx().const_poison(to_backend_ty));
-
-                            return OperandRef { val, layout: cast };
-                        }
-
                         let cast_kind = self.value_kind(cast);
                         let OperandValueKind::Immediate(to_scalar) = cast_kind else {
                             bug!("Found {cast_kind:?} for operand {cast:?}");
@@ -718,21 +710,11 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                 }
             }
 
-            mir::Rvalue::NullaryOp(ref null_op, ty) => {
+            mir::Rvalue::NullaryOp(null_op, ty) => {
                 let layout = ty.layout().unwrap();
                 let shape = layout.shape();
 
                 let val = match null_op {
-                    mir::NullOp::SizeOf => {
-                        assert!(shape.is_sized());
-
-                        bx.cx().const_usize(shape.size.bytes() as u64)
-                    }
-                    mir::NullOp::AlignOf => {
-                        assert!(shape.is_sized());
-
-                        bx.cx().const_usize(shape.abi_align)
-                    }
                     mir::NullOp::OffsetOf(fields) => {
                         todo!()
                         // let val = bx
@@ -741,7 +723,7 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                         //     .bytes();
                         // bx.cx().const_usize(val)
                     }
-                    mir::NullOp::UbChecks => {
+                    mir::NullOp::UbChecks | mir::NullOp::ContractChecks => {
                         bug!("not supported by RESL")
                     }
                 };

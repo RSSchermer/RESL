@@ -4,7 +4,7 @@ use crate::rvsdg::{
     Connectivity, Node, NodeKind, ProxyKind, Region, Rvsdg, SimpleNode, ValueInput, ValueOrigin,
     ValueUser,
 };
-use crate::ty::{Type, TypeKind, TypeRegistry, TY_PTR_U32, TY_U32};
+use crate::ty::{TY_PTR_U32, TY_U32, Type, TypeKind, TypeRegistry};
 use crate::{Function, Module};
 
 pub struct EnumAllocaReplacer<'a> {
@@ -527,7 +527,7 @@ mod tests {
     use super::*;
     use crate::rvsdg::{StateOrigin, ValueOutput};
     use crate::ty::{Enum, Struct, StructField, TY_DUMMY, TY_PREDICATE};
-    use crate::{thin_set, FnArg, FnSig, Symbol};
+    use crate::{FnArg, FnSig, Symbol, thin_set};
 
     #[test]
     fn test_enum_replacement() {
@@ -944,10 +944,14 @@ mod tests {
             "the third input of the second switch node should connect to the variant-0-alloca node"
         );
 
-        assert_eq!(switch_1_data.value_inputs()[3].origin, ValueOrigin::Output {
-            producer: variant_1_node,
-            output: 0,
-        }, "the fourth input of the second switch node should connect to the variant-1-alloca node");
+        assert_eq!(
+            switch_1_data.value_inputs()[3].origin,
+            ValueOrigin::Output {
+                producer: variant_1_node,
+                output: 0,
+            },
+            "the fourth input of the second switch node should connect to the variant-1-alloca node"
+        );
 
         assert_eq!(
             rvsdg[switch_1_element_0_node]

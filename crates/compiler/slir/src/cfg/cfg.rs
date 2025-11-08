@@ -6,11 +6,11 @@ use ordered_float::OrderedFloat;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
-use smallvec::{smallvec, SmallVec};
-use thin_vec::{thin_vec, ThinVec};
+use smallvec::{SmallVec, smallvec};
+use thin_vec::{ThinVec, thin_vec};
 
 use crate::builtin_function::BuiltinFunction;
-use crate::ty::{Type, TypeKind, TypeRegistry, TY_BOOL, TY_F32, TY_I32, TY_PREDICATE, TY_U32};
+use crate::ty::{TY_BOOL, TY_F32, TY_I32, TY_PREDICATE, TY_U32, Type, TypeKind, TypeRegistry};
 use crate::{
     BinaryOperator, Constant, Function, Module, StorageBinding, UnaryOperator, UniformBinding,
     WorkgroupBinding,

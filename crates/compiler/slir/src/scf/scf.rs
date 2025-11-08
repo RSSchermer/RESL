@@ -8,11 +8,11 @@ use serde::{Deserialize, Serialize};
 use slotmap::{Key, SlotMap};
 
 use crate::builtin_function::BuiltinFunction;
-use crate::ty::{Type, TypeKind, TypeRegistry, TY_BOOL, TY_F32, TY_I32, TY_U32};
+use crate::ty::{TY_BOOL, TY_F32, TY_I32, TY_U32, Type, TypeKind, TypeRegistry};
 use crate::{
-    ty, BinaryOperator, Constant, ConstantRegistry, Function, Module, StorageBinding,
+    BinaryOperator, Constant, ConstantRegistry, Function, Module, StorageBinding,
     StorageBindingRegistry, UnaryOperator, UniformBinding, UniformBindingRegistry,
-    WorkgroupBinding, WorkgroupBindingRegistry,
+    WorkgroupBinding, WorkgroupBindingRegistry, ty,
 };
 
 slotmap::new_key_type! {

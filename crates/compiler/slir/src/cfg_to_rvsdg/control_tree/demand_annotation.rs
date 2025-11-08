@@ -114,7 +114,7 @@ mod tests {
         Terminator,
     };
     use crate::cfg_to_rvsdg::control_flow_restructuring::{
-        restructure_branches, restructure_loops, Graph,
+        Graph, restructure_branches, restructure_loops,
     };
     use crate::cfg_to_rvsdg::control_tree::read_write_annotation::annotate_read_write;
     use crate::ty::{TY_BOOL, TY_DUMMY, TY_U32};

@@ -67,16 +67,16 @@
 use arrayvec::ArrayVec;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::rvsdg::visit::region_nodes::RegionNodesVisitor;
-use crate::rvsdg::visit::reverse_value_flow::ReverseValueFlowVisitor;
 use crate::rvsdg::NodeKind::Simple;
 use crate::rvsdg::SimpleNode::OpPtrElementPtr;
+use crate::rvsdg::visit::region_nodes::RegionNodesVisitor;
+use crate::rvsdg::visit::reverse_value_flow::ReverseValueFlowVisitor;
 use crate::rvsdg::{
-    visit, Connectivity, Node, NodeKind, Region, Rvsdg, SimpleNode, StateUser, ValueInput,
-    ValueOrigin,
+    Connectivity, Node, NodeKind, Region, Rvsdg, SimpleNode, StateUser, ValueInput, ValueOrigin,
+    visit,
 };
 use crate::ty::TypeKind;
-use crate::{ty, Function, Module, StorageBinding, WorkgroupBinding};
+use crate::{Function, Module, StorageBinding, WorkgroupBinding, ty};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {

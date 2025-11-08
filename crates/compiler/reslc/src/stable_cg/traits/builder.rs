@@ -1,10 +1,10 @@
 use std::assert_matches::assert_matches;
 use std::ops::Deref;
 
-use stable_mir::abi::{FnAbi, Scalar, ValueAbi};
-use stable_mir::mir::mono::Instance;
-use stable_mir::target::MachineSize;
-use stable_mir::ty::{Align, Size, Span, Ty, VariantIdx};
+use rustc_public::abi::{FnAbi, Scalar, ValueAbi};
+use rustc_public::mir::mono::Instance;
+use rustc_public::target::MachineSize;
+use rustc_public::ty::{Align, Size, Span, Ty, VariantIdx};
 
 use super::abi::AbiBuilderMethods;
 use super::consts::ConstCodegenMethods;
@@ -12,12 +12,12 @@ use super::intrinsic::IntrinsicCallBuilderMethods;
 use super::misc::MiscCodegenMethods;
 use super::type_::{ArgAbiBuilderMethods, BaseTypeCodegenMethods, LayoutTypeCodegenMethods};
 use super::{CodegenMethods, StaticBuilderMethods};
+use crate::stable_cg::TyAndLayout;
 use crate::stable_cg::common::{
     AtomicOrdering, AtomicRmwBinOp, IntPredicate, RealPredicate, SynchronizationScope, TypeKind,
 };
 use crate::stable_cg::mir::operand::{OperandRef, OperandValue};
 use crate::stable_cg::mir::place::{PlaceRef, PlaceValue};
-use crate::stable_cg::TyAndLayout;
 
 #[derive(Copy, Clone, Debug)]
 pub enum OverflowOp {
@@ -38,11 +38,11 @@ pub trait BuilderMethods<'a>:
     // `BuilderMethods`. This bound ensures all impls agree on the associated
     // types within.
     type CodegenCx: CodegenMethods<
-        Value = Self::Value,
-        Function = Self::Function,
-        BasicBlock = Self::BasicBlock,
-        Type = Self::Type,
-    >;
+            Value = Self::Value,
+            Function = Self::Function,
+            BasicBlock = Self::BasicBlock,
+            Type = Self::Type,
+        >;
 
     fn build(cx: &'a Self::CodegenCx, llbb: Self::BasicBlock) -> Self;
 

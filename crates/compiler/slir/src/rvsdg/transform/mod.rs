@@ -16,8 +16,8 @@ pub mod switch_arg_reduction;
 pub mod switch_merging;
 pub mod variable_pointer_emulation;
 
-use crate::rvsdg::Rvsdg;
 use crate::Module;
+use crate::rvsdg::Rvsdg;
 
 pub fn transform(module: &mut Module, rvsdg: &mut Rvsdg) {
     function_inlining::transform_entry_points(module, rvsdg);

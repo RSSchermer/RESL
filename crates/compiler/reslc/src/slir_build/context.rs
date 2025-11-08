@@ -2,16 +2,17 @@ use std::cell::RefCell;
 
 use rustc_hash::FxHashMap;
 use rustc_middle::bug;
-use rustc_smir::rustc_internal::internal;
-use stable_mir::abi::{
+use rustc_public::abi::{
     FieldsShape, FloatLength, FnAbi, IntegerLength, PassMode, Primitive, ValueAbi, VariantsShape,
     WrappingRange,
 };
-use stable_mir::mir::alloc::GlobalAlloc;
-use stable_mir::mir::mono::{Instance, StaticDef};
-use stable_mir::target::{MachineInfo, MachineSize};
-use stable_mir::ty::{Align, Allocation, GenericArgKind, IndexedVal, RigidTy, TyKind, VariantIdx};
-use stable_mir::{abi, CrateDef};
+use rustc_public::mir::alloc::GlobalAlloc;
+use rustc_public::mir::mono::{Instance, StaticDef};
+use rustc_public::rustc_internal::internal;
+use rustc_public::target::{MachineInfo, MachineSize};
+use rustc_public::ty::{Align, Allocation, GenericArgKind, RigidTy, TyKind, VariantIdx};
+use rustc_public::{CrateDef, abi};
+use rustc_public_bridge::IndexedVal;
 
 use crate::context::ReslContext;
 use crate::hir_ext::{
@@ -232,7 +233,7 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
 
         if let TyKind::RigidTy(RigidTy::Adt(def, generics)) = ty.kind() {
             if !def
-                .attrs_by_path(&["reslc".into(), "mem_resource_ty".into()])
+                .tool_attrs(&["reslc".into(), "mem_resource_ty".into()])
                 .is_empty()
             {
                 let Some(GenericArgKind::Type(ty)) = generics.0.first() else {
@@ -482,8 +483,8 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
 impl<'a, 'tcx> PreDefineCodegenMethods for CodegenContext<'a, 'tcx> {
     fn predefine_static(&self, def: StaticDef, symbol_name: &str) {
         let def_id = internal(self.rcx.tcx(), def.0);
-        let item = self.rcx.tcx().hir().expect_item(def_id.expect_local());
-        let (_, mutability, _, ext) = self
+        let item = self.rcx.tcx().hir_expect_item(def_id.expect_local());
+        let (mutability, _, _, _, ext) = self
             .rcx
             .hir_ext()
             .extend_item(item)
@@ -555,7 +556,7 @@ impl<'a, 'tcx> PreDefineCodegenMethods for CodegenContext<'a, 'tcx> {
         if let Some(local_id) = def_id.as_local()
             && let Some(fn_ext) = self.rcx.hir_ext().fn_ext(local_id)
         {
-            let body = self.rcx.tcx().hir().body_owned_by(local_id);
+            let body = self.rcx.tcx().hir_body_owned_by(local_id);
 
             for (i, param) in body.params.iter().enumerate() {
                 if let Some(param_ext) = self.rcx.hir_ext().param_ext(param.hir_id)
@@ -847,6 +848,7 @@ impl<'a, 'tcx> ConstCodegenMethods for CodegenContext<'a, 'tcx> {
 
                         slir::cfg::RootIdentifier::Constant(constant)
                     }
+                    GlobalAlloc::TypeId { .. } => todo!(),
                 };
 
                 slir::cfg::InlineConst::Ptr(slir::cfg::ConstPtr::new(
@@ -892,7 +894,7 @@ impl<'a, 'tcx> LayoutTypeCodegenMethods for CodegenContext<'a, 'tcx> {
         match shape.abi {
             ValueAbi::Scalar(_) | ValueAbi::Vector { .. } => true,
             ValueAbi::ScalarPair(..) => false,
-            ValueAbi::Uninhabited | ValueAbi::Aggregate { .. } => shape.is_1zst(),
+            ValueAbi::Aggregate { .. } => shape.is_1zst(),
         }
     }
 

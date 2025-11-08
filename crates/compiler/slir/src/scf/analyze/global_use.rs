@@ -1,7 +1,7 @@
 use rustc_hash::FxHashSet;
 
 use crate::scf::visit::TopDownVisitor;
-use crate::scf::{visit, ExpressionKind, GlobalPtr, Scf, Statement, StatementKind};
+use crate::scf::{ExpressionKind, GlobalPtr, Scf, Statement, StatementKind, visit};
 use crate::{Constant, Module, WorkgroupBinding};
 
 pub struct GlobalUse {

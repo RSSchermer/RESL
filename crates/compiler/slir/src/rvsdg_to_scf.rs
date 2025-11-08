@@ -6,7 +6,7 @@ use crate::rvsdg::analyse::region_stratification::RegionStratifier;
 use crate::rvsdg::{Connectivity, NodeKind, Rvsdg, SimpleNode, ValueOrigin};
 use crate::scf::{BlockPosition, LocalBinding, LoopControl, Scf};
 use crate::{
-    rvsdg, scf, Constant, Function, Module, StorageBinding, UniformBinding, WorkgroupBinding,
+    Constant, Function, Module, StorageBinding, UniformBinding, WorkgroupBinding, rvsdg, scf,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

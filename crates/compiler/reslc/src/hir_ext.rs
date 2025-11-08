@@ -1,12 +1,12 @@
 use indexmap::IndexMap;
 use rustc_ast::{IsAuto, Mutability};
 use rustc_hir::{
-    BodyId, EnumDef, FnSig, GenericBounds, Generics, HirId, Impl, Item, ItemId, ItemKind, Mod,
-    Safety, TraitItemRef, Ty, VariantData,
+    BodyId, Constness, EnumDef, FnSig, GenericBounds, Generics, HirId, Impl, Item, ItemId,
+    ItemKind, Mod, Safety, TraitItemId, Ty, VariantData,
 };
 use rustc_span::def_id::{DefId, LocalDefId, LocalModDefId};
 use rustc_span::source_map::Spanned;
-use rustc_span::Span;
+use rustc_span::{Ident, Span};
 
 pub struct HirExt {
     pub shader_source_requests: Vec<ShaderSourceRequest>,
@@ -46,18 +46,17 @@ impl HirExt {
         item: &'hir Item,
     ) -> Option<ExtendedItem<'hir, 'ext>> {
         match &item.kind {
-            ItemKind::Static(ty, mutability, body_id) => {
-                self.static_ext
-                    .get(&item.item_id())
-                    .map(|ext| ExtendedItem {
-                        item,
-                        kind: ExtendedItemKind::Static(ty, *mutability, *body_id, ext),
-                    })
-            }
-            ItemKind::Const(ty, generics, body_id) => {
+            ItemKind::Static(mutability, ident, ty, body_id) => self
+                .static_ext
+                .get(&item.item_id())
+                .map(|ext| ExtendedItem {
+                    item,
+                    kind: ExtendedItemKind::Static(*mutability, *ident, ty, *body_id, ext),
+                }),
+            ItemKind::Const(ident, generics, ty, body_id) => {
                 self.const_ext.get(&item.item_id()).map(|ext| ExtendedItem {
                     item,
-                    kind: ExtendedItemKind::Const(ty, generics, *body_id, ext),
+                    kind: ExtendedItemKind::Const(*ident, generics, ty, *body_id, ext),
                 })
             }
             ItemKind::Fn {
@@ -72,32 +71,33 @@ impl HirExt {
                     item,
                     kind: ExtendedItemKind::Fn(sig, generics, *body, ext),
                 }),
-            ItemKind::Mod(m) => {
+            ItemKind::Mod(ident, m) => {
                 let id = LocalModDefId::new_unchecked(item.owner_id.def_id);
 
                 self.mod_ext.get(&id).map(|ext| ExtendedItem {
                     item,
-                    kind: ExtendedItemKind::Mod(m, ext),
+                    kind: ExtendedItemKind::Mod(*ident, m, ext),
                 })
             }
-            ItemKind::Struct(variant_data, generics) => {
-                self.struct_ext
-                    .get(&item.item_id())
-                    .map(|ext| ExtendedItem {
-                        item,
-                        kind: ExtendedItemKind::Struct(variant_data, generics, ext),
-                    })
-            }
-            ItemKind::Enum(enum_def, generics) => {
+            ItemKind::Struct(ident, generics, variant_data) => self
+                .struct_ext
+                .get(&item.item_id())
+                .map(|ext| ExtendedItem {
+                    item,
+                    kind: ExtendedItemKind::Struct(*ident, generics, variant_data, ext),
+                }),
+            ItemKind::Enum(ident, generics, enum_def) => {
                 self.enum_ext.get(&item.item_id()).map(|ext| ExtendedItem {
                     item,
-                    kind: ExtendedItemKind::Enum(enum_def, generics, ext),
+                    kind: ExtendedItemKind::Enum(*ident, generics, enum_def, ext),
                 })
             }
-            ItemKind::Trait(is_auto, safety, generics, bounds, items) => {
+            ItemKind::Trait(constness, is_auto, safety, ident, generics, bounds, items) => {
                 self.trait_ext.get(&item.item_id()).map(|ext| ExtendedItem {
                     item,
-                    kind: ExtendedItemKind::Trait(*is_auto, *safety, generics, bounds, items, ext),
+                    kind: ExtendedItemKind::Trait(
+                        *constness, *is_auto, *safety, *ident, generics, bounds, items, ext,
+                    ),
                 })
             }
             ItemKind::Impl(i) => self.impl_ext.get(&item.item_id()).map(|ext| ExtendedItem {
@@ -254,15 +254,29 @@ impl<'hir, 'ext> ExtendedItem<'hir, 'ext> {
     pub fn expect_trait(
         self,
     ) -> (
+        Constness,
         IsAuto,
         Safety,
+        Ident,
         &'hir Generics<'hir>,
         GenericBounds<'hir>,
-        &'hir [TraitItemRef],
+        &'hir [TraitItemId],
         &'ext TraitExt,
     ) {
-        if let ExtendedItemKind::Trait(is_auto, safety, generics, bounds, items, ext) = self.kind {
-            (is_auto, safety, generics, bounds, items, ext)
+        if let ExtendedItemKind::Trait(
+            constness,
+            is_auto,
+            safety,
+            ident,
+            generics,
+            bounds,
+            items,
+            ext,
+        ) = self.kind
+        {
+            (
+                constness, is_auto, safety, ident, generics, bounds, items, ext,
+            )
         } else {
             panic!("expected trait")
         }
@@ -271,44 +285,60 @@ impl<'hir, 'ext> ExtendedItem<'hir, 'ext> {
     pub fn expect_struct(
         self,
     ) -> (
-        &'hir VariantData<'hir>,
+        Ident,
         &'hir Generics<'hir>,
+        &'hir VariantData<'hir>,
         &'ext StructExt,
     ) {
-        if let ExtendedItemKind::Struct(variant_data, generics, ext) = self.kind {
-            (variant_data, generics, ext)
+        if let ExtendedItemKind::Struct(ident, generics, variant_data, ext) = self.kind {
+            (ident, generics, variant_data, ext)
         } else {
             panic!("expected struct")
         }
     }
 
-    pub fn expect_enum(self) -> (&'hir EnumDef<'hir>, &'hir Generics<'hir>, &'ext EnumExt) {
-        if let ExtendedItemKind::Enum(variant_data, generics, ext) = self.kind {
-            (variant_data, generics, ext)
+    pub fn expect_enum(
+        self,
+    ) -> (
+        Ident,
+        &'hir Generics<'hir>,
+        &'hir EnumDef<'hir>,
+        &'ext EnumExt,
+    ) {
+        if let ExtendedItemKind::Enum(ident, generics, variant_data, ext) = self.kind {
+            (ident, generics, variant_data, ext)
         } else {
             panic!("expected enum")
         }
     }
 
-    pub fn expect_const(self) -> (&'hir Ty<'hir>, &'hir Generics<'hir>, BodyId, &'ext ConstExt) {
-        if let ExtendedItemKind::Const(ty, generics, body_id, ext) = self.kind {
-            (ty, generics, body_id, ext)
+    pub fn expect_const(
+        self,
+    ) -> (
+        Ident,
+        &'hir Generics<'hir>,
+        &'hir Ty<'hir>,
+        BodyId,
+        &'ext ConstExt,
+    ) {
+        if let ExtendedItemKind::Const(ident, generics, ty, body_id, ext) = self.kind {
+            (ident, generics, ty, body_id, ext)
         } else {
             panic!("expected const")
         }
     }
 
-    pub fn expect_static(self) -> (&'hir Ty<'hir>, Mutability, BodyId, &'ext StaticExt) {
-        if let ExtendedItemKind::Static(ty, mutability, body_id, ext) = self.kind {
-            (ty, mutability, body_id, ext)
+    pub fn expect_static(self) -> (Mutability, Ident, &'hir Ty<'hir>, BodyId, &'ext StaticExt) {
+        if let ExtendedItemKind::Static(mutability, ident, ty, body_id, ext) = self.kind {
+            (mutability, ident, ty, body_id, ext)
         } else {
             panic!("expected static")
         }
     }
 
-    pub fn expect_mod(self) -> (&'hir Mod<'hir>, &'ext ModExt) {
-        if let ExtendedItemKind::Mod(m, ext) = self.kind {
-            (m, ext)
+    pub fn expect_mod(self) -> (Ident, &'hir Mod<'hir>, &'ext ModExt) {
+        if let ExtendedItemKind::Mod(ident, m, ext) = self.kind {
+            (ident, m, ext)
         } else {
             panic!("expected mod")
         }
@@ -320,22 +350,36 @@ pub enum ExtendedItemKind<'hir, 'ext> {
     Fn(&'hir FnSig<'hir>, &'hir Generics<'hir>, BodyId, &'ext FnExt),
     Impl(&'hir Impl<'hir>, &'ext ImplExt),
     Trait(
+        Constness,
         IsAuto,
         Safety,
+        Ident,
         &'hir Generics<'hir>,
         GenericBounds<'hir>,
-        &'hir [TraitItemRef],
+        &'hir [TraitItemId],
         &'ext TraitExt,
     ),
     Struct(
-        &'hir VariantData<'hir>,
+        Ident,
         &'hir Generics<'hir>,
+        &'hir VariantData<'hir>,
         &'ext StructExt,
     ),
-    Enum(&'hir EnumDef<'hir>, &'hir Generics<'hir>, &'ext EnumExt),
-    Const(&'hir Ty<'hir>, &'hir Generics<'hir>, BodyId, &'ext ConstExt),
-    Static(&'hir Ty<'hir>, Mutability, BodyId, &'ext StaticExt),
-    Mod(&'hir Mod<'hir>, &'ext ModExt),
+    Enum(
+        Ident,
+        &'hir Generics<'hir>,
+        &'hir EnumDef<'hir>,
+        &'ext EnumExt,
+    ),
+    Const(
+        Ident,
+        &'hir Generics<'hir>,
+        &'hir Ty<'hir>,
+        BodyId,
+        &'ext ConstExt,
+    ),
+    Static(Mutability, Ident, &'hir Ty<'hir>, BodyId, &'ext StaticExt),
+    Mod(Ident, &'hir Mod<'hir>, &'ext ModExt),
 }
 
 #[derive(Debug)]

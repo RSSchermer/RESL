@@ -9,12 +9,12 @@ use thiserror::Error;
 
 use crate::builtin_function::BuiltinFunction;
 use crate::ty::{
-    Type, TypeKind, TypeRegistry, TY_BOOL, TY_F32, TY_I32, TY_PREDICATE, TY_PTR_U32, TY_U32,
+    TY_BOOL, TY_F32, TY_I32, TY_PREDICATE, TY_PTR_U32, TY_U32, Type, TypeKind, TypeRegistry,
 };
 use crate::util::thin_set::ThinSet;
 use crate::{
-    thin_set, ty, BinaryOperator, Constant, Function, Module, StorageBinding, UnaryOperator,
-    UniformBinding, WorkgroupBinding,
+    BinaryOperator, Constant, Function, Module, StorageBinding, UnaryOperator, UniformBinding,
+    WorkgroupBinding, thin_set, ty,
 };
 
 pub trait Connectivity {
@@ -4480,10 +4480,17 @@ impl Rvsdg {
 
                 if let Some(a) = region.value_arguments().get(*i as usize) {
                     if value_input.ty != a.ty {
-                        panic!("cannot connect a node input of type `{:?}` to a region argument of type `{:?}", value_input.ty, a.ty);
+                        panic!(
+                            "cannot connect a node input of type `{:?}` to a region argument of type `{:?}",
+                            value_input.ty, a.ty
+                        );
                     }
                 } else {
-                    panic!("tried to connect to region argument `{}`, but region only has {} arguments", i, region.value_arguments().len());
+                    panic!(
+                        "tried to connect to region argument `{}`, but region only has {} arguments",
+                        i,
+                        region.value_arguments().len()
+                    );
                 }
             }
             ValueOrigin::Output { producer, output } => {
@@ -4883,7 +4890,7 @@ mod tests {
 
     use super::*;
     use crate::ty::TY_DUMMY;
-    use crate::{thin_set, FnArg, FnSig, Symbol};
+    use crate::{FnArg, FnSig, Symbol, thin_set};
 
     #[test]
     fn test_rvsdg_single_simple_node() {

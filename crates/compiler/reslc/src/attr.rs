@@ -1,4 +1,4 @@
-use rustc_ast::{ast, AttrKind};
+use rustc_ast::{AttrKind, ast};
 use rustc_hir::Target;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::{ErrorGuaranteed, Span};
@@ -15,13 +15,10 @@ trait Attr: Sized {
 }
 
 fn is_resl_attribute(attr: &rustc_hir::Attribute) -> bool {
-    if let rustc_hir::AttrKind::Normal(attr) = &attr.kind {
-        if let Some(segment) = attr.path.segments.first() {
-            return segment.as_str() == ATTRIBUTE_NAMESPACE;
-        }
-    }
-
-    false
+    attr.path()
+        .first()
+        .map(|segment| segment.as_str() == ATTRIBUTE_NAMESPACE)
+        .unwrap_or(false)
 }
 
 /// Helper for testing that an attribute matches an expected name.
@@ -58,11 +55,11 @@ macro_rules! impl_attr_from_ast_no_args {
                 // We check the attribute is "normal" before invoking this function
                 if !matches!(attr.get_normal_item().args, rustc_hir::AttrArgs::Empty) {
                     Err(tcx.dcx().span_err(
-                        attr.span,
+                        attr.span(),
                         format!("`{}` attribute does not take any arguments", $name),
                     ))
                 } else {
-                    Ok(Some($T { span: attr.span }))
+                    Ok(Some($T { span: attr.span() }))
                 }
             } else {
                 Ok(None)
@@ -88,7 +85,7 @@ macro_rules! impl_attr_from_ast_single_int_arg {
                 }
 
                 Err(tcx.dcx().span_err(
-                    attr.span,
+                    attr.span(),
                     format!("`{}` attribute expected one argument", $name),
                 ))
             } else {
@@ -150,7 +147,7 @@ impl Attr for AttrGpu {
             Target::Fn
             | Target::Method(_)
             | Target::Trait
-            | Target::Impl
+            | Target::Impl { .. }
             | Target::Struct
             | Target::Enum => true,
             _ => false,
@@ -193,13 +190,13 @@ impl Attr for AttrResource {
                 return Ok(Some(AttrResource {
                     group: expect_u32(tcx, &meta_item_list[0])?,
                     binding: expect_u32(tcx, &meta_item_list[1])?,
-                    span: attr.span,
+                    span: attr.span(),
                 }));
             }
 
             Err(tcx
                 .dcx()
-                .span_err(attr.span, "`resource` attribute expected two arguments"))
+                .span_err(attr.span(), "`resource` attribute expected two arguments"))
         } else {
             Ok(None)
         }
@@ -342,12 +339,12 @@ impl Attr for AttrCompute {
 
                 return Ok(Some(AttrCompute {
                     workgroup_size: (x, y, z),
-                    span: attr.span,
+                    span: attr.span(),
                 }));
             }
 
             return Err(tcx.dcx().span_err(
-                attr.span,
+                attr.span(),
                 "the `workgroup_size` attribute expects at least one and at most three arguments",
             ));
         }
@@ -500,14 +497,14 @@ impl Attr for AttrBuiltin {
 
                 return Ok(Some(AttrBuiltin {
                     builtin_name,
-                    span: attr.span,
+                    span: attr.span(),
                 }));
             }
 
             return Err(tcx
                 .sess
                 .dcx()
-                .span_err(attr.span, "the `builtin` attribute expects one argument"));
+                .span_err(attr.span(), "the `builtin` attribute expects one argument"));
         }
 
         Ok(None)
@@ -639,7 +636,7 @@ impl Attr for AttrInterpolate {
             }
 
             return Err(tcx.dcx().span_err(
-                attr.span,
+                attr.span(),
                 "the `builtin` attribute expects at least one and at most two arguments",
             ));
         }

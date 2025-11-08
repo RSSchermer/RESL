@@ -1,12 +1,12 @@
 use rustc_middle::bug;
+use rustc_public::CrateDef;
+use rustc_public::abi::{PassMode, ValueAbi};
+use rustc_public::crate_def::Attribute;
+use rustc_public::mir::mono::{Instance, MonoItem};
+use slir::BinaryOperator;
 use slir::builtin_function::BuiltinFunction;
 use slir::cfg::{BlockPosition, LocalBinding, Terminator};
 use slir::ty::TY_U32;
-use slir::BinaryOperator;
-use stable_mir::abi::{PassMode, ValueAbi};
-use stable_mir::crate_def::Attribute;
-use stable_mir::mir::mono::{Instance, MonoItem};
-use stable_mir::CrateDef;
 
 use crate::slir_build::context::CodegenContext;
 use crate::stable_cg::traits::MiscCodegenMethods;
@@ -44,14 +44,14 @@ impl ReslIntrinsic {
     pub fn try_from(instance: &Instance) -> Option<Self> {
         instance
             .def
-            .attrs_by_path(&["reslc".into(), "intrinsic".into()])
+            .tool_attrs(&["reslc".into(), "intrinsic".into()])
             .first()
             .map(resolve_intrinsic)
     }
 }
 
 fn resolve_intrinsic(attr: &Attribute) -> ReslIntrinsic {
-    match attr.as_str() {
+    match attr.as_str().trim() {
         "#[reslc::intrinsic(add)]" => ReslIntrinsic::Add,
         "#[reslc::intrinsic(sub)]" => ReslIntrinsic::Sub,
         "#[reslc::intrinsic(mul)]" => ReslIntrinsic::Mul,

@@ -3,15 +3,15 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 use rustc_middle::bug;
+use rustc_public::mir::mono::{Instance, MonoItem};
+use slir::BinaryOperator;
 use slir::cfg::{
     BlockPosition, Branch, InlineConst, LocalBindingData, OpBinary, OpBoolToBranchPredicate,
     OpOffsetSlicePtr, OpPtrElementPtr, OpPtrVariantPtr, OpSetDiscriminant, OpStore, Terminator,
     Value,
 };
-use slir::ty::{TypeKind, TY_BOOL, TY_PREDICATE, TY_PTR_U32, TY_U32};
-use slir::BinaryOperator;
+use slir::ty::{TY_BOOL, TY_PREDICATE, TY_PTR_U32, TY_U32, TypeKind};
 use smallvec::smallvec;
-use stable_mir::mir::mono::{Instance, MonoItem};
 use thin_vec::thin_vec;
 
 use crate::slir_build::context::CodegenContext;

@@ -16,9 +16,9 @@ use crate::scf::{
 };
 use crate::ty::{ScalarKind, Struct, StructField, Type, TypeKind, VectorSize};
 use crate::{
-    ty, BinaryOperator, BlendSrc, Constant, ConstantKind, EntryPointKind, Function, Interpolation,
+    BinaryOperator, BlendSrc, Constant, ConstantKind, EntryPointKind, Function, Interpolation,
     InterpolationSampling, InterpolationType, Module, ResourceBinding, ShaderIOBinding,
-    StorageBinding, UnaryOperator, UniformBinding, WorkgroupBinding,
+    StorageBinding, UnaryOperator, UniformBinding, WorkgroupBinding, ty,
 };
 
 const INDENT: &'static str = "    ";

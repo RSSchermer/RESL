@@ -1,6 +1,6 @@
 use rustc_middle::{bug, span_bug};
-use stable_mir::mir;
-use stable_mir::mir::NonDivergingIntrinsic;
+use rustc_public::mir;
+use rustc_public::mir::NonDivergingIntrinsic;
 use tracing::instrument;
 
 use super::{FunctionCx, LocalRef};
@@ -95,11 +95,6 @@ impl<'a, Bx: BuilderMethods<'a>> FunctionCx<'a, Bx> {
                     },
                 )
                 .codegen_set_discr(bx, *variant_index);
-            }
-            mir::StatementKind::Deinit(..) => {
-                // For now, don't codegen this to anything. In the future it may be worth
-                // experimenting with what kind of information we can emit to LLVM without hurting
-                // perf here
             }
             mir::StatementKind::StorageLive(local) => {
                 if let LocalRef::Place(cg_place) = self.locals[*local] {

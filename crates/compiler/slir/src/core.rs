@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
 
 use crate::scf::Expression;
-use crate::ty::{Type, TypeRegistry, TY_BOOL};
+use crate::ty::{TY_BOOL, Type, TypeRegistry};
 
 slotmap::new_key_type! {
     pub struct UniformBinding;

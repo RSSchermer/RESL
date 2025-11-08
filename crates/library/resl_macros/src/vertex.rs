@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, Item};
+use syn::{Item, parse_macro_input};
 
 pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
     if !attr.is_empty() {

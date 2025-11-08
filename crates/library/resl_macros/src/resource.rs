@@ -3,7 +3,7 @@ use proc_macro2::Ident;
 use quote::{quote, quote_spanned};
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
-use syn::{meta, parse_macro_input, Attribute, LitInt, StaticMutability, Token, Type, Visibility};
+use syn::{Attribute, LitInt, StaticMutability, Token, Type, Visibility, meta, parse_macro_input};
 
 pub fn expand_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut group: Option<LitInt> = None;

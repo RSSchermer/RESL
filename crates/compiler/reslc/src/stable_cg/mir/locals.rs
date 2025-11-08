@@ -7,9 +7,9 @@ use std::ops::{Index, IndexMut};
 use bit_set::BitSet;
 use bit_vec::BitVec;
 use index_vec::IndexVec;
-use stable_mir::mir;
-use stable_mir::mir::visit::Location;
-use stable_mir::mir::{BasicBlockIdx, MirVisitor, Rvalue, Statement, StatementKind};
+use rustc_public::mir;
+use rustc_public::mir::visit::Location;
+use rustc_public::mir::{BasicBlockIdx, MirVisitor, Rvalue, Statement, StatementKind};
 use tracing::{debug, warn};
 
 use crate::stable_cg::mir::{FunctionCx, LocalRef};

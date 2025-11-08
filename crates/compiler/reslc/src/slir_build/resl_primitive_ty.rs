@@ -1,7 +1,7 @@
 use rustc_middle::bug;
-use stable_mir::crate_def::Attribute;
-use stable_mir::ty::{RigidTy, Ty, TyKind};
-use stable_mir::CrateDef;
+use rustc_public::CrateDef;
+use rustc_public::crate_def::Attribute;
+use rustc_public::ty::{RigidTy, Ty, TyKind};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ReslPrimitiveTy {
@@ -34,14 +34,14 @@ impl ReslPrimitiveTy {
             return None;
         };
 
-        def.attrs_by_path(&["reslc".into(), "primitive".into()])
+        def.tool_attrs(&["reslc".into(), "primitive".into()])
             .first()
             .map(resolve_primitive_ty)
     }
 }
 
 fn resolve_primitive_ty(attr: &Attribute) -> ReslPrimitiveTy {
-    match attr.as_str() {
+    match attr.as_str().trim() {
         "#[reslc::primitive(vec2_f32)]" => ReslPrimitiveTy::Vec2F32,
         "#[reslc::primitive(vec2_u32)]" => ReslPrimitiveTy::Vec2U32,
         "#[reslc::primitive(vec2_i32)]" => ReslPrimitiveTy::Vec2I32,

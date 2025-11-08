@@ -1,20 +1,16 @@
-use std::path::PathBuf;
-
 use rustc_macros::{Diagnostic, LintDiagnostic};
+use rustc_middle::ty::{Instance, Ty};
 use rustc_span::{Span, Symbol};
 
 #[derive(Diagnostic)]
 #[diag(reslc_monomorphize_recursion_limit)]
-pub(crate) struct RecursionLimit {
+pub(crate) struct RecursionLimit<'tcx> {
     #[primary_span]
     pub span: Span,
-    pub shrunk: String,
+    pub instance: Instance<'tcx>,
     #[note]
     pub def_span: Span,
     pub def_path_str: String,
-    #[note(reslc_monomorphize_written_to_path)]
-    pub was_written: bool,
-    pub path: PathBuf,
 }
 
 #[derive(Diagnostic)]
@@ -23,6 +19,7 @@ pub(crate) struct NoOptimizedMir {
     #[note]
     pub span: Span,
     pub crate_name: Symbol,
+    pub instance: String,
 }
 
 #[derive(LintDiagnostic)]
@@ -51,10 +48,18 @@ pub(crate) struct CouldntDumpMonoStats {
 
 #[derive(Diagnostic)]
 #[diag(reslc_monomorphize_encountered_error_while_instantiating)]
-pub(crate) struct EncounteredErrorWhileInstantiating {
+pub(crate) struct EncounteredErrorWhileInstantiating<'tcx> {
     #[primary_span]
     pub span: Span,
-    pub formatted_item: String,
+    pub kind: &'static str,
+    pub instance: Instance<'tcx>,
+}
+
+#[derive(Diagnostic)]
+#[diag(reslc_monomorphize_encountered_error_while_instantiating_global_asm)]
+pub(crate) struct EncounteredErrorWhileInstantiatingGlobalAsm {
+    #[primary_span]
+    pub span: Span,
 }
 
 #[derive(Diagnostic)]
@@ -63,39 +68,50 @@ pub(crate) struct EncounteredErrorWhileInstantiating {
 pub(crate) struct StartNotFound;
 
 #[derive(Diagnostic)]
-#[diag(reslc_monomorphize_unknown_cgu_collection_mode)]
-pub(crate) struct UnknownCguCollectionMode<'a> {
-    pub mode: &'a str,
-}
-
-#[derive(LintDiagnostic)]
-#[diag(reslc_monomorphize_abi_error_disabled_vector_type_def)]
+#[diag(reslc_monomorphize_abi_error_disabled_vector_type)]
 #[help]
-pub(crate) struct AbiErrorDisabledVectorTypeDef<'a> {
+pub(crate) struct AbiErrorDisabledVectorType<'a> {
+    #[primary_span]
     #[label]
     pub span: Span,
     pub required_feature: &'a str,
+    pub ty: Ty<'a>,
+    /// Whether this is a problem at a call site or at a declaration.
+    pub is_call: bool,
 }
 
-#[derive(LintDiagnostic)]
-#[diag(reslc_monomorphize_abi_error_disabled_vector_type_call)]
+#[derive(Diagnostic)]
+#[diag(reslc_monomorphize_abi_error_unsupported_unsized_parameter)]
 #[help]
-pub(crate) struct AbiErrorDisabledVectorTypeCall<'a> {
+pub(crate) struct AbiErrorUnsupportedUnsizedParameter<'a> {
+    #[primary_span]
+    #[label]
+    pub span: Span,
+    pub ty: Ty<'a>,
+    /// Whether this is a problem at a call site or at a declaration.
+    pub is_call: bool,
+}
+
+#[derive(Diagnostic)]
+#[diag(reslc_monomorphize_abi_error_unsupported_vector_type)]
+pub(crate) struct AbiErrorUnsupportedVectorType<'a> {
+    #[primary_span]
+    #[label]
+    pub span: Span,
+    pub ty: Ty<'a>,
+    /// Whether this is a problem at a call site or at a declaration.
+    pub is_call: bool,
+}
+
+#[derive(Diagnostic)]
+#[diag(reslc_monomorphize_abi_required_target_feature)]
+#[help]
+pub(crate) struct AbiRequiredTargetFeature<'a> {
+    #[primary_span]
     #[label]
     pub span: Span,
     pub required_feature: &'a str,
-}
-
-#[derive(LintDiagnostic)]
-#[diag(reslc_monomorphize_abi_error_unsupported_vector_type_def)]
-pub(crate) struct AbiErrorUnsupportedVectorTypeDef {
-    #[label]
-    pub span: Span,
-}
-
-#[derive(LintDiagnostic)]
-#[diag(reslc_monomorphize_abi_error_unsupported_vector_type_call)]
-pub(crate) struct AbiErrorUnsupportedVectorTypeCall {
-    #[label]
-    pub span: Span,
+    pub abi: &'a str,
+    /// Whether this is a problem at a call site or at a declaration.
+    pub is_call: bool,
 }

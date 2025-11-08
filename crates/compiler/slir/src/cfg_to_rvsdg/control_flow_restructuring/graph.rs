@@ -4,13 +4,13 @@ use indexmap::IndexSet;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use slotmap::SlotMap;
 
+use crate::Function;
 use crate::cfg::{
     BasicBlock, BasicBlockData, BlockPosition, Cfg, FunctionBody, LocalBinding, LocalBindingData,
     Statement, StatementData, Terminator,
 };
 use crate::cfg_to_rvsdg::control_flow_restructuring::exit_restructuring::restructure_exit;
 use crate::ty::Type;
-use crate::Function;
 
 fn inverse_graph(cfg: &Cfg, function: Function) -> FxHashMap<BasicBlock, Vec<BasicBlock>> {
     let body = cfg

@@ -1,10 +1,10 @@
-use stable_mir::abi;
-use stable_mir::target::MachineSize;
-use stable_mir::ty::Allocation;
+use rustc_public::abi;
+use rustc_public::target::MachineSize;
+use rustc_public::ty::Allocation;
 
 use super::BackendTypes;
-use crate::stable_cg::scalar::Scalar;
 use crate::stable_cg::TyAndLayout;
+use crate::stable_cg::scalar::Scalar;
 
 pub trait ConstCodegenMethods: BackendTypes {
     // Constant constructors

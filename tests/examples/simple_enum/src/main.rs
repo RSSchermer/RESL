@@ -10,11 +10,7 @@ pub mod shader {
     static VALUE: Workgroup<u32>;
 
     fn test(v: u32) -> Result<u32, u32> {
-        if v > 10 {
-            Ok(1)
-        } else {
-            Err(0)
-        }
+        if v > 10 { Ok(1) } else { Err(0) }
     }
 
     #[compute]

@@ -1,24 +1,10 @@
-use std::sync::RwLock;
-
-use rustc_ast::{InlineAsmOptions, InlineAsmTemplatePiece};
-use rustc_codegen_ssa::mir::debuginfo::{FunctionDebugContext, VariableKind};
-use rustc_codegen_ssa::traits::{
-    AsmCodegenMethods, BackendTypes, DebugInfoCodegenMethods, GlobalAsmOperandRef,
-    PreDefineCodegenMethods,
-};
 use rustc_hash::FxHashMap;
-use rustc_hir::{HirId, ItemId, Mod};
-use rustc_middle::hir;
-use rustc_middle::mir::mono::{Linkage, Visibility};
-use rustc_middle::mir::Body;
-use rustc_middle::ty::{Instance, PolyExistentialTraitRef, Ty, TyCtxt};
-use rustc_span::def_id::{CrateNum, DefId, LocalModDefId};
-use rustc_span::{SourceFile, Span, Symbol};
-use rustc_target::callconv::FnAbi;
+use rustc_hir::{ItemId, Mod};
+use rustc_middle::ty::TyCtxt;
+use rustc_span::Symbol;
+use rustc_span::def_id::{CrateNum, LocalModDefId};
 
-use crate::hir_ext::{
-    ExtendedItem, FieldExt, FnExt, GenericParamExt, HirExt, ModExt, ParamExt, StructExt, TraitExt,
-};
+use crate::hir_ext::{ExtendedItem, HirExt, ModExt};
 use crate::hir_ext_build;
 
 pub fn generate_crate_name_to_num(tcx: TyCtxt) -> FxHashMap<Symbol, CrateNum> {
@@ -65,7 +51,7 @@ impl<'tcx> ReslContext<'tcx> {
     }
 
     pub fn extended_item<'ext>(&'ext self, item_id: ItemId) -> Option<ExtendedItem<'tcx, 'ext>> {
-        self.hir_ext.extend_item(self.tcx.hir().item(item_id))
+        self.hir_ext.extend_item(self.tcx.hir_item(item_id))
     }
 
     pub fn extended_module<'ext>(
@@ -73,7 +59,7 @@ impl<'tcx> ReslContext<'tcx> {
         id: LocalModDefId,
     ) -> Option<(&'tcx Mod<'tcx>, &'ext ModExt)> {
         self.hir_ext.get_mod_ext(id).map(|ext| {
-            let (mod_, _, _) = self.tcx.hir().get_module(id);
+            let (mod_, _, _) = self.tcx.hir_get_module(id);
 
             (mod_, ext)
         })

@@ -3,7 +3,7 @@ use rustc_hash::FxHashMap;
 use crate::rvsdg::transform::ptr_offset_elaboration::PtrOffsetElaborator;
 use crate::rvsdg::visit::region_nodes::RegionNodesVisitor;
 use crate::rvsdg::{
-    visit, Connectivity, Node, NodeKind, Region, Rvsdg, SimpleNode, ValueInput, ValueOrigin,
+    Connectivity, Node, NodeKind, Region, Rvsdg, SimpleNode, ValueInput, ValueOrigin, visit,
 };
 use crate::ty::TY_U32;
 use crate::{BinaryOperator, Function, Module};
@@ -384,8 +384,8 @@ mod tests {
 
     use super::*;
     use crate::rvsdg::{StateOrigin, ValueOutput, ValueUser};
-    use crate::ty::{TypeKind, TY_DUMMY, TY_PREDICATE, TY_PTR_U32};
-    use crate::{thin_set, FnArg, FnSig, Symbol};
+    use crate::ty::{TY_DUMMY, TY_PREDICATE, TY_PTR_U32, TypeKind};
+    use crate::{FnArg, FnSig, Symbol, thin_set};
 
     #[test]
     fn test_single_op_add_ptr_offset() {
@@ -558,7 +558,9 @@ mod tests {
             output: 0,
         } = rvsdg[index_add_node].expect_op_binary().lhs_input().origin
         else {
-            panic!("the index-add-node's LHS should be connected to the first output of the offset-add-node")
+            panic!(
+                "the index-add-node's LHS should be connected to the first output of the offset-add-node"
+            )
         };
         let offset_add_data = rvsdg[offset_add_node].expect_op_binary();
 
@@ -754,9 +756,10 @@ mod tests {
             "the second branch's pointer argument should connect directly to the branch's first \
             result"
         );
-        assert_eq!(&rvsdg[branch_1].value_arguments()[1].users, &thin_set![
-            ValueUser::Result(1)
-        ], "the second branch's new offset argument should connect directly to the branch's second \
+        assert_eq!(
+            &rvsdg[branch_1].value_arguments()[1].users,
+            &thin_set![ValueUser::Result(1)],
+            "the second branch's new offset argument should connect directly to the branch's second \
             result"
         );
 

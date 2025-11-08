@@ -7,8 +7,8 @@ use bit_set::BitSet;
 use bit_vec::BitVec;
 use rustc_data_structures::graph::dominators::Dominators;
 use rustc_middle::{bug, span_bug};
-use stable_mir::mir::visit::{Location, MirVisitor, PlaceContext, PlaceRef};
-use stable_mir::mir::{BasicBlockIdx, Local, LocalDecl, Place, Statement, StatementKind};
+use rustc_public::mir::visit::{Location, MirVisitor, PlaceContext, PlaceRef};
+use rustc_public::mir::{BasicBlockIdx, Local, LocalDecl, Place, Statement, StatementKind};
 use tracing::debug;
 
 use super::FunctionCx;

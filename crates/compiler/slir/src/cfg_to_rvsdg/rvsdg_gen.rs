@@ -11,16 +11,16 @@ use crate::cfg::{
     Value,
 };
 use crate::cfg_to_rvsdg::control_flow_restructuring::{
-    restructure_branches, restructure_loops, Graph,
+    Graph, restructure_branches, restructure_loops,
 };
 use crate::cfg_to_rvsdg::control_tree::{
-    annotate_demand, annotate_item_dependencies, annotate_read_write, annotate_state_use,
     BranchingNode, ControlTree, ControlTreeNode, ControlTreeNodeKind, LinearNode, LoopNode,
-    SliceAnnotation,
+    SliceAnnotation, annotate_demand, annotate_item_dependencies, annotate_read_write,
+    annotate_state_use,
 };
-use crate::cfg_to_rvsdg::item_dependencies::{item_dependencies, Item, ItemDependencies};
+use crate::cfg_to_rvsdg::item_dependencies::{Item, ItemDependencies, item_dependencies};
 use crate::rvsdg::{Node, Region, Rvsdg, StateOrigin, ValueInput, ValueOrigin, ValueOutput};
-use crate::ty::{Type, TypeKind, TY_BOOL, TY_F32, TY_I32, TY_U32};
+use crate::ty::{TY_BOOL, TY_F32, TY_I32, TY_U32, Type, TypeKind};
 use crate::{Function, Module};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

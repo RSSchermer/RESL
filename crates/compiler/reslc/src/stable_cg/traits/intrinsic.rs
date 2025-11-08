@@ -1,6 +1,6 @@
-use stable_mir::abi::FnAbi;
-use stable_mir::mir::mono::Instance;
-use stable_mir::ty::Span;
+use rustc_public::abi::FnAbi;
+use rustc_public::mir::mono::Instance;
+use rustc_public::ty::Span;
 
 use super::BackendTypes;
 use crate::stable_cg::mir::operand::OperandRef;
