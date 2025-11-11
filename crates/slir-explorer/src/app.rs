@@ -1,20 +1,15 @@
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, Stylesheet, Title};
-use leptos_router::components::{Route, Router, Routes};
-use leptos_router::hooks::use_params;
-use leptos_router::params::Params;
+use leptos_router::components::{ParentRoute, Route, Router, Routes};
 use leptos_router::path;
 use thaw::*;
+use urlencoding::encode as urlencode;
 
-use crate::module_explorer::ModuleExplorer;
-use crate::module_list::ModuleList;
+use crate::module;
+use crate::no_module_selected::NoModuleSelected;
+use crate::not_found::NotFound;
 
 pub const MODULE_DIR: &'static str = "target/debug/deps";
-
-#[derive(Params, PartialEq)]
-struct AppParams {
-    module_name: Option<String>,
-}
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -39,9 +34,28 @@ pub fn App() -> impl IntoView {
 
                     <main>
                         <Routes fallback=NotFound>
-                            <Route path=path!("/") view=NoModuleSelected/>
-                            <Route path=path!("/:module_name") view=ModuleExplorer/>
-                            <Route path=path!("/:module_name/:item_label") view=ModuleExplorer/>
+                            <ParentRoute path=path!(":module_name") view=module::Module>
+                                <ParentRoute path=path!("uniform_bindings") view=module::uniform_bindings::UniformBindings>
+                                    <Route path=path!(":uniform_binding_id") view=module::uniform_bindings::Detail/>
+                                    <Route path=path!("") view=module::uniform_bindings::List/>
+                                </ParentRoute>
+                                <ParentRoute path=path!("storage_bindings") view=module::storage_bindings::StorageBindings>
+                                    <Route path=path!(":storage_binding_id") view=module::storage_bindings::Detail/>
+                                    <Route path=path!("") view=module::storage_bindings::List/>
+                                </ParentRoute>
+                                <ParentRoute path=path!("workgroup_bindings") view=module::workgroup_bindings::WorkgroupBindings>
+                                    <Route path=path!(":workgroup_binding_id") view=module::workgroup_bindings::Detail/>
+                                    <Route path=path!("") view=module::workgroup_bindings::List/>
+                                </ParentRoute>
+                                <ParentRoute path=path!("functions") view=module::functions::Functions>
+                                    <Route path=path!(":function_name") view=module::functions::Detail/>
+                                    <Route path=path!("") view=module::functions::List/>
+                                </ParentRoute>
+                                <Route path=path!("adts/:ty_id") view=module::adts::Adt/>
+                                <Route path=path!("wgsl") view=module::WgslExplorer/>
+                                <Route path=path!("") view=module::NoItemSelected/>
+                            </ParentRoute>
+                            <Route path=path!("") view=NoModuleSelected/>
                         </Routes>
                     </main>
                 </div>
@@ -52,32 +66,82 @@ pub fn App() -> impl IntoView {
     }
 }
 
-/// Renders the home page of your application.
 #[component]
-fn NoModuleSelected() -> impl IntoView {
-    view! {
-        <p>"No module selected"</p>
-    }
-}
+pub fn ModuleList(open: RwSignal<bool>) -> impl IntoView {
+    #[server]
+    pub async fn get_module_list() -> Result<Vec<String>, ServerFnError> {
+        match std::fs::read_dir(MODULE_DIR) {
+            Ok(entries) => {
+                let mut names = Vec::new();
 
-/// 404 - Not Found
-#[component]
-fn NotFound() -> impl IntoView {
-    // set an HTTP status code 404
-    // this is feature gated because it can only be done during
-    // initial server-side rendering
-    // if you navigate to the 404 page subsequently, the status
-    // code will not be set because there is not a new HTTP request
-    // to the server
-    #[cfg(feature = "ssr")]
-    {
-        // this can be done inline because it's synchronous
-        // if it were async, we'd use a server function
-        let resp = expect_context::<leptos_actix::ResponseOptions>();
-        resp.set_status(actix_web::http::StatusCode::NOT_FOUND);
+                for entry in entries {
+                    match entry {
+                        Ok(entry) => {
+                            let path = entry.path();
+
+                            if path.extension().map(|e| e == "slir").unwrap_or(false) {
+                                let module_name = path
+                                    .as_path()
+                                    .file_stem()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("")
+                                    .to_string();
+
+                                names.push(module_name);
+                            }
+                        }
+                        Err(err) => {
+                            return Err(ServerFnError::ServerError(err.to_string()));
+                        }
+                    }
+                }
+
+                names.sort();
+
+                Ok(names)
+            }
+            Err(err) => Err(ServerFnError::ServerError(err.to_string())),
+        }
     }
 
+    let modules = Resource::new(|| (), |_| async move { get_module_list().await.unwrap() });
+
     view! {
-        <h1>"Not Found"</h1>
+        <OverlayDrawer open position={DrawerPosition::Left}>
+            <DrawerHeader>
+                <DrawerHeaderTitle>
+                    <DrawerHeaderTitleAction slot>
+                        <Button
+                            appearance=ButtonAppearance::Subtle
+                            on_click=move |_| open.set(false)
+                        >
+                            "x"
+                        </Button>
+                    </DrawerHeaderTitleAction>
+                    {MODULE_DIR}
+                </DrawerHeaderTitle>
+            </DrawerHeader>
+            <DrawerBody>
+                <Suspense
+                    fallback=move || view! { <p>"Loading..."</p> }
+                >
+                    <ul>
+                        {move || {
+                            modules.get().map(|modules| {
+                                modules.into_iter().map(|module| view!{
+                                    <li>
+                                        <a on:click=move |_| open.set(false)
+                                            href=format!("/{}", urlencode(&module))
+                                        >
+                                            {module.clone()}
+                                        </a>
+                                    </li>
+                                }).collect_view()
+                            })
+                        }}
+                    </ul>
+                </Suspense>
+            </DrawerBody>
+        </OverlayDrawer>
     }
 }

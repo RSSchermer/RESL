@@ -1,4 +1,5 @@
 #![feature(iter_intersperse)]
+#![recursion_limit = "256"]
 
 #[cfg(feature = "ssr")]
 #[actix_web::main]

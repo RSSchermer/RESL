@@ -1,0 +1,108 @@
+use leptos::prelude::*;
+use leptos::{component, view, IntoView};
+use slir::scf::{ExpressionKind, GlobalPtr};
+use slotmap::Key;
+
+use crate::module::functions::detail::scf_explorer::local_binding::LocalBinding;
+use crate::module::use_module_data;
+
+#[component]
+pub fn Expression(expr_binding: slir::scf::Statement) -> impl IntoView {
+    let module_data = use_module_data().read_value();
+    let expr_data = &module_data.scf.as_ref().unwrap()[expr_binding]
+        .expect_expr_binding()
+        .expression();
+
+    match expr_data.kind() {
+        ExpressionKind::FallbackValue => "fallback".into_any(),
+        ExpressionKind::ConstU32(v) => format!("{}u32", v).into_any(),
+        ExpressionKind::ConstI32(v) => format!("{}i32", v).into_any(),
+        ExpressionKind::ConstF32(v) => format!("{}f32", v).into_any(),
+        ExpressionKind::ConstBool(v) => v.to_string().into_any(),
+        ExpressionKind::GlobalPtr(ptr) => match ptr {
+            GlobalPtr::Uniform(binding) => {
+                format!("&U{}", binding.data().as_ffi())
+            }
+            GlobalPtr::Storage(binding) => {
+                format!("&S{}", binding.data().as_ffi())
+            }
+            GlobalPtr::Workgroup(binding) => {
+                format!("&W{}", binding.data().as_ffi())
+            }
+            GlobalPtr::Constant(constant) => format!("&{}", constant.name),
+        }
+        .into_any(),
+        ExpressionKind::OpUnary(op) => view! {
+            {op.operator().to_string()}<LocalBinding binding=op.operand()/>
+        }
+        .into_any(),
+        ExpressionKind::OpBinary(op) => view! {
+            <LocalBinding binding=op.lhs()/>
+            {format!(" {} ", op.operator())}
+            <LocalBinding binding=op.rhs()/>
+        }
+        .into_any(),
+        ExpressionKind::OpVector(op) => view! {
+            {op.vector_ty().to_string()}"("{
+                op.elements().iter().copied().map(|binding| view! {
+                    <LocalBinding binding/>
+                }.into_any())
+                .intersperse_with(|| view! {", "}.into_any())
+                .collect_view()
+            }")"
+        }
+        .into_any(),
+        ExpressionKind::OpMatrix(op) => view! {
+            {op.matrix_ty().to_string()}"("{
+                op.columns().iter().copied().map(|binding| view! {
+                    <LocalBinding binding/>
+                }.into_any())
+                .intersperse_with(|| view! {", "}.into_any())
+                .collect_view()
+            }")"
+        }
+        .into_any(),
+        ExpressionKind::OpPtrElementPtr(op) => view! {
+            "&"<LocalBinding binding=op.pointer()/>
+
+            {
+                op.indices()
+                    .iter()
+                .copied()
+                    .map(|binding| view! {
+                        "."<LocalBinding binding/>
+                    }.into_any())
+                    .collect::<Vec<_>>()
+            }
+        }
+        .into_any(),
+        ExpressionKind::OpExtractElement(op) => view! {
+            <LocalBinding binding=op.value()/>
+
+            {
+                op.indices()
+                    .iter()
+                .copied()
+                    .map(|binding| view! {
+                        "."<LocalBinding binding/>
+                    }.into_any())
+                    .collect::<Vec<_>>()
+            }
+        }
+        .into_any(),
+        ExpressionKind::OpLoad(pointer) => view! {
+            "*"<LocalBinding binding=*pointer/>
+        }
+        .into_any(),
+        ExpressionKind::OpCallBuiltin(op) => view! {
+            {op.callee().ident().as_str()}"("{
+                op.arguments().iter().copied().map(|binding| view! {
+                    <LocalBinding binding/>
+                }.into_any())
+                .intersperse_with(|| view! {", "}.into_any())
+                .collect_view()
+            }")"
+        }
+        .into_any(),
+    }
+}

@@ -1,8 +1,10 @@
 #![feature(iter_intersperse)]
+#![recursion_limit = "256"]
 
 pub mod app;
-pub mod module_explorer;
-pub mod module_list;
+pub mod module;
+pub mod no_module_selected;
+pub mod not_found;
 
 #[cfg(feature = "hydrate")]
 #[wasm_bindgen::prelude::wasm_bindgen]
