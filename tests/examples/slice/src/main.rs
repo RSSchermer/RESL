@@ -1,10 +1,10 @@
 #![feature(stmt_expr_attributes)]
 
-use resl::prelude::*;
+use risl::prelude::*;
 
 #[shader_module]
 pub mod shader {
-    use resl::prelude::*;
+    use risl::prelude::*;
 
     #[resource(group = 0, binding = 0)]
     static VALUES: Uniform<[u32; 4]>;

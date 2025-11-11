@@ -1,9 +1,0 @@
-[package]
-name = "resl"
-description = "The standard library for the Rust Embedded Shading Language"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-
-[dependencies]
-resl-macros = { version = "0.1.0", path = "../resl_macros" }

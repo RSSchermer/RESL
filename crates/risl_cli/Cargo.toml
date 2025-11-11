@@ -1,0 +1,9 @@
+[package]
+name = "risl_cargo"
+description = "Command line interface for RISL"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cargo = "0.70"

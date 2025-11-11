@@ -1,9 +1,9 @@
 #![feature(stmt_expr_attributes)]
-use resl::prelude::*;
+use risl::prelude::*;
 
 #[shader_module]
 pub mod shader {
-    use resl::prelude::*;
+    use risl::prelude::*;
 
     #[workgroup_shared]
     static VALUE_0: Workgroup<vec2_f32>;

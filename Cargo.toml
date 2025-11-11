@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/compiler/reslc",
+    "crates/compiler/rislc",
     "crates/compiler/slir",
-    "crates/library/resl",
-    "crates/library/resl_macros",
-    "crates/resl_cli",
+    "crates/library/risl",
+    "crates/library/risl_macros",
+    "crates/risl_cli",
     "crates/slir-explorer",
     "tests/examples/builtin_vec",
     "tests/examples/hello_world",
@@ -16,11 +16,11 @@ members = [
     "tests/examples/workgroup_binding",
 ]
 default-members = [
-    "crates/compiler/reslc",
+    "crates/compiler/rislc",
     "crates/compiler/slir",
-    "crates/library/resl",
-    "crates/library/resl_macros",
-    "crates/resl_cli",
+    "crates/library/risl",
+    "crates/library/risl_macros",
+    "crates/risl_cli",
     "crates/slir-explorer",
 ]
 

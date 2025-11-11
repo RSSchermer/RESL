@@ -1,9 +1,0 @@
-[package]
-name = "resl_cargo"
-description = "Command line interface for RESL"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-
-[dependencies]
-cargo = "0.70"

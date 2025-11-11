@@ -1,0 +1,51 @@
+[package]
+name = "rislc"
+description = "Compiler for the Rust Embedded Shading Language"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "rislc"
+
+[package.metadata.rust-analyzer]
+# This package uses rustc crates.
+rustc_private = true
+
+[dependencies]
+ar = { workspace = true }
+arrayvec = { workspace = true }
+bincode = { workspace = true }
+bit-set = { workspace = true }
+bit-vec = { workspace = true }
+either = { workspace = true }
+indexmap = { workspace = true }
+index_vec = { workspace = true }
+internment = { workspace = true }
+itertools = { workspace = true }
+regex = { workspace = true }
+rustc-hash = { workspace = true }
+slir = { workspace = true }
+smallvec = { workspace = true }
+thin-vec = "0.2"
+tracing = "0.1.37"
+
+#[target.'cfg(unix)'.dependencies]
+#tracing-core = "0.1.30"
+#rustc_abi = { path = "../../../../rust/compiler/rustc_abi" }
+#rustc_ast = { path = "../../../../rust/compiler/rustc_ast" }
+#rustc_codegen_ssa = { path = "../../../../rust/compiler/rustc_codegen_ssa" }
+#rustc_data_structures = { path = "../../../../rust/compiler/rustc_data_structures" }
+#rustc_driver = { path = "../../../../rust/compiler/rustc_driver" }
+#rustc_hir = { path = "../../../../rust/compiler/rustc_hir" }
+#rustc_interface = { path = "../../../../rust/compiler/rustc_interface" }
+#rustc_metadata = { path = "../../../../rust/compiler/rustc_metadata" }
+#rustc_middle = { path = "../../../../rust/compiler/rustc_middle" }
+#rustc_monomorphize = { path = "../../../../rust/compiler/rustc_monomorphize" }
+#rustc_query_system = { path = "../../../../rust/compiler/rustc_query_system" }
+#rustc_session = { path = "../../../../rust/compiler/rustc_session" }
+#rustc_public_bridge = { path = "../../../../rust/compiler/rustc_public_bridge" }
+#rustc_span = { path = "../../../../rust/compiler/rustc_span" }
+#rustc_target = { path = "../../../../rust/compiler/rustc_target" }
+#rustc_public = { path = "../../../../rust/compiler/rustc_public" }

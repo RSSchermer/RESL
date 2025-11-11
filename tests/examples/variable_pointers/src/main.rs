@@ -1,6 +1,6 @@
 #![feature(stmt_expr_attributes)]
 
-#[resl::shader_module]
+#[risl::shader_module]
 pub mod shader {
     struct A {
         a: u32,

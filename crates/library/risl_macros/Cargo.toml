@@ -1,0 +1,21 @@
+[package]
+name = "risl-macros"
+description = "Implements the procedural macros used by the RISL standard library"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+
+[dependencies.syn]
+workspace = true
+features = [
+    "full",
+    "visit",
+    "visit-mut"
+]

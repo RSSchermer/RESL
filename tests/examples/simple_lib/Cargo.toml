@@ -4,4 +4,4 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-resl = { path = "../../../crates/library/resl" }
+risl = { path = "../../../crates/library/risl" }

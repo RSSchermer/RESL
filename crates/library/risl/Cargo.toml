@@ -1,0 +1,9 @@
+[package]
+name = "risl"
+description = "The standard library for the Rust Embedded Shading Language"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+risl-macros = { version = "0.1.0", path = "../risl_macros" }
