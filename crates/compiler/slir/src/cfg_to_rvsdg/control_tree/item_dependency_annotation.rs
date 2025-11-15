@@ -1,13 +1,11 @@
-use std::mem;
-
 use indexmap::IndexSet;
 
-use crate::cfg::{BasicBlock, Cfg, FunctionBody, Value};
+use crate::cfg::analyze::item_dependencies::{Item, WithItemDependencies};
+use crate::cfg::{BasicBlock, Cfg};
 use crate::cfg_to_rvsdg::control_tree::control_tree::{
     BranchingNode, ControlTree, ControlTreeNode, ControlTreeNodeKind, LinearNode, LoopNode,
 };
 use crate::cfg_to_rvsdg::control_tree::slice_annotation::SliceAnnotation;
-use crate::cfg_to_rvsdg::item_dependencies::{Item, WithItemDependencies};
 
 struct ItemDependencyAnnotationVisitor<'a> {
     control_tree: &'a ControlTree,

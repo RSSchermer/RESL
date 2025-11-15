@@ -17,8 +17,8 @@ use crate::scf::{
 use crate::ty::{ScalarKind, Struct, StructField, Type, TypeKind, VectorSize};
 use crate::{
     BinaryOperator, BlendSrc, Constant, ConstantKind, EntryPointKind, Function, Interpolation,
-    InterpolationSampling, InterpolationType, Module, ResourceBinding, ShaderIOBinding,
-    StorageBinding, UnaryOperator, UniformBinding, WorkgroupBinding, ty,
+    InterpolationSampling, InterpolationType, Module, OverridableConstantKind, ResourceBinding,
+    ShaderIOBinding, StorageBinding, UnaryOperator, UniformBinding, WorkgroupBinding, ty,
 };
 
 const INDENT: &'static str = "    ";
@@ -77,7 +77,7 @@ enum InlineContext {
         ///
         /// E.g.:
         ///
-        /// ```
+        /// ```pseudocode
         /// (*ptr)._1; // If `needs_parens` is true
         /// ```
         needs_parens: bool,
@@ -366,7 +366,7 @@ impl WgslModuleWriter {
             TypeKind::Array {
                 element_ty, count, ..
             } => self.write_array_ty(cx, *element_ty, *count),
-            TypeKind::Slice { element_ty } => self.write_slice_ty(cx, *element_ty),
+            TypeKind::Slice { element_ty, .. } => self.write_slice_ty(cx, *element_ty),
             TypeKind::Struct(_) => self.write_struct_id(ty),
             TypeKind::Ptr(_)
             | TypeKind::Enum(_)
@@ -501,32 +501,50 @@ impl WgslModuleWriter {
         let data = &cx.module.constants[constant];
         let ty = data.ty();
 
-        self.w.push_str("const ");
+        if let ConstantKind::Overridable(overridable) = data.kind() {
+            write!(&mut self.w, "@id({})", overridable.id()).unwrap();
+            self.write_newline();
+            self.w.push_str("override ");
+        } else {
+            self.w.push_str("const ");
+        };
+
         self.write_constant_id(constant);
         self.w.push_str(":");
         self.write_optional_space();
         self.write_type(cx, ty);
-        self.write_optional_space();
-        self.w.push_str("=");
-        self.write_optional_space();
-        self.write_constant_value(cx, constant);
-        self.w.push_str(";");
-        self.write_newline();
-        self.write_newline();
-    }
-
-    fn write_constant_value(&mut self, cx: Context, constant: Constant) {
-        let data = &cx.module.constants[constant];
-        let ty = data.ty();
 
         match data.kind() {
             ConstantKind::ByteData(data) => {
+                self.write_optional_space();
+                self.w.push_str("=");
+                self.write_optional_space();
+
                 let mut writer = ConstantValueWriter { writer: self, data };
 
                 writer.write_value(cx, ty, 0);
             }
             ConstantKind::Expression => todo!(),
+            ConstantKind::Overridable(overridable) => {
+                if overridable.kind().override_required() {
+                    self.write_optional_space();
+                    self.w.push_str("=");
+                    self.write_optional_space();
+
+                    match overridable.kind() {
+                        OverridableConstantKind::Float(Some(v)) => self.write_f32(*v),
+                        OverridableConstantKind::Bool(Some(v)) => self.write_bool(*v),
+                        OverridableConstantKind::SignedInteger(Some(v)) => self.write_i32(*v),
+                        OverridableConstantKind::UnsignedInteger(Some(v)) => self.write_u32(*v),
+                        _ => unreachable!(),
+                    }
+                }
+            }
         }
+
+        self.w.push_str(";");
+        self.write_newline();
+        self.write_newline();
     }
 
     fn write_function_decl(&mut self, cx: Context, function: Function) {

@@ -3,6 +3,7 @@ use std::ops::Index;
 use index_vec::IndexVec;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::cfg::analyze::item_dependencies::{Item, ItemDependencies, item_dependencies};
 use crate::cfg::{
     Assign, BasicBlock, Bind, Cfg, InlineConst, LocalBinding, OpAlloca, OpBinary,
     OpBoolToBranchPredicate, OpCall, OpCallBuiltin, OpCaseToBranchPredicate, OpExtractValue,
@@ -18,7 +19,6 @@ use crate::cfg_to_rvsdg::control_tree::{
     SliceAnnotation, annotate_demand, annotate_item_dependencies, annotate_read_write,
     annotate_state_use,
 };
-use crate::cfg_to_rvsdg::item_dependencies::{Item, ItemDependencies, item_dependencies};
 use crate::rvsdg::{Node, Region, Rvsdg, StateOrigin, ValueInput, ValueOrigin, ValueOutput};
 use crate::ty::{TY_BOOL, TY_F32, TY_I32, TY_U32, Type, TypeKind};
 use crate::{Function, Module};

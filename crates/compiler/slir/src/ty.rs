@@ -251,6 +251,7 @@ pub enum TypeKind {
     },
     Slice {
         element_ty: Type,
+        stride: u64,
     },
     Struct(Struct),
     Enum(Enum),
@@ -365,7 +366,7 @@ impl TypeKind {
             } => {
                 format!("array<{}, {}>", element_ty.to_string(ty_registry), count)
             }
-            TypeKind::Slice { element_ty } => {
+            TypeKind::Slice { element_ty, .. } => {
                 format!("array<{}>", element_ty.to_string(ty_registry))
             }
             TypeKind::Struct(_) => "struct".to_string(),

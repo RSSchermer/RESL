@@ -4824,7 +4824,7 @@ impl Rvsdg {
             }
             TypeKind::Vector(v) => v.scalar.ty(),
             TypeKind::Matrix(m) => m.column_ty(),
-            TypeKind::Array { element_ty, .. } | TypeKind::Slice { element_ty } => *element_ty,
+            TypeKind::Array { element_ty, .. } | TypeKind::Slice { element_ty, .. } => *element_ty,
             _ => {
                 panic!("index `{}` tried to index into a non-aggregate type", i);
             }

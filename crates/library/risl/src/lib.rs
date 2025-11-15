@@ -3,6 +3,7 @@
 pub mod mem;
 pub mod primitive;
 pub mod resource;
+pub mod smi;
 pub mod workgroup;
 
 pub use risl_macros::{compute, fragment, gpu, shader_io, shader_module, vertex};

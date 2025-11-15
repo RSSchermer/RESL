@@ -199,6 +199,12 @@ impl From<bool> for Value {
     }
 }
 
+impl From<ConstPtr> for Value {
+    fn from(ptr: ConstPtr) -> Self {
+        InlineConst::Ptr(ptr).into()
+    }
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct Bind {
     local_binding: LocalBinding,
@@ -1556,12 +1562,15 @@ impl Cfg {
 
         assert_eq!(self.value_ty(&offset), TY_U32, "offset must be an u32");
 
-        let element_ty = match *self.ty.kind(pointee_ty) {
-            TypeKind::Array { element_ty, .. } | TypeKind::Slice { element_ty } => element_ty,
+        let (element_ty, stride) = match *self.ty.kind(pointee_ty) {
+            TypeKind::Array {
+                element_ty, stride, ..
+            }
+            | TypeKind::Slice { element_ty, stride } => (element_ty, stride),
             _ => panic!("expected pointer argument to point to an array or slice"),
         };
 
-        let slice_ty = self.ty.register(TypeKind::Slice { element_ty });
+        let slice_ty = self.ty.register(TypeKind::Slice { element_ty, stride });
         let result_ty = self.ty.register(TypeKind::Ptr(slice_ty));
         let result = self.add_local_binding(owner, result_ty);
 
@@ -1814,7 +1823,7 @@ impl Cfg {
             }
             TypeKind::Vector(v) => v.scalar.ty(),
             TypeKind::Matrix(m) => m.column_ty(),
-            TypeKind::Array { element_ty, .. } | TypeKind::Slice { element_ty } => *element_ty,
+            TypeKind::Array { element_ty, .. } | TypeKind::Slice { element_ty, .. } => *element_ty,
             _ => panic!(
                 "index `{}` tried to index a non-aggregate type (`{}`)",
                 i,

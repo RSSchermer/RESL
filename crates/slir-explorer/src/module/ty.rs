@@ -18,7 +18,9 @@ pub fn Type(ty: slir::ty::Type) -> impl IntoView {
         TypeKind::Array {
             element_ty, count, ..
         } => view! { "array<" <Type ty=*element_ty/> ", " {*count} ">" }.into_any(),
-        TypeKind::Slice { element_ty } => view! { "array<" <Type ty=*element_ty/> ">" }.into_any(),
+        TypeKind::Slice { element_ty, .. } => {
+            view! { "array<" <Type ty=*element_ty/> ">" }.into_any()
+        }
         TypeKind::Struct(_) => {
             let id = ty.registration_id().unwrap_or_default();
 

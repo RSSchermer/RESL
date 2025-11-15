@@ -9,8 +9,8 @@ use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
 
-use crate::scf::Expression;
-use crate::ty::{TY_BOOL, Type, TypeRegistry};
+use crate::smi::OverridableConstantType;
+use crate::ty::{TY_BOOL, TY_F32, TY_I32, TY_U32, Type, TypeRegistry};
 
 slotmap::new_key_type! {
     pub struct UniformBinding;
@@ -225,10 +225,65 @@ impl ConstantData {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize, Debug)]
+pub enum OverridableConstantKind {
+    Float(Option<f32>),
+    Bool(Option<bool>),
+    SignedInteger(Option<i32>),
+    UnsignedInteger(Option<u32>),
+}
+
+impl OverridableConstantKind {
+    pub fn override_required(&self) -> bool {
+        match self {
+            OverridableConstantKind::Float(Some(_))
+            | OverridableConstantKind::Bool(Some(_))
+            | OverridableConstantKind::SignedInteger(Some(_))
+            | OverridableConstantKind::UnsignedInteger(Some(_)) => true,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct OverridableConstant {
+    id: u32,
+    kind: OverridableConstantKind,
+}
+
+impl OverridableConstant {
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+
+    pub fn kind(&self) -> &OverridableConstantKind {
+        &self.kind
+    }
+
+    pub fn ty(&self) -> Type {
+        match self.kind {
+            OverridableConstantKind::Float(_) => TY_F32,
+            OverridableConstantKind::Bool(_) => TY_BOOL,
+            OverridableConstantKind::SignedInteger(_) => TY_I32,
+            OverridableConstantKind::UnsignedInteger(_) => TY_U32,
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub enum ConstantKind {
     ByteData(Vec<u8>),
     Expression,
+    Overridable(OverridableConstant),
+}
+
+impl ConstantKind {
+    pub fn expect_overridable(&self) -> &OverridableConstant {
+        match self {
+            ConstantKind::Overridable(c) => c,
+            _ => panic!("constant is not overridable"),
+        }
+    }
 }
 
 #[derive(Clone, Default, Serialize, Deserialize, Debug)]
@@ -250,6 +305,31 @@ impl ConstantRegistry {
             ConstantData {
                 ty,
                 kind: ConstantKind::ByteData(data),
+            },
+        );
+    }
+
+    pub fn register_overridable(
+        &mut self,
+        constant: Constant,
+        id: u32,
+        kind: OverridableConstantKind,
+    ) {
+        let overridable = OverridableConstant { id, kind };
+
+        if let Some(data) = self.store.get(&constant) {
+            assert_eq!(
+                data.ty,
+                overridable.ty(),
+                "cannot reregister a constant with a different type"
+            );
+        }
+
+        self.store.insert(
+            constant,
+            ConstantData {
+                ty: overridable.ty(),
+                kind: ConstantKind::Overridable(overridable),
             },
         );
     }

@@ -370,7 +370,10 @@ impl<'a, 'tcx> CodegenContext<'a, 'tcx> {
         let base = self.ty_and_layout_resolve(element_layout);
 
         let kind = if layout.ty.kind().is_slice() {
-            slir::ty::TypeKind::Slice { element_ty: base }
+            slir::ty::TypeKind::Slice {
+                element_ty: base,
+                stride: stride.bytes() as u64,
+            }
         } else {
             slir::ty::TypeKind::Array {
                 element_ty: base,

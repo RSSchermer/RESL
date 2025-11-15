@@ -609,6 +609,9 @@ impl FunctionImporter {
                                 bytes.clone(),
                             ),
                             ConstantKind::Expression => todo!(),
+                            ConstantKind::Overridable(_) => panic!(
+                                "overridable constants cannot be imported from other modules"
+                            ),
                         }
                     };
 

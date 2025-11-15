@@ -17,7 +17,7 @@ fn ty_str(module: &Module, ty: Type) -> String {
         } => {
             format!("array<{}, {}>", ty_str(module, *element_ty), count)
         }
-        TypeKind::Slice { element_ty } => format!("array<{}>", ty_str(module, *element_ty)),
+        TypeKind::Slice { element_ty, .. } => format!("array<{}>", ty_str(module, *element_ty)),
         TypeKind::Struct(_) => {
             format!("S_{}", ty.registration_id().unwrap_or_default())
         }
